@@ -225,6 +225,11 @@ h2 {
   font-weight: 700;
 }
 
+.spin-icon,
+.loader-orbit svg {
+  animation: spin 0.9s linear infinite;
+}
+
 .workspace-grid {
   display: grid;
   grid-template-columns: minmax(360px, 520px) 1fr;
@@ -491,7 +496,17 @@ textarea {
 }
 
 .paper-panel {
+  position: relative;
   overflow: hidden;
+}
+
+.paper-loading {
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  top: 72px;
+  z-index: 4;
+  pointer-events: none;
 }
 
 .format-bar {
@@ -578,6 +593,75 @@ textarea {
   font-size: 12px;
 }
 
+.generation-loader {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 14px;
+  border: 1px solid #cfe2dc;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #f8fcfb 0%, #eef8f5 100%);
+  padding: 12px;
+  color: #245f55;
+}
+
+.generation-loader.compact {
+  margin-top: 12px;
+  padding: 10px;
+}
+
+.loader-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.loader-head strong {
+  font-size: 13px;
+}
+
+.loader-orbit {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 50%;
+  color: #2f6f63;
+  background: #ffffff;
+  box-shadow: inset 0 0 0 1px #d6e6e1;
+}
+
+.loader-progress {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dcebe7;
+}
+
+.loader-progress span {
+  display: block;
+  width: 45%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2f6f63, #82b7ac, #2f6f63);
+  animation: loader-slide 1.15s ease-in-out infinite;
+}
+
+.loader-steps {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.loader-steps span {
+  min-width: 0;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.7);
+  padding: 6px 8px;
+  color: #53616d;
+  font-size: 12px;
+  animation: step-pulse 1.4s ease-in-out infinite;
+}
+
 .assistant-note {
   margin-top: 18px;
   padding: 14px;
@@ -593,6 +677,33 @@ textarea {
   padding: 10px 12px;
   border-radius: 8px;
   font-size: 13px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes loader-slide {
+  0% {
+    transform: translateX(-110%);
+  }
+
+  100% {
+    transform: translateX(230%);
+  }
+}
+
+@keyframes step-pulse {
+  0%,
+  100% {
+    opacity: 0.58;
+  }
+
+  50% {
+    opacity: 1;
+  }
 }
 
 .ai-message.loading {
@@ -719,6 +830,16 @@ textarea {
   .word-editor {
     min-height: 420px;
     padding: 20px 18px;
+  }
+
+  .paper-loading {
+    left: 12px;
+    right: 12px;
+    top: 66px;
+  }
+
+  .loader-steps {
+    grid-template-columns: 1fr;
   }
 
   .side-nav {

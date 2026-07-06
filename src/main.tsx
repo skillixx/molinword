@@ -12,6 +12,7 @@ import {
   FileText,
   FolderOpen,
   LayoutTemplate,
+  LoaderCircle,
   List,
   ListOrdered,
   ListTree,
@@ -91,6 +92,17 @@ const usageCosts = {
   body: 5,
   edit: 2,
   exportDocx: 1
+};
+
+const loadingStepMap: Record<string, string[]> = {
+  正在生成大纲: ["理解文档主题", "整理章节结构", "生成大纲条目", "准备进入编辑"],
+  正在生成正文: ["读取当前大纲", "组织段落内容", "润色表达语气", "写入正文编辑器"],
+  正在润色: ["分析选中文本", "优化措辞语气", "保持原意一致", "生成处理结果"],
+  正在续写: ["分析上下文", "延展后续内容", "保持行文连贯", "生成处理结果"],
+  正在扩写: ["识别核心观点", "补充细节说明", "优化段落层次", "生成处理结果"],
+  正在缩写: ["提取关键信息", "压缩重复表达", "保留核心结论", "生成处理结果"],
+  正在纠错: ["检查错别字", "修正语病标点", "统一表达风格", "生成处理结果"],
+  "正在导出 Word": ["保存当前文档", "生成 Word 文件", "上传文件存储", "准备自动下载"]
 };
 
 const templates: TemplateItem[] = [
@@ -598,6 +610,23 @@ function ErrorBanner(props: { message: string; onClose: () => void }) {
   );
 }
 
+function LoadingProcess(props: { label: string; compact?: boolean }) {
+  const steps = loadingStepMap[props.label] || ["准备请求", "调用 AI 模型", "整理返回内容", "更新页面状态"];
+
+  return (
+    <div className={props.compact ? "generation-loader compact" : "generation-loader"} role="status" aria-live="polite">
+      <div className="loader-head">
+        <span className="loader-orbit"><LoaderCircle size={18} /></span>
+        <strong>{props.label}</strong>
+      </div>
+      <div className="loader-progress"><span /></div>
+      <div className="loader-steps">
+        {steps.map((step, index) => <span key={step} style={{ animationDelay: `${index * 0.18}s` }}>{step}</span>)}
+      </div>
+    </div>
+  );
+}
+
 function Workspace(props: {
   selectedType: DocumentType;
   setSelectedType: (value: DocumentType) => void;
@@ -626,7 +655,7 @@ function Workspace(props: {
     <section className="workspace">
       <header className="topbar">
         <div><p>个人文档工作台</p><h1>AI Word 文档助手</h1></div>
-        <button className="primary-action" onClick={props.generateOutline} disabled={Boolean(props.aiLoading)}><Sparkles size={18} />{props.aiLoading || "生成大纲"}</button>
+        <button className="primary-action" onClick={props.generateOutline} disabled={Boolean(props.aiLoading)}>{props.aiLoading ? <LoaderCircle className="spin-icon" size={18} /> : <Sparkles size={18} />}{props.aiLoading || "生成大纲"}</button>
       </header>
       <div className="workspace-grid">
         <section className="creator-panel">
@@ -637,7 +666,8 @@ function Workspace(props: {
             <label>写作语气<select value={props.tone} onChange={(event) => props.setTone(event.target.value)}><option>正式</option><option>商务</option><option>学术</option><option>简洁</option></select></label>
           </div>
           <label>补充要求<textarea value={props.requirement} onChange={(event) => props.setRequirement(event.target.value)} /></label>
-          <button className="wide-action" onClick={props.generateOutline} disabled={Boolean(props.aiLoading)}><Wand2 size={18} />{props.aiLoading || "开始生成"}</button>
+          {props.aiLoading ? <LoadingProcess label={props.aiLoading} /> : null}
+          <button className="wide-action" onClick={props.generateOutline} disabled={Boolean(props.aiLoading)}>{props.aiLoading ? <LoaderCircle className="spin-icon" size={18} /> : <Wand2 size={18} />}{props.aiLoading || "开始生成"}</button>
         </section>
         <section className="recent-panel">
           <div className="section-title spread"><div><FileText size={18} /><h2>最近文档</h2></div></div>
@@ -767,12 +797,12 @@ function Editor(props: {
     <section className="editor-page">
       <header className="editor-toolbar">
         <div><p>正在编辑</p><h1>{props.currentTitle}</h1><span className="save-status">{props.saveStatus}</span>{props.exportStatus ? <span className="export-status">{props.exportStatus}</span> : null}</div>
-        <div className="toolbar-actions"><button onClick={props.saveDocument}><Save size={17} />保存</button><button onClick={props.generateBody} disabled={Boolean(props.aiLoading)}><Sparkles size={17} />{props.aiLoading === "正在生成正文" ? "生成中" : "生成正文"}</button><button onClick={props.exportWord} disabled={props.exportStatus === "导出中"}><Download size={17} />{props.exportStatus === "导出中" ? "导出中" : "导出 Word"}</button></div>
+        <div className="toolbar-actions"><button onClick={props.saveDocument}><Save size={17} />保存</button><button onClick={props.generateBody} disabled={Boolean(props.aiLoading)}>{props.aiLoading === "正在生成正文" ? <LoaderCircle className="spin-icon" size={17} /> : <Sparkles size={17} />}{props.aiLoading === "正在生成正文" ? "生成中" : "生成正文"}</button><button onClick={props.exportWord} disabled={props.exportStatus === "导出中"}>{props.exportStatus === "导出中" ? <LoaderCircle className="spin-icon" size={17} /> : <Download size={17} />}{props.exportStatus === "导出中" ? "导出中" : "导出 Word"}</button></div>
       </header>
       <div className="editor-layout">
         <aside className="outline-panel"><div className="section-title"><ListTree size={18} /><h2>文档大纲</h2></div>{props.outline.length === 0 ? <div className="empty-state">暂无大纲，请先生成或在正文中添加标题。</div> : props.outline.map((item) => <button key={item.id} className={item.level === 3 ? "outline-child" : ""} onMouseDown={(event) => event.preventDefault()} onClick={() => jumpToOutline(item)}>{item.title}</button>)}</aside>
-        <section className="paper-panel"><div className="format-bar"><button className={editor?.isActive("paragraph") ? "active-format" : ""} onClick={() => editor?.chain().focus().setParagraph().run()}><AlignLeft size={16} />正文</button><button className={editor?.isActive("heading", { level: 2 }) ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}>标题</button><button className={editor?.isActive("bold") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleBold().run()}><Bold size={16} />加粗</button><button className={editor?.isActive("bulletList") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleBulletList().run()}><List size={16} />列表</button><button className={editor?.isActive("orderedList") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleOrderedList().run()}><ListOrdered size={16} />编号</button></div><EditorContent editor={editor} /></section>
-        <aside className="ai-panel"><div className="section-title"><Bot size={18} /><h2>AI 助手</h2></div><div className="points-cost">生成大纲 {usageCosts.outline} 积分 · 生成正文 {usageCosts.body} 积分 · 局部编辑 {usageCosts.edit} 积分 · 导出 {usageCosts.exportDocx} 积分</div>{props.pointsEnabled ? <div className="selection-hint">当前剩余积分：{props.pointsRemaining ?? "未知"}</div> : null}<div className="selection-hint">{selectionHint}</div><button onClick={() => runSelectionAi("polish")} disabled={Boolean(props.aiLoading) || !hasSelection}><Sparkles size={17} />润色选中文本</button><button onClick={() => runSelectionAi("continue")} disabled={Boolean(props.aiLoading) || !hasSelection}><Wand2 size={17} />续写选中文本</button><button onClick={() => runSelectionAi("expand")} disabled={Boolean(props.aiLoading) || !hasSelection}><AlignLeft size={17} />扩写选中文本</button><button onClick={() => runSelectionAi("shorten")} disabled={Boolean(props.aiLoading) || !hasSelection}><AlignLeft size={17} />缩写选中文本</button><button onClick={() => runSelectionAi("correct")} disabled={Boolean(props.aiLoading) || !hasSelection}><CheckCircle2 size={17} />纠错选中文本</button><button onClick={props.generateBody} disabled={Boolean(props.aiLoading)}><ListTree size={17} />根据大纲生成正文</button>{props.aiLoading ? <div className="ai-message loading">{props.aiLoading}...</div> : null}{props.aiError ? <div className="ai-message error"><XCircle size={16} /><span>{props.aiError}</span></div> : null}{aiResult ? <div className="ai-result"><strong>AI 处理结果</strong><p>{aiResult.content}</p><div className="ai-result-actions"><button onClick={() => applyAiResult("replace")}>替换原文</button><button onClick={() => applyAiResult("insert")}>插入下方</button><button onClick={copyAiResult}>复制结果</button><button onClick={() => setAiResult(null)}>取消结果</button></div></div> : null}<div className="assistant-note"><strong>{props.aiStatus}</strong><span>AI 密钥仅保存在服务端；墨灵积分只会在动作成功后扣减。</span></div></aside>
+        <section className="paper-panel"><div className="format-bar"><button className={editor?.isActive("paragraph") ? "active-format" : ""} onClick={() => editor?.chain().focus().setParagraph().run()}><AlignLeft size={16} />正文</button><button className={editor?.isActive("heading", { level: 2 }) ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}>标题</button><button className={editor?.isActive("bold") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleBold().run()}><Bold size={16} />加粗</button><button className={editor?.isActive("bulletList") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleBulletList().run()}><List size={16} />列表</button><button className={editor?.isActive("orderedList") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleOrderedList().run()}><ListOrdered size={16} />编号</button></div>{props.aiLoading === "正在生成正文" ? <div className="paper-loading"><LoadingProcess label={props.aiLoading} /></div> : null}<EditorContent editor={editor} /></section>
+        <aside className="ai-panel"><div className="section-title"><Bot size={18} /><h2>AI 助手</h2></div><div className="points-cost">生成大纲 {usageCosts.outline} 积分 · 生成正文 {usageCosts.body} 积分 · 局部编辑 {usageCosts.edit} 积分 · 导出 {usageCosts.exportDocx} 积分</div>{props.pointsEnabled ? <div className="selection-hint">当前剩余积分：{props.pointsRemaining ?? "未知"}</div> : null}<div className="selection-hint">{selectionHint}</div><button onClick={() => runSelectionAi("polish")} disabled={Boolean(props.aiLoading) || !hasSelection}><Sparkles size={17} />润色选中文本</button><button onClick={() => runSelectionAi("continue")} disabled={Boolean(props.aiLoading) || !hasSelection}><Wand2 size={17} />续写选中文本</button><button onClick={() => runSelectionAi("expand")} disabled={Boolean(props.aiLoading) || !hasSelection}><AlignLeft size={17} />扩写选中文本</button><button onClick={() => runSelectionAi("shorten")} disabled={Boolean(props.aiLoading) || !hasSelection}><AlignLeft size={17} />缩写选中文本</button><button onClick={() => runSelectionAi("correct")} disabled={Boolean(props.aiLoading) || !hasSelection}><CheckCircle2 size={17} />纠错选中文本</button><button onClick={props.generateBody} disabled={Boolean(props.aiLoading)}><ListTree size={17} />根据大纲生成正文</button>{props.aiLoading ? <LoadingProcess label={props.aiLoading} compact /> : null}{props.exportStatus === "导出中" ? <LoadingProcess label="正在导出 Word" compact /> : null}{props.aiError ? <div className="ai-message error"><XCircle size={16} /><span>{props.aiError}</span></div> : null}{aiResult ? <div className="ai-result"><strong>AI 处理结果</strong><p>{aiResult.content}</p><div className="ai-result-actions"><button onClick={() => applyAiResult("replace")}>替换原文</button><button onClick={() => applyAiResult("insert")}>插入下方</button><button onClick={copyAiResult}>复制结果</button><button onClick={() => setAiResult(null)}>取消结果</button></div></div> : null}<div className="assistant-note"><strong>{props.aiStatus}</strong><span>AI 密钥仅保存在服务端；墨灵积分只会在动作成功后扣减。</span></div></aside>
       </div>
     </section>
   );
