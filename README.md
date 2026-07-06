@@ -40,7 +40,7 @@ npm run dev
 使用 root 执行初始化脚本：
 
 ```bash
-mysql -h172.16.10.151 -P13306 -uroot -pRootPassword123 < database/init-mysql.sql
+mysql -h172.16.10.151 -P13306 -uroot -p < database/init-mysql.sql
 ```
 
 脚本会创建：

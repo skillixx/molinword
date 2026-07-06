@@ -1,5 +1,5 @@
 -- 中文注解：本脚本用于初始化 AI Word 文档助手需要的 MySQL 数据库、应用账号和核心表。
--- 中文注解：按当前开发环境设计，root 连接示例：mysql -h172.16.10.151 -P13306 -uroot -pRootPassword123 < database/init-mysql.sql
+-- 中文注解：root 连接示例：mysql -h172.16.10.151 -P13306 -uroot -p < database/init-mysql.sql
 
 CREATE DATABASE IF NOT EXISTS moling_word
   DEFAULT CHARACTER SET utf8mb4
