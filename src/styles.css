@@ -36,6 +36,50 @@ button:disabled {
   grid-template-columns: 248px 1fr;
 }
 
+.global-loading,
+.error-banner {
+  position: fixed;
+  left: 50%;
+  top: 14px;
+  z-index: 20;
+  transform: translateX(-50%);
+  max-width: min(640px, calc(100vw - 28px));
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(23, 33, 43, 0.16);
+  font-size: 14px;
+}
+
+.global-loading {
+  background: #e8f3f0;
+  color: #245f55;
+  padding: 10px 14px;
+}
+
+.error-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #ffd0d0;
+  background: #fff8f8;
+  color: #8b2525;
+  padding: 10px 12px;
+}
+
+.error-banner span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.error-banner button {
+  flex-shrink: 0;
+  min-height: 28px;
+  border: 1px solid #f0b7b7;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #8b2525;
+  padding: 0 9px;
+}
+
 .sidebar {
   display: flex;
   flex-direction: column;

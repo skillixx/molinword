@@ -189,11 +189,12 @@ function App() {
   const [aiStatus, setAiStatus] = React.useState("本地兜底已就绪");
   const [aiLoading, setAiLoading] = React.useState<string | null>(null);
   const [aiError, setAiError] = React.useState("");
-  const [saveStatus, setSaveStatus] = React.useState("尚未保存");
+  const [saveStatus, setSaveStatus] = React.useState("未保存");
   const [exportStatus, setExportStatus] = React.useState("");
   const [sessionUser, setSessionUser] = React.useState<SessionUser | null>(null);
   const [pointsSummary, setPointsSummary] = React.useState<PointsSummary | null>(null);
   const [launchStatus, setLaunchStatus] = React.useState("");
+  const [appInitializing, setAppInitializing] = React.useState(true);
   const [documentsLoading, setDocumentsLoading] = React.useState(false);
   const [pointsRefreshing, setPointsRefreshing] = React.useState(false);
 
@@ -261,6 +262,8 @@ function App() {
       } catch (error) {
         setLaunchStatus("");
         setAiError(error instanceof Error ? error.message : "初始化登录状态失败");
+      } finally {
+        setAppInitializing(false);
       }
     };
     void run();
@@ -364,7 +367,7 @@ function App() {
 
   React.useEffect(() => {
     if (!currentDocumentId || activePanel !== "editor") return;
-    setSaveStatus("等待自动保存");
+    setSaveStatus("自动保存中");
     const timer = window.setTimeout(() => {
       void saveDocument({ saveVersion: false });
     }, 1200);
@@ -519,6 +522,8 @@ function App() {
 
   return (
     <main className="app-shell">
+      {appInitializing ? <div className="global-loading">正在初始化应用...</div> : null}
+      {aiError ? <ErrorBanner message={aiError} onClose={() => setAiError("")} /> : null}
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark"><FileText size={22} /></div>
@@ -580,6 +585,16 @@ function App() {
         />
       )}
     </main>
+  );
+}
+
+function ErrorBanner(props: { message: string; onClose: () => void }) {
+  return (
+    <div className="error-banner" role="alert">
+      <XCircle size={17} />
+      <span>{props.message}</span>
+      <button onClick={props.onClose} aria-label="关闭提示">关闭</button>
+    </div>
   );
 }
 
