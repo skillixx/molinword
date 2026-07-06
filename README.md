@@ -48,12 +48,37 @@ mysql -h172.16.10.151 -P13306 -uroot -p < database/init-mysql.sql
 - 数据库：`moling_word`
 - 应用用户：`moling_word_app`
 - 默认密码：`MolingWordApp_123`
+- 核心业务表：`documents`、`document_versions`、`document_templates`、`files`、`ai_request_logs`、`molin_user_sessions`
 
 对应连接串示例：
 
 ```env
 DATABASE_URL=mysql://moling_word_app:MolingWordApp_123@172.16.10.151:13306/moling_word
 ```
+
+初始化或更新系统模板：
+
+```bash
+npm run db:seed:templates
+```
+
+模板库前端默认从后端 `GET /api/templates` 读取启用模板；接口不可用时会使用本地兜底模板并显示中文提示。
+
+模板素材初始化会上传封面和 Word 样式到 MinIO，并在 `files` 表中保存索引：
+
+```text
+templates/{templateId}/cover/{fileName}
+templates/{templateId}/styles/{fileName}
+templates/{templateId}/assets/{fileName}
+templates/{templateId}/examples/{fileName}
+```
+
+第一版复用 `files` 表管理模板素材：
+
+- `template_id`：关联 `document_templates.id`。
+- `document_id`：模板素材为空。
+- `purpose`：`template_cover`、`template_style`、`template_asset`。
+- `bucket`、`object_key`：只保存在服务端数据库中，前端通过后端接口访问，不暴露 MinIO 密钥。
 
 ## MinIO 配置
 

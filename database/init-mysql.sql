@@ -59,6 +59,8 @@ CREATE TABLE IF NOT EXISTS document_templates (
   name VARCHAR(120) NOT NULL COMMENT '模板名称',
   category VARCHAR(60) NOT NULL COMMENT '模板分类',
   document_type VARCHAR(50) NOT NULL COMMENT '关联文档类型',
+  topic VARCHAR(255) NOT NULL DEFAULT '' COMMENT '默认文档主题',
+  requirement TEXT NULL COMMENT '默认补充要求',
   outline_json JSON NULL COMMENT '模板大纲 JSON',
   content LONGTEXT NULL COMMENT '模板正文 HTML',
   is_system TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否系统模板',
@@ -67,6 +69,7 @@ CREATE TABLE IF NOT EXISTS document_templates (
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (id),
+  UNIQUE KEY uk_templates_name (name),
   KEY idx_templates_category_status (category, status),
   KEY idx_templates_type_status (document_type, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='文档模板表';
@@ -76,6 +79,7 @@ CREATE TABLE IF NOT EXISTS files (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '文件 ID',
   user_id VARCHAR(64) NOT NULL DEFAULT 'local-dev-user' COMMENT '用户 ID',
   document_id BIGINT UNSIGNED NULL COMMENT '关联文档 ID',
+  template_id BIGINT UNSIGNED NULL COMMENT '关联模板 ID，模板素材使用',
   original_name VARCHAR(255) NOT NULL COMMENT '原始文件名',
   file_name VARCHAR(255) NOT NULL COMMENT '系统文件名',
   file_type VARCHAR(80) NOT NULL COMMENT '文件类型，例如 docx、png、pdf',
@@ -83,14 +87,18 @@ CREATE TABLE IF NOT EXISTS files (
   file_size BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '文件大小，单位字节',
   bucket VARCHAR(80) NOT NULL COMMENT 'MinIO bucket 名称',
   object_key VARCHAR(512) NOT NULL COMMENT 'MinIO object key',
-  purpose VARCHAR(50) NOT NULL COMMENT '用途：upload 上传，export 导出，image 图片',
+  purpose VARCHAR(50) NOT NULL COMMENT '用途：upload 上传，export 导出，image 图片，template_cover 模板封面，template_style 模板样式，template_asset 模板附件',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   PRIMARY KEY (id),
   KEY idx_files_user_created (user_id, created_at),
   KEY idx_files_document (document_id),
+  KEY idx_files_template (template_id, purpose),
   KEY idx_files_purpose (purpose),
   CONSTRAINT fk_files_document
     FOREIGN KEY (document_id) REFERENCES documents (id)
+    ON DELETE SET NULL,
+  CONSTRAINT fk_files_template
+    FOREIGN KEY (template_id) REFERENCES document_templates (id)
     ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='文件索引表';
 

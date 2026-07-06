@@ -201,8 +201,61 @@ function extractDocxParagraphsFromHtml(html = "") {
     : [new Paragraph({ text: stripHtml(html) || "空白文档", spacing: { after: 120 } })];
 }
 
-async function createDocxBuffer({ title, content }) {
+function cleanDocxColor(value, fallback) {
+  const text = String(value || "").replace("#", "").trim();
+  return /^[0-9a-fA-F]{6}$/.test(text) ? text : fallback;
+}
+
+function createDocxStyles(templateStyle = {}) {
+  const fontFamily = templateStyle.fontFamily || "Microsoft YaHei";
+  const bodySize = Number(templateStyle.bodySize || 22);
+  const titleSize = Number(templateStyle.titleSize || 36);
+  const headingSize = Number(templateStyle.headingSize || 28);
+  const titleColor = cleanDocxColor(templateStyle.titleColor, "17212B");
+  const headingColor = cleanDocxColor(templateStyle.headingColor, "245F55");
+
+  return {
+    default: {
+      document: {
+        run: { font: fontFamily, size: bodySize },
+        paragraph: { spacing: { line: Number(templateStyle.lineSpacing || 360) } }
+      }
+    },
+    paragraphStyles: [
+      {
+        id: "Title",
+        name: "Title",
+        basedOn: "Normal",
+        next: "Normal",
+        quickFormat: true,
+        run: { font: fontFamily, size: titleSize, bold: true, color: titleColor },
+        paragraph: { spacing: { after: 260 } }
+      },
+      {
+        id: "Heading1",
+        name: "Heading 1",
+        basedOn: "Normal",
+        next: "Normal",
+        quickFormat: true,
+        run: { font: fontFamily, size: headingSize, bold: true, color: headingColor },
+        paragraph: { spacing: { before: 240, after: 120 } }
+      },
+      {
+        id: "Heading2",
+        name: "Heading 2",
+        basedOn: "Normal",
+        next: "Normal",
+        quickFormat: true,
+        run: { font: fontFamily, size: Math.max(headingSize - 2, bodySize), bold: true, color: headingColor },
+        paragraph: { spacing: { before: 180, after: 100 } }
+      }
+    ]
+  };
+}
+
+async function createDocxBuffer({ title, content, templateStyle = null }) {
   const document = new Document({
+    styles: createDocxStyles(templateStyle || {}),
     sections: [
       {
         properties: {},
@@ -234,6 +287,14 @@ async function ensureStorage() {
   return minioClient;
 }
 
+async function streamToBuffer(stream) {
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
 function toDocument(row) {
   return {
     id: row.id,
@@ -249,6 +310,87 @@ function toDocument(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
+}
+
+function toTemplateAsset(row, templateId) {
+  return {
+    id: row.id,
+    purpose: row.purpose,
+    fileName: row.file_name,
+    fileType: row.file_type,
+    mimeType: row.mime_type,
+    fileSize: row.file_size,
+    url: row.purpose === "template_cover" ? `/api/templates/${templateId}/cover` : `/api/templates/${templateId}/assets/${row.id}/download`
+  };
+}
+
+function summarizeTemplateAssets(assets = []) {
+  const cover = assets.find((item) => item.purpose === "template_cover");
+  const style = assets.find((item) => item.purpose === "template_style");
+  return {
+    coverUrl: cover?.url || "",
+    hasCover: Boolean(cover),
+    hasStyle: Boolean(style),
+    assets
+  };
+}
+
+function toTemplate(row, assets = []) {
+  const assetSummary = summarizeTemplateAssets(assets);
+  return {
+    id: row.id,
+    name: row.name,
+    category: row.category,
+    documentType: row.document_type,
+    topic: row.topic || row.name,
+    requirement: row.requirement || "",
+    outline: parseJson(row.outline_json, []),
+    content: row.content || "",
+    isSystem: Boolean(row.is_system),
+    status: row.status,
+    sortOrder: row.sort_order,
+    ...assetSummary,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+async function findTemplateAssets(pool, templateIds) {
+  if (!templateIds.length) return new Map();
+
+  const [rows] = await pool.query(
+    `SELECT id, template_id, original_name, file_name, file_type, mime_type, file_size, purpose
+     FROM files
+     WHERE template_id IN (?) AND purpose IN ('template_cover', 'template_style', 'template_asset')
+     ORDER BY template_id ASC, purpose ASC, id ASC`,
+    [templateIds]
+  );
+
+  const grouped = new Map();
+  for (const row of rows) {
+    const items = grouped.get(row.template_id) || [];
+    items.push(toTemplateAsset(row, row.template_id));
+    grouped.set(row.template_id, items);
+  }
+  return grouped;
+}
+
+async function readTemplateStyle(pool, storage, templateId) {
+  if (!templateId) return null;
+
+  const [[templateRow]] = await pool.query("SELECT id FROM document_templates WHERE id = ? AND status = 'active'", [templateId]);
+  if (!templateRow) return null;
+
+  const [[styleRow]] = await pool.query(
+    "SELECT bucket, object_key FROM files WHERE template_id = ? AND purpose = 'template_style' ORDER BY id DESC LIMIT 1",
+    [templateId]
+  );
+  if (!styleRow) return null;
+
+  // 中文注解：样式文件从 MinIO 读取，前端只传模板 ID，不接触 MinIO 密钥和 object key。
+  const objectStream = await storage.getObject(styleRow.bucket, styleRow.object_key);
+  const buffer = await streamToBuffer(objectStream);
+  return parseJson(buffer.toString("utf8"), null);
 }
 
 async function ensureDb() {
@@ -805,6 +947,104 @@ app.get("/api/billing/points", async (request, response) => {
   }
 });
 
+app.get("/api/templates", async (request, response) => {
+  try {
+    const pool = await ensureDb();
+    const [rows] = await pool.query(
+      `SELECT id, name, category, document_type, topic, requirement, outline_json,
+        content, is_system, status, sort_order, created_at, updated_at
+       FROM document_templates
+       WHERE status = 'active'
+       ORDER BY sort_order ASC, id ASC`
+    );
+    const assetsByTemplate = await findTemplateAssets(pool, rows.map((row) => row.id));
+
+    // 中文注解：模板接口只暴露启用模板，停用模板留给后续管理后台维护。
+    response.json({ templates: rows.map((row) => toTemplate(row, assetsByTemplate.get(row.id) || [])) });
+  } catch (error) {
+    sendError(response, error, 500, "读取模板库失败，请稍后重试。");
+  }
+});
+
+app.get("/api/templates/:id", async (request, response) => {
+  try {
+    const pool = await ensureDb();
+    const [[row]] = await pool.query(
+      `SELECT id, name, category, document_type, topic, requirement, outline_json,
+        content, is_system, status, sort_order, created_at, updated_at
+       FROM document_templates
+       WHERE id = ? AND status = 'active'`,
+      [request.params.id]
+    );
+
+    if (!row) {
+      response.status(404).json({ message: "模板不存在或已停用。" });
+      return;
+    }
+
+    const assetsByTemplate = await findTemplateAssets(pool, [row.id]);
+    response.json({ template: toTemplate(row, assetsByTemplate.get(row.id) || []) });
+  } catch (error) {
+    sendError(response, error, 500, "读取模板详情失败，请稍后重试。");
+  }
+});
+
+app.get("/api/templates/:id/cover", async (request, response) => {
+  try {
+    const pool = await ensureDb();
+    const storage = await ensureStorage();
+    const [[fileRow]] = await pool.query(
+      `SELECT f.bucket, f.object_key, f.mime_type, f.file_size
+       FROM files f
+       INNER JOIN document_templates t ON t.id = f.template_id
+       WHERE f.template_id = ? AND f.purpose = 'template_cover' AND t.status = 'active'
+       ORDER BY f.id DESC
+       LIMIT 1`,
+      [request.params.id]
+    );
+
+    if (!fileRow) {
+      response.status(404).json({ message: "模板封面不存在。" });
+      return;
+    }
+
+    const objectStream = await storage.getObject(fileRow.bucket, fileRow.object_key);
+    response.setHeader("Content-Type", fileRow.mime_type || "application/octet-stream");
+    if (fileRow.file_size) response.setHeader("Content-Length", String(fileRow.file_size));
+    response.setHeader("Cache-Control", "private, max-age=300");
+    objectStream.pipe(response);
+  } catch (error) {
+    sendError(response, error, 500, "模板封面读取失败，请稍后重试。");
+  }
+});
+
+app.get("/api/templates/:templateId/assets/:fileId/download", async (request, response) => {
+  try {
+    const pool = await ensureDb();
+    const storage = await ensureStorage();
+    const [[fileRow]] = await pool.query(
+      `SELECT f.original_name, f.bucket, f.object_key, f.mime_type, f.file_size
+       FROM files f
+       INNER JOIN document_templates t ON t.id = f.template_id
+       WHERE f.id = ? AND f.template_id = ? AND f.purpose IN ('template_style', 'template_asset') AND t.status = 'active'`,
+      [request.params.fileId, request.params.templateId]
+    );
+
+    if (!fileRow) {
+      response.status(404).json({ message: "模板素材不存在。" });
+      return;
+    }
+
+    const objectStream = await storage.getObject(fileRow.bucket, fileRow.object_key);
+    response.setHeader("Content-Type", fileRow.mime_type || "application/octet-stream");
+    if (fileRow.file_size) response.setHeader("Content-Length", String(fileRow.file_size));
+    response.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(fileRow.original_name)}`);
+    objectStream.pipe(response);
+  } catch (error) {
+    sendError(response, error, 500, "模板素材下载失败，请稍后重试。");
+  }
+});
+
 app.get("/api/documents", async (request, response) => {
   try {
     const pool = await ensureDb();
@@ -985,7 +1225,7 @@ app.post("/api/documents/:id/duplicate", async (request, response) => {
 });
 
 app.post("/api/documents/:id/export-docx", async (request, response) => {
-  const { content } = request.body;
+  const { content, templateId } = request.body;
   let pointHold = null;
 
   try {
@@ -1005,7 +1245,8 @@ app.post("/api/documents/:id/export-docx", async (request, response) => {
     // 中文注解：Word 导出先预占 1 积分；文件真正写入成功后再结算，失败则释放预占。
     pointHold = await reservePoints(currentUser, "word_export_docx", 1, request.params.id);
     const exportContent = typeof content === "string" ? content : documentRow.content || "";
-    const buffer = await createDocxBuffer({ title: documentRow.title, content: exportContent });
+    const templateStyle = await readTemplateStyle(pool, storage, templateId);
+    const buffer = await createDocxBuffer({ title: documentRow.title, content: exportContent, templateStyle });
     const exportedAt = new Date();
     const baseName = safeFileName(documentRow.title);
     const fileName = `${baseName}-${exportedAt.getTime()}.docx`;
@@ -1041,8 +1282,6 @@ app.post("/api/documents/:id/export-docx", async (request, response) => {
         fileType: "docx",
         mimeType,
         fileSize: buffer.length,
-        bucket: storageBucket,
-        objectKey,
         downloadUrl: `/api/files/${result.insertId}/download`
       }
     });

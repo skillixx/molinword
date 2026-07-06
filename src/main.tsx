@@ -26,8 +26,8 @@ import {
   XCircle
 } from "lucide-react";
 import "./styles.css";
+import { documentTemplates as fallbackDocumentTemplates, documentTypes, type DocumentType, type TemplateItem } from "./templates/documentTemplates";
 
-type DocumentType = "工作总结" | "会议纪要" | "商业计划书" | "合同协议" | "论文材料" | "活动方案";
 type AiAction = "continue" | "expand" | "shorten" | "correct" | "polish";
 type AiApplyMode = "replace" | "insert";
 
@@ -48,6 +48,12 @@ type ApiDocument = {
   content: string;
   wordCount: number;
   updatedAt: string;
+};
+
+type ApiTemplate = TemplateItem & {
+  id: number;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 type OutlineItem = {
@@ -78,15 +84,6 @@ type PointsSummary = {
   error?: string;
 };
 
-type TemplateItem = {
-  name: string;
-  documentType: DocumentType;
-  topic: string;
-  requirement: string;
-  outline: string[];
-};
-
-const documentTypes: DocumentType[] = ["工作总结", "会议纪要", "商业计划书", "合同协议", "论文材料", "活动方案"];
 const usageCosts = {
   outline: 1,
   body: 5,
@@ -104,15 +101,6 @@ const loadingStepMap: Record<string, string[]> = {
   正在纠错: ["检查错别字", "修正语病标点", "统一表达风格", "生成处理结果"],
   "正在导出 Word": ["保存当前文档", "生成 Word 文件", "上传文件存储", "准备自动下载"]
 };
-
-const templates: TemplateItem[] = [
-  { name: "工作总结", documentType: "工作总结", topic: "季度工作总结", requirement: "突出目标完成情况、关键成果、问题复盘和下阶段计划。", outline: ["一、整体工作回顾", "二、重点成果与数据", "三、问题与改进", "四、下阶段计划"] },
-  { name: "会议纪要", documentType: "会议纪要", topic: "项目推进会议纪要", requirement: "记录会议结论、待办事项、责任人和时间节点。", outline: ["一、会议基本信息", "二、讨论要点", "三、形成结论", "四、后续行动"] },
-  { name: "商业计划书", documentType: "商业计划书", topic: "AI Word 文档助手商业计划书", requirement: "覆盖市场机会、产品方案、商业模式、推广计划和风险控制。", outline: ["一、项目概述", "二、市场分析", "三、产品方案", "四、商业模式", "五、实施计划"] },
-  { name: "活动方案", documentType: "活动方案", topic: "新品发布活动方案", requirement: "说明活动目标、流程安排、人员分工、预算和风险预案。", outline: ["一、活动目标", "二、活动流程", "三、资源与分工", "四、预算安排", "五、风险预案"] },
-  { name: "合同协议", documentType: "合同协议", topic: "服务合作协议", requirement: "梳理合作范围、双方责任、交付标准、费用与违约条款。", outline: ["一、合作背景", "二、服务内容", "三、双方权责", "四、费用结算", "五、违约与终止"] },
-  { name: "论文材料", documentType: "论文材料", topic: "智能写作工具应用研究", requirement: "强调研究背景、方法、分析过程、结论和参考方向。", outline: ["一、研究背景", "二、研究方法", "三、结果分析", "四、结论与展望"] }
-];
 
 const defaultOutline: OutlineItem[] = [
   { id: 1, title: "一、项目背景与目标" },
@@ -196,6 +184,7 @@ function App() {
   const [content, setContent] = React.useState(plainTextToHtml(defaultContent));
   const [currentDocumentId, setCurrentDocumentId] = React.useState<number | null>(null);
   const [currentTitle, setCurrentTitle] = React.useState("AI Word 文档助手本地开发方案");
+  const [selectedTemplate, setSelectedTemplate] = React.useState<TemplateItem | null>(null);
   const [recentDocuments, setRecentDocuments] = React.useState<RecentDocument[]>([]);
   const [activePanel, setActivePanel] = React.useState<"workspace" | "editor" | "templates">("workspace");
   const [aiStatus, setAiStatus] = React.useState("本地兜底已就绪");
@@ -205,6 +194,9 @@ function App() {
   const [exportStatus, setExportStatus] = React.useState("");
   const [sessionUser, setSessionUser] = React.useState<SessionUser | null>(null);
   const [pointsSummary, setPointsSummary] = React.useState<PointsSummary | null>(null);
+  const [templates, setTemplates] = React.useState<TemplateItem[]>(fallbackDocumentTemplates);
+  const [templatesLoading, setTemplatesLoading] = React.useState(false);
+  const [templatesError, setTemplatesError] = React.useState("");
   const [launchStatus, setLaunchStatus] = React.useState("");
   const [appInitializing, setAppInitializing] = React.useState(true);
   const [documentsLoading, setDocumentsLoading] = React.useState(false);
@@ -228,6 +220,23 @@ function App() {
       setAiError(error instanceof Error ? error.message : "读取最近文档失败");
     } finally {
       setDocumentsLoading(false);
+    }
+  }, []);
+
+  const loadTemplates = React.useCallback(async () => {
+    setTemplatesLoading(true);
+    try {
+      const response = await fetch("/api/templates");
+      const result = await readApiJson(response);
+      const remoteTemplates = (result.templates || []) as ApiTemplate[];
+      setTemplates(remoteTemplates.length ? remoteTemplates : fallbackDocumentTemplates);
+      setTemplatesError(remoteTemplates.length ? "" : "模板接口暂无启用模板，已使用本地兜底模板。");
+    } catch (error) {
+      // 中文注解：模板库是低风险入口，接口异常时前端继续用本地模板，避免影响写作主流程。
+      setTemplates(fallbackDocumentTemplates);
+      setTemplatesError(error instanceof Error ? `${error.message} 已使用本地兜底模板。` : "模板接口暂时不可用，已使用本地兜底模板。");
+    } finally {
+      setTemplatesLoading(false);
     }
   }, []);
 
@@ -280,6 +289,10 @@ function App() {
     };
     void run();
   }, [loadRecentDocuments, loadSession]);
+
+  React.useEffect(() => {
+    void loadTemplates();
+  }, [loadTemplates]);
 
   const callAi = async <T,>(label: string, url: string, body: unknown): Promise<T | null> => {
     setAiLoading(label);
@@ -432,6 +445,7 @@ function App() {
       setTone(document.tone);
       setOutline(toOutlineItems(document.outline || []));
       setContent(document.content || "<p></p>");
+      setSelectedTemplate(null);
       setActivePanel("editor");
       setSaveStatus("已打开");
       await loadRecentDocuments();
@@ -473,6 +487,7 @@ function App() {
       setCurrentTitle("AI Word 文档助手本地开发方案");
       setContent(plainTextToHtml(defaultContent));
       setOutline(defaultOutline);
+      setSelectedTemplate(null);
       setActivePanel("workspace");
     }
     await loadRecentDocuments();
@@ -502,7 +517,7 @@ function App() {
       const response = await fetch(`/api/documents/${currentDocumentId}/export-docx`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content })
+        body: JSON.stringify({ content, templateId: selectedTemplate?.id ?? null })
       });
       const result = await readApiJson(response);
       const anchor = document.createElement("a");
@@ -520,6 +535,7 @@ function App() {
   };
 
   const applyTemplate = (template: TemplateItem) => {
+    setSelectedTemplate(template);
     setSelectedType(template.documentType);
     setTopic(template.topic);
     setTone("正式");
@@ -575,7 +591,7 @@ function App() {
           documentsLoading={documentsLoading}
         />
       ) : activePanel === "templates" ? (
-        <TemplateLibrary applyTemplate={applyTemplate} />
+        <TemplateLibrary applyTemplate={applyTemplate} templates={templates} templatesLoading={templatesLoading} templatesError={templatesError} />
       ) : (
         <Editor
           outline={outline}
@@ -589,6 +605,7 @@ function App() {
           currentTitle={currentTitle}
           saveStatus={saveStatus}
           exportStatus={exportStatus}
+          selectedTemplate={selectedTemplate}
           aiStatus={aiStatus}
           aiLoading={aiLoading}
           aiError={aiError}
@@ -689,20 +706,30 @@ function Workspace(props: {
   );
 }
 
-function TemplateLibrary(props: { applyTemplate: (template: TemplateItem) => void }) {
+function TemplateLibrary(props: { applyTemplate: (template: TemplateItem) => void; templates: TemplateItem[]; templatesLoading: boolean; templatesError: string }) {
   return (
     <section className="workspace">
       <header className="topbar">
         <div><p>模板库</p><h1>选择文档模板</h1></div>
       </header>
+      {props.templatesLoading ? <div className="template-status">正在读取模板...</div> : null}
+      {props.templatesError ? <div className="template-status warning">{props.templatesError}</div> : null}
       <div className="template-grid">
-        {templates.map((template) => (
-          <article className="template-card" key={template.name}>
+        {!props.templatesLoading && props.templates.length === 0 ? <div className="empty-state">暂无可用模板。</div> : null}
+        {props.templates.map((template) => (
+          <article className="template-card" key={template.id ?? template.name}>
+            <div className="template-cover">
+              {template.coverUrl ? <img src={template.coverUrl} alt={`${template.name}封面`} /> : <div className="template-cover-fallback"><LayoutTemplate size={28} /></div>}
+            </div>
             <div>
               <strong>{template.name}</strong>
-              <span>{template.documentType}</span>
+              <span>{template.category} · {template.documentType}</span>
             </div>
             <p>{template.requirement}</p>
+            <div className="template-asset-row">
+              <span className={template.hasCover ? "asset-ok" : "asset-missing"}>{template.hasCover ? "已配置封面" : "无封面"}</span>
+              <span className={template.hasStyle ? "asset-ok" : "asset-missing"}>{template.hasStyle ? "已配置 Word 样式" : "无 Word 样式"}</span>
+            </div>
             <ul>
               {template.outline.slice(0, 3).map((item) => <li key={item}>{item}</li>)}
             </ul>
@@ -726,6 +753,7 @@ function Editor(props: {
   currentTitle: string;
   saveStatus: string;
   exportStatus: string;
+  selectedTemplate: TemplateItem | null;
   aiStatus: string;
   aiLoading: string | null;
   aiError: string;
@@ -796,7 +824,7 @@ function Editor(props: {
   return (
     <section className="editor-page">
       <header className="editor-toolbar">
-        <div><p>正在编辑</p><h1>{props.currentTitle}</h1><span className="save-status">{props.saveStatus}</span>{props.exportStatus ? <span className="export-status">{props.exportStatus}</span> : null}</div>
+        <div><p>正在编辑</p><h1>{props.currentTitle}</h1><span className="save-status">{props.saveStatus}</span>{props.exportStatus ? <span className="export-status">{props.exportStatus}</span> : null}{props.selectedTemplate ? <span className="export-status">模板样式：{props.selectedTemplate.name}{props.selectedTemplate.hasStyle ? "" : "（无样式文件）"}</span> : null}</div>
         <div className="toolbar-actions"><button onClick={props.saveDocument}><Save size={17} />保存</button><button onClick={props.generateBody} disabled={Boolean(props.aiLoading)}>{props.aiLoading === "正在生成正文" ? <LoaderCircle className="spin-icon" size={17} /> : <Sparkles size={17} />}{props.aiLoading === "正在生成正文" ? "生成中" : "生成正文"}</button><button onClick={props.exportWord} disabled={props.exportStatus === "导出中"}>{props.exportStatus === "导出中" ? <LoaderCircle className="spin-icon" size={17} /> : <Download size={17} />}{props.exportStatus === "导出中" ? "导出中" : "导出 Word"}</button></div>
       </header>
       <div className="editor-layout">
