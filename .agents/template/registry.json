@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "domain": "ai-word-template-library",
+  "agents": [
+    {
+      "code": "template_planner_agent",
+      "name": "模板策划 Agent",
+      "file": ".agents/template/template_planner_agent.md",
+      "network": "allowed",
+      "browser": "optional",
+      "handoffTo": ["template_content_agent", "template_visual_asset_agent"]
+    },
+    {
+      "code": "template_content_agent",
+      "name": "模板内容 Agent",
+      "file": ".agents/template/template_content_agent.md",
+      "network": "optional",
+      "browser": "false",
+      "handoffTo": ["template_visual_asset_agent", "template_word_style_agent"]
+    },
+    {
+      "code": "template_visual_asset_agent",
+      "name": "模板贴图生成 Agent",
+      "file": ".agents/template/template_visual_asset_agent.md",
+      "network": "optional",
+      "browser": "false",
+      "handoffTo": ["template_word_style_agent", "template_publish_agent"]
+    },
+    {
+      "code": "template_word_style_agent",
+      "name": "模板 Word 样式 Agent",
+      "file": ".agents/template/template_word_style_agent.md",
+      "network": "false",
+      "browser": "false",
+      "handoffTo": ["template_publish_agent"]
+    },
+    {
+      "code": "template_publish_agent",
+      "name": "模板入库 Agent",
+      "file": ".agents/template/template_publish_agent.md",
+      "network": "false",
+      "browser": "false",
+      "handoffTo": ["template_visual_qa_agent"]
+    },
+    {
+      "code": "template_visual_qa_agent",
+      "name": "模板视觉验收 Agent",
+      "file": ".agents/template/template_visual_qa_agent.md",
+      "network": "false",
+      "browser": "required",
+      "handoffTo": ["template_visual_asset_agent", "template_word_style_agent", "template_content_agent", "template_publish_agent"]
+    }
+  ]
+}

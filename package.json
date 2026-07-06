@@ -8,6 +8,7 @@
     "api": "node server/index.js",
     "build": "tsc -b && vite build",
     "db:seed:templates": "node database/seed-document-templates.mjs",
+    "template-agent": "node scripts/template-agent.mjs",
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {
