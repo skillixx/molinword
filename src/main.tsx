@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
-type DocumentType = "Work Summary" | "Meeting Minutes" | "Business Plan" | "Contract" | "Paper Material" | "Event Plan";
+type DocumentType = "工作总结" | "会议纪要" | "商业计划书" | "合同协议" | "论文材料" | "活动方案";
 type AiAction = "continue" | "expand" | "shorten" | "correct" | "polish";
 type AiApplyMode = "replace" | "insert";
 
@@ -76,25 +76,25 @@ type PointsSummary = {
   error?: string;
 };
 
-const documentTypes: DocumentType[] = ["Work Summary", "Meeting Minutes", "Business Plan", "Contract", "Paper Material", "Event Plan"];
+const documentTypes: DocumentType[] = ["工作总结", "会议纪要", "商业计划书", "合同协议", "论文材料", "活动方案"];
 
 const defaultOutline: OutlineItem[] = [
-  { id: 1, title: "1. Project background and goals" },
-  { id: 2, title: "2. Core feature plan" },
-  { id: 3, title: "3. User workflow" },
-  { id: 4, title: "4. Technical implementation" },
-  { id: 5, title: "5. Delivery roadmap" }
+  { id: 1, title: "一、项目背景与目标" },
+  { id: 2, title: "二、核心功能规划" },
+  { id: 3, title: "三、使用流程设计" },
+  { id: 4, title: "四、技术实现方案" },
+  { id: 5, title: "五、交付与迭代计划" }
 ];
 
-const defaultContent = `AI Word Assistant is a personal document writing tool. It helps users create outlines, draft body content, polish selected text, auto-save documents, and export Word files.
+const defaultContent = `AI Word 文档助手是一款面向个人用户的智能文档写作工具，可帮助用户生成大纲、撰写正文、润色选中文本、自动保存文档并导出 Word 文件。
 
-1. Project background and goals
+一、项目背景与目标
 
-The first version focuses on single-user daily use. Users can start from a topic, generate a clear outline, create body content, edit it online, and export the final document.
+第一版聚焦单人日常使用。用户可以从一个主题开始，快速生成清晰大纲，再生成正文内容，并在在线编辑器中继续修改和导出。
 
-2. Core feature plan
+二、核心功能规划
 
-The core features include AI outline generation, AI body generation, rich text editing, selected text polishing, auto-save, document management, and Word export.`;
+核心功能包括 AI 大纲生成、AI 正文生成、富文本编辑、选中文本润色、自动保存、文档管理和 Word 导出。`;
 
 function escapeHtml(text: string) {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -144,19 +144,19 @@ function apiDocumentToRecent(document: ApiDocument): RecentDocument {
 }
 
 function App() {
-  const [selectedType, setSelectedType] = React.useState<DocumentType>("Work Summary");
-  const [topic, setTopic] = React.useState("AI Word Assistant local development plan");
-  const [tone, setTone] = React.useState("formal");
+  const [selectedType, setSelectedType] = React.useState<DocumentType>("工作总结");
+  const [topic, setTopic] = React.useState("AI Word 文档助手本地开发方案");
+  const [tone, setTone] = React.useState("正式");
   const [outline, setOutline] = React.useState<OutlineItem[]>(defaultOutline);
   const [content, setContent] = React.useState(plainTextToHtml(defaultContent));
   const [currentDocumentId, setCurrentDocumentId] = React.useState<number | null>(null);
-  const [currentTitle, setCurrentTitle] = React.useState("AI Word Assistant local development plan");
+  const [currentTitle, setCurrentTitle] = React.useState("AI Word 文档助手本地开发方案");
   const [recentDocuments, setRecentDocuments] = React.useState<RecentDocument[]>([]);
   const [activePanel, setActivePanel] = React.useState<"workspace" | "editor">("workspace");
-  const [aiStatus, setAiStatus] = React.useState("Local fallback ready");
+  const [aiStatus, setAiStatus] = React.useState("本地兜底已就绪");
   const [aiLoading, setAiLoading] = React.useState<string | null>(null);
   const [aiError, setAiError] = React.useState("");
-  const [saveStatus, setSaveStatus] = React.useState("Not saved");
+  const [saveStatus, setSaveStatus] = React.useState("尚未保存");
   const [exportStatus, setExportStatus] = React.useState("");
   const [sessionUser, setSessionUser] = React.useState<SessionUser | null>(null);
   const [pointsSummary, setPointsSummary] = React.useState<PointsSummary | null>(null);
@@ -165,7 +165,7 @@ function App() {
   const loadSession = React.useCallback(async () => {
     const response = await fetch("/api/session");
     const result = await response.json();
-    if (!response.ok) throw new Error(result.message || "Read session failed");
+    if (!response.ok) throw new Error(result.message || "读取登录状态失败");
     setSessionUser(result.user);
     setPointsSummary(result.points);
   }, []);
@@ -177,7 +177,7 @@ function App() {
       const documents = (result.documents || []) as ApiDocument[];
       setRecentDocuments(documents.map(apiDocumentToRecent));
     } catch (error) {
-      setAiError(error instanceof Error ? error.message : "Read recent documents failed");
+      setAiError(error instanceof Error ? error.message : "读取最近文档失败");
     }
   }, []);
 
@@ -187,14 +187,14 @@ function App() {
         const url = new URL(window.location.href);
         if (url.pathname === "/molin/launch") {
           const ticket = url.searchParams.get("ticket");
-          setLaunchStatus("Connecting Moling...");
+          setLaunchStatus("正在连接墨灵平台...");
           const response = await fetch("/api/molin/launch", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ ticket })
           });
           const result = await response.json();
-          if (!response.ok) throw new Error(result.message || "Moling launch failed");
+          if (!response.ok) throw new Error(result.message || "墨灵平台进入应用失败");
           setSessionUser(result.user);
           setPointsSummary(result.points);
           window.history.replaceState({}, "", "/");
@@ -205,7 +205,7 @@ function App() {
         await loadRecentDocuments();
       } catch (error) {
         setLaunchStatus("");
-        setAiError(error instanceof Error ? error.message : "Session init failed");
+        setAiError(error instanceof Error ? error.message : "初始化登录状态失败");
       }
     };
     void run();
@@ -221,12 +221,12 @@ function App() {
         body: JSON.stringify(body)
       });
       const result = await response.json();
-      setAiStatus(result.fallback ? "Local fallback" : "Real AI");
+      setAiStatus(result.fallback ? "本地兜底" : "真实 AI");
       if (result.message) setAiError(result.message);
       await loadSession().catch(() => undefined);
       return result as T;
     } catch (error) {
-      setAiError(error instanceof Error ? error.message : "AI request failed");
+      setAiError(error instanceof Error ? error.message : "AI 请求失败");
       return null;
     } finally {
       setAiLoading(null);
@@ -241,16 +241,16 @@ function App() {
         body: JSON.stringify(payload)
       });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.message || "Create document failed");
+      if (!response.ok) throw new Error(result.message || "创建文档失败");
       return result.document as ApiDocument;
     } catch (error) {
-      setAiError(error instanceof Error ? error.message : "Create document failed");
+      setAiError(error instanceof Error ? error.message : "创建文档失败");
       return null;
     }
   };
 
   const generateOutline = async () => {
-    const result = await callAi<{ outline: string[]; fallback?: boolean; message?: string }>("Generating outline", "/api/ai/generate-outline", {
+    const result = await callAi<{ outline: string[]; fallback?: boolean; message?: string }>("正在生成大纲", "/api/ai/generate-outline", {
       topic,
       documentType: selectedType,
       tone,
@@ -259,7 +259,7 @@ function App() {
     if (!result?.outline?.length) return;
     setOutline(toOutlineItems(result.outline));
     const created = await createDocument({
-      title: topic || "Untitled document",
+      title: topic || "未命名文档",
       documentType: selectedType,
       tone,
       outline: result.outline,
@@ -269,7 +269,7 @@ function App() {
       setCurrentDocumentId(created.id);
       setCurrentTitle(created.title);
       setContent(created.content || plainTextToHtml(defaultContent));
-      setSaveStatus("Created");
+      setSaveStatus("已创建");
       await loadRecentDocuments();
     }
     setActivePanel("editor");
@@ -279,7 +279,7 @@ function App() {
     async (options: { content?: string; title?: string; saveVersion?: boolean; versionNote?: string } = {}) => {
       if (!currentDocumentId) return null;
       try {
-        setSaveStatus("Saving");
+        setSaveStatus("保存中");
         const response = await fetch(`/api/documents/${currentDocumentId}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -294,13 +294,13 @@ function App() {
           })
         });
         const result = await response.json();
-        if (!response.ok) throw new Error(result.message || "Save document failed");
-        setSaveStatus("Saved");
+        if (!response.ok) throw new Error(result.message || "保存文档失败");
+        setSaveStatus("已保存");
         await loadRecentDocuments();
         return result.document as ApiDocument;
       } catch (error) {
-        setSaveStatus("Save failed");
-        setAiError(error instanceof Error ? error.message : "Save document failed");
+        setSaveStatus("保存失败");
+        setAiError(error instanceof Error ? error.message : "保存文档失败");
         return null;
       }
     },
@@ -309,7 +309,7 @@ function App() {
 
   React.useEffect(() => {
     if (!currentDocumentId || activePanel !== "editor") return;
-    setSaveStatus("Waiting auto-save");
+    setSaveStatus("等待自动保存");
     const timer = window.setTimeout(() => {
       void saveDocument({ saveVersion: false });
     }, 1200);
@@ -317,7 +317,7 @@ function App() {
   }, [activePanel, content, currentDocumentId, outline, saveDocument]);
 
   const generateBody = async () => {
-    const result = await callAi<{ content: string; fallback?: boolean; message?: string }>("Generating body", "/api/ai/generate-body", {
+    const result = await callAi<{ content: string; fallback?: boolean; message?: string }>("正在生成正文", "/api/ai/generate-body", {
       topic,
       documentType: selectedType,
       tone,
@@ -327,17 +327,17 @@ function App() {
     if (result?.content) {
       const html = plainTextToHtml(result.content);
       setContent(html);
-      await saveDocument({ content: html, versionNote: "AI generated body" });
+      await saveDocument({ content: html, versionNote: "AI 生成正文" });
     }
   };
 
   const editContent = async (action: AiAction, source: string) => {
     const labelMap: Record<AiAction, string> = {
-      continue: "Continuing",
-      expand: "Expanding",
-      shorten: "Shortening",
-      correct: "Correcting",
-      polish: "Polishing"
+      continue: "正在续写",
+      expand: "正在扩写",
+      shorten: "正在缩写",
+      correct: "正在纠错",
+      polish: "正在润色"
     };
     const result = await callAi<{ content: string; fallback?: boolean; message?: string }>(labelMap[action], "/api/ai/edit", {
       action,
@@ -351,7 +351,7 @@ function App() {
     try {
       const response = await fetch(`/api/documents/${documentId}`);
       const result = await response.json();
-      if (!response.ok) throw new Error(result.message || "Read document failed");
+      if (!response.ok) throw new Error(result.message || "读取文档失败");
       const document = result.document as ApiDocument;
       setCurrentDocumentId(document.id);
       setCurrentTitle(document.title);
@@ -361,15 +361,15 @@ function App() {
       setOutline(toOutlineItems(document.outline || []));
       setContent(document.content || "<p></p>");
       setActivePanel("editor");
-      setSaveStatus("Opened");
+      setSaveStatus("已打开");
       await loadRecentDocuments();
     } catch (error) {
-      setAiError(error instanceof Error ? error.message : "Read document failed");
+      setAiError(error instanceof Error ? error.message : "读取文档失败");
     }
   };
 
   const renameDocument = async (documentId: number, currentName: string) => {
-    const nextName = window.prompt("New document name", currentName);
+    const nextName = window.prompt("请输入新的文档名称", currentName);
     if (!nextName?.trim()) return;
     const response = await fetch(`/api/documents/${documentId}`, {
       method: "PATCH",
@@ -378,7 +378,7 @@ function App() {
     });
     const result = await response.json();
     if (!response.ok) {
-      setAiError(result.message || "Rename failed");
+      setAiError(result.message || "重命名失败");
       return;
     }
     if (documentId === currentDocumentId) {
@@ -389,16 +389,16 @@ function App() {
   };
 
   const deleteDocument = async (documentId: number) => {
-    if (!window.confirm("Delete this document?")) return;
+    if (!window.confirm("确定删除这个文档吗？")) return;
     const response = await fetch(`/api/documents/${documentId}`, { method: "DELETE" });
     const result = await response.json();
     if (!response.ok) {
-      setAiError(result.message || "Delete failed");
+      setAiError(result.message || "删除失败");
       return;
     }
     if (result.deleted && documentId === currentDocumentId) {
       setCurrentDocumentId(null);
-      setCurrentTitle("AI Word Assistant local development plan");
+      setCurrentTitle("AI Word 文档助手本地开发方案");
       setContent(plainTextToHtml(defaultContent));
       setOutline(defaultOutline);
       setActivePanel("workspace");
@@ -410,7 +410,7 @@ function App() {
     const response = await fetch(`/api/documents/${documentId}/duplicate`, { method: "POST" });
     const result = await response.json();
     if (!response.ok) {
-      setAiError(result.message || "Duplicate failed");
+      setAiError(result.message || "复制失败");
       return;
     }
     await loadRecentDocuments();
@@ -419,30 +419,30 @@ function App() {
 
   const exportWord = async () => {
     if (!currentDocumentId) {
-      setAiError("Create or open a document first");
+      setAiError("请先创建或打开一个文档");
       return;
     }
     try {
-      setExportStatus("Exporting");
-      await saveDocument({ saveVersion: true, versionNote: "Before Word export" });
+      setExportStatus("导出中");
+      await saveDocument({ saveVersion: true, versionNote: "导出 Word 前保存" });
       const response = await fetch(`/api/documents/${currentDocumentId}/export-docx`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content })
       });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.message || "Export Word failed");
+      if (!response.ok) throw new Error(result.message || "导出 Word 失败");
       const anchor = document.createElement("a");
       anchor.href = result.file.downloadUrl;
       anchor.download = result.file.fileName;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
-      setExportStatus("Exported Word");
+      setExportStatus("已导出 Word");
       await loadSession().catch(() => undefined);
     } catch (error) {
-      setExportStatus("Export failed");
-      setAiError(error instanceof Error ? error.message : "Export Word failed");
+      setExportStatus("导出失败");
+      setAiError(error instanceof Error ? error.message : "导出 Word 失败");
     }
   };
 
@@ -451,17 +451,17 @@ function App() {
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark"><FileText size={22} /></div>
-          <div><strong>AI Word</strong><span>Local dev</span></div>
+          <div><strong>AI Word</strong><span>本地开发版</span></div>
         </div>
-        <nav className="side-nav" aria-label="Main navigation">
-          <button className={activePanel === "workspace" ? "active" : ""} onClick={() => setActivePanel("workspace")}><FolderOpen size={18} />Workspace</button>
-          <button className={activePanel === "editor" ? "active" : ""} onClick={() => setActivePanel("editor")}><PenLine size={18} />Editor</button>
-          <button><LayoutTemplate size={18} />Templates</button>
+        <nav className="side-nav" aria-label="主导航">
+          <button className={activePanel === "workspace" ? "active" : ""} onClick={() => setActivePanel("workspace")}><FolderOpen size={18} />工作台</button>
+          <button className={activePanel === "editor" ? "active" : ""} onClick={() => setActivePanel("editor")}><PenLine size={18} />文档编辑</button>
+          <button><LayoutTemplate size={18} />模板库</button>
         </nav>
         <div className="platform-box">
-          <span>Moling Platform</span>
-          <strong>{sessionUser?.isMolingUser ? `User ${sessionUser.userId}` : "Local dev user"}</strong>
-          <small>{launchStatus || (sessionUser?.isMolingUser ? `Product ${sessionUser.productId} · Points ${pointsSummary?.remaining ?? "unknown"}` : "Open from Moling to enable SSO and points billing")}</small>
+          <span>墨灵平台</span>
+          <strong>{sessionUser?.isMolingUser ? `用户 ${sessionUser.userId}` : "本地开发用户"}</strong>
+          <small>{launchStatus || (sessionUser?.isMolingUser ? `商品 ${sessionUser.productId} · 剩余积分 ${pointsSummary?.remaining ?? "未知"}` : "从墨灵平台进入后启用免登和积分计费")}</small>
         </div>
       </aside>
 
@@ -489,7 +489,7 @@ function App() {
           setOutline={setOutline}
           generateBody={generateBody}
           editContent={editContent}
-          saveDocument={() => saveDocument({ saveVersion: true, versionNote: "Manual save" })}
+          saveDocument={() => saveDocument({ saveVersion: true, versionNote: "手动保存" })}
           exportWord={exportWord}
           currentTitle={currentTitle}
           saveStatus={saveStatus}
@@ -521,28 +521,28 @@ function Workspace(props: {
   return (
     <section className="workspace">
       <header className="topbar">
-        <div><p>Personal document workspace</p><h1>AI Word Assistant</h1></div>
-        <button className="primary-action" onClick={props.generateOutline} disabled={Boolean(props.aiLoading)}><Sparkles size={18} />{props.aiLoading || "Generate outline"}</button>
+        <div><p>个人文档工作台</p><h1>AI Word 文档助手</h1></div>
+        <button className="primary-action" onClick={props.generateOutline} disabled={Boolean(props.aiLoading)}><Sparkles size={18} />{props.aiLoading || "生成大纲"}</button>
       </header>
       <div className="workspace-grid">
         <section className="creator-panel">
-          <div className="section-title"><Plus size={18} /><h2>New AI document</h2></div>
-          <label>Document topic<input value={props.topic} onChange={(event) => props.setTopic(event.target.value)} /></label>
+          <div className="section-title"><Plus size={18} /><h2>新建 AI 文档</h2></div>
+          <label>文档主题<input value={props.topic} onChange={(event) => props.setTopic(event.target.value)} /></label>
           <div className="field-row">
-            <label>Document type<select value={props.selectedType} onChange={(event) => props.setSelectedType(event.target.value as DocumentType)}>{documentTypes.map((item) => <option key={item}>{item}</option>)}</select></label>
-            <label>Tone<select value={props.tone} onChange={(event) => props.setTone(event.target.value)}><option>formal</option><option>business</option><option>academic</option><option>concise</option></select></label>
+            <label>文档类型<select value={props.selectedType} onChange={(event) => props.setSelectedType(event.target.value as DocumentType)}>{documentTypes.map((item) => <option key={item}>{item}</option>)}</select></label>
+            <label>写作语气<select value={props.tone} onChange={(event) => props.setTone(event.target.value)}><option>正式</option><option>商务</option><option>学术</option><option>简洁</option></select></label>
           </div>
-          <label>Extra requirements<textarea defaultValue="Generate a clear outline first, then write body content by section." /></label>
-          <button className="wide-action" onClick={props.generateOutline} disabled={Boolean(props.aiLoading)}><Wand2 size={18} />{props.aiLoading || "Start"}</button>
+          <label>补充要求<textarea defaultValue="先生成清晰大纲，再按章节生成正文内容。" /></label>
+          <button className="wide-action" onClick={props.generateOutline} disabled={Boolean(props.aiLoading)}><Wand2 size={18} />{props.aiLoading || "开始生成"}</button>
         </section>
         <section className="recent-panel">
-          <div className="section-title spread"><div><FileText size={18} /><h2>Recent documents</h2></div><Search size={18} /></div>
+          <div className="section-title spread"><div><FileText size={18} /><h2>最近文档</h2></div><Search size={18} /></div>
           <div className="document-list">
-            {props.recentDocuments.length === 0 ? <div className="empty-state">No documents yet.</div> : null}
+            {props.recentDocuments.length === 0 ? <div className="empty-state">暂无文档，请先创建一份新文档。</div> : null}
             {props.recentDocuments.map((item) => (
               <div key={item.id} className="document-row">
-                <button className="document-open" onClick={() => props.openDocument(item.id)}><div><strong>{item.title}</strong><span>{item.type} · {item.words} chars · {item.updatedAt}</span></div><ChevronRight size={18} /></button>
-                <div className="document-actions"><button onClick={() => props.renameDocument(item.id, item.title)}>Rename</button><button onClick={() => props.duplicateDocument(item.id)}>Duplicate</button><button onClick={() => props.deleteDocument(item.id)}>Delete</button></div>
+                <button className="document-open" onClick={() => props.openDocument(item.id)}><div><strong>{item.title}</strong><span>{item.type} · {item.words} 字 · {item.updatedAt}</span></div><ChevronRight size={18} /></button>
+                <div className="document-actions"><button onClick={() => props.renameDocument(item.id, item.title)}>重命名</button><button onClick={() => props.duplicateDocument(item.id)}>复制</button><button onClick={() => props.deleteDocument(item.id)}>删除</button></div>
               </div>
             ))}
           </div>
@@ -569,7 +569,7 @@ function Editor(props: {
   aiError: string;
 }) {
   const [aiResult, setAiResult] = React.useState<AiEditResult | null>(null);
-  const [selectionHint, setSelectionHint] = React.useState("Select text before using local AI actions.");
+  const [selectionHint, setSelectionHint] = React.useState("请先选中文本，再使用局部 AI 操作。");
 
   const updateOutlineFromEditor = React.useCallback((editor: TiptapEditor) => {
     const nextOutline: OutlineItem[] = [];
@@ -590,7 +590,7 @@ function Editor(props: {
     onUpdate({ editor }) { props.setContent(editor.getHTML()); updateOutlineFromEditor(editor); },
     onSelectionUpdate({ editor }) {
       const selectedText = getSelectedText(editor);
-      setSelectionHint(selectedText ? `Selected ${selectedText.length} chars` : "Select text before using local AI actions.");
+      setSelectionHint(selectedText ? `已选中 ${selectedText.length} 个字符` : "请先选中文本，再使用局部 AI 操作。");
     }
   });
 
@@ -604,7 +604,7 @@ function Editor(props: {
     const selectedText = getSelectedText(editor);
     const selection = editor?.state.selection;
     if (!editor || !selectedText || !selection) {
-      setSelectionHint("No text selected.");
+      setSelectionHint("当前没有选中文本。");
       return;
     }
     const result = await props.editContent(action, selectedText);
@@ -630,13 +630,13 @@ function Editor(props: {
   return (
     <section className="editor-page">
       <header className="editor-toolbar">
-        <div><p>Editing</p><h1>{props.currentTitle}</h1><span className="save-status">{props.saveStatus}</span>{props.exportStatus ? <span className="export-status">{props.exportStatus}</span> : null}</div>
-        <div className="toolbar-actions"><button onClick={props.saveDocument}><Save size={17} />Save</button><button onClick={props.generateBody} disabled={Boolean(props.aiLoading)}><Sparkles size={17} />{props.aiLoading === "Generating body" ? "Generating" : "Generate body"}</button><button onClick={props.exportWord} disabled={props.exportStatus === "Exporting"}><Download size={17} />{props.exportStatus === "Exporting" ? "Exporting" : "Export Word"}</button></div>
+        <div><p>正在编辑</p><h1>{props.currentTitle}</h1><span className="save-status">{props.saveStatus}</span>{props.exportStatus ? <span className="export-status">{props.exportStatus}</span> : null}</div>
+        <div className="toolbar-actions"><button onClick={props.saveDocument}><Save size={17} />保存</button><button onClick={props.generateBody} disabled={Boolean(props.aiLoading)}><Sparkles size={17} />{props.aiLoading === "正在生成正文" ? "生成中" : "生成正文"}</button><button onClick={props.exportWord} disabled={props.exportStatus === "导出中"}><Download size={17} />{props.exportStatus === "导出中" ? "导出中" : "导出 Word"}</button></div>
       </header>
       <div className="editor-layout">
-        <aside className="outline-panel"><div className="section-title"><ListTree size={18} /><h2>Outline</h2></div>{props.outline.map((item) => <button key={item.id} className={item.level === 3 ? "outline-child" : ""} onMouseDown={(event) => event.preventDefault()} onClick={() => jumpToOutline(item)}>{item.title}</button>)}</aside>
-        <section className="paper-panel"><div className="format-bar"><button className={editor?.isActive("paragraph") ? "active-format" : ""} onClick={() => editor?.chain().focus().setParagraph().run()}><AlignLeft size={16} />Body</button><button className={editor?.isActive("heading", { level: 2 }) ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}>Title</button><button className={editor?.isActive("bold") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleBold().run()}><Bold size={16} />Bold</button><button className={editor?.isActive("bulletList") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleBulletList().run()}><List size={16} />List</button><button className={editor?.isActive("orderedList") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleOrderedList().run()}><ListOrdered size={16} />Numbered</button></div><EditorContent editor={editor} /></section>
-        <aside className="ai-panel"><div className="section-title"><Bot size={18} /><h2>AI Assistant</h2></div><div className="selection-hint">{selectionHint}</div><button onClick={() => runSelectionAi("polish")} disabled={Boolean(props.aiLoading)}><Sparkles size={17} />Polish selected text</button><button onClick={() => runSelectionAi("continue")} disabled={Boolean(props.aiLoading)}><Wand2 size={17} />Continue selected text</button><button onClick={() => runSelectionAi("expand")} disabled={Boolean(props.aiLoading)}><AlignLeft size={17} />Expand selected text</button><button onClick={() => runSelectionAi("shorten")} disabled={Boolean(props.aiLoading)}><AlignLeft size={17} />Shorten selected text</button><button onClick={() => runSelectionAi("correct")} disabled={Boolean(props.aiLoading)}><CheckCircle2 size={17} />Correct selected text</button><button onClick={props.generateBody} disabled={Boolean(props.aiLoading)}><ListTree size={17} />Generate body from outline</button>{props.aiLoading ? <div className="ai-message loading">{props.aiLoading}...</div> : null}{props.aiError ? <div className="ai-message error"><XCircle size={16} /><span>{props.aiError}</span></div> : null}{aiResult ? <div className="ai-result"><strong>AI result</strong><p>{aiResult.content}</p><div className="ai-result-actions"><button onClick={() => applyAiResult("replace")}>Replace</button><button onClick={() => applyAiResult("insert")}>Insert below</button><button onClick={copyAiResult}>Copy</button></div></div> : null}<div className="assistant-note"><strong>{props.aiStatus}</strong><span>AI keys stay on the server. Moling points are charged only after successful actions.</span></div></aside>
+        <aside className="outline-panel"><div className="section-title"><ListTree size={18} /><h2>文档大纲</h2></div>{props.outline.map((item) => <button key={item.id} className={item.level === 3 ? "outline-child" : ""} onMouseDown={(event) => event.preventDefault()} onClick={() => jumpToOutline(item)}>{item.title}</button>)}</aside>
+        <section className="paper-panel"><div className="format-bar"><button className={editor?.isActive("paragraph") ? "active-format" : ""} onClick={() => editor?.chain().focus().setParagraph().run()}><AlignLeft size={16} />正文</button><button className={editor?.isActive("heading", { level: 2 }) ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}>标题</button><button className={editor?.isActive("bold") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleBold().run()}><Bold size={16} />加粗</button><button className={editor?.isActive("bulletList") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleBulletList().run()}><List size={16} />列表</button><button className={editor?.isActive("orderedList") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleOrderedList().run()}><ListOrdered size={16} />编号</button></div><EditorContent editor={editor} /></section>
+        <aside className="ai-panel"><div className="section-title"><Bot size={18} /><h2>AI 助手</h2></div><div className="selection-hint">{selectionHint}</div><button onClick={() => runSelectionAi("polish")} disabled={Boolean(props.aiLoading)}><Sparkles size={17} />润色选中文本</button><button onClick={() => runSelectionAi("continue")} disabled={Boolean(props.aiLoading)}><Wand2 size={17} />续写选中文本</button><button onClick={() => runSelectionAi("expand")} disabled={Boolean(props.aiLoading)}><AlignLeft size={17} />扩写选中文本</button><button onClick={() => runSelectionAi("shorten")} disabled={Boolean(props.aiLoading)}><AlignLeft size={17} />缩写选中文本</button><button onClick={() => runSelectionAi("correct")} disabled={Boolean(props.aiLoading)}><CheckCircle2 size={17} />纠错选中文本</button><button onClick={props.generateBody} disabled={Boolean(props.aiLoading)}><ListTree size={17} />根据大纲生成正文</button>{props.aiLoading ? <div className="ai-message loading">{props.aiLoading}...</div> : null}{props.aiError ? <div className="ai-message error"><XCircle size={16} /><span>{props.aiError}</span></div> : null}{aiResult ? <div className="ai-result"><strong>AI 处理结果</strong><p>{aiResult.content}</p><div className="ai-result-actions"><button onClick={() => applyAiResult("replace")}>替换原文</button><button onClick={() => applyAiResult("insert")}>插入下方</button><button onClick={copyAiResult}>复制结果</button></div></div> : null}<div className="assistant-note"><strong>{props.aiStatus}</strong><span>AI 密钥仅保存在服务端；墨灵积分只会在动作成功后扣减。</span></div></aside>
       </div>
     </section>
   );
