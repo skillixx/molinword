@@ -778,4 +778,5 @@ function Editor(props: {
   );
 }
 
-createRoot(document.getElementById("root")!).render(<React.StrictMode><App /></React.StrictMode>);
+// 中文注解：墨灵 launch ticket 是一次性票据；开发态 StrictMode 会重复执行初始化逻辑，容易二次消费同一张票据。
+createRoot(document.getElementById("root")!).render(<App />);
