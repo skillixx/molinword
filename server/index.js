@@ -33,6 +33,36 @@ const dbPool = process.env.DATABASE_URL
   : null;
 const minioClient = createMinioClient();
 
+const usageCosts = {
+  word_outline_generate: 1,
+  word_body_generate: 5,
+  word_polish: 2,
+  word_export_docx: 1
+};
+
+const publicErrorPatterns = [
+  { pattern: /Missing Moling launch ticket|launch ticket/i, message: "请从墨灵平台重新进入应用。" },
+  { pattern: /ticket app mismatch|ticket product mismatch/i, message: "墨灵入口信息与当前应用不匹配，请检查平台应用配置。" },
+  { pattern: /insufficient|no usable plan|60005|quota|余额不足/i, message: "积分不足，请购买套餐后继续使用。" },
+  { pattern: /DATABASE_URL|ECONNREFUSED|ER_ACCESS_DENIED|ER_BAD_DB_ERROR|mysql/i, message: "文档服务暂时不可用，请稍后重试。" },
+  { pattern: /MinIO|S3|bucket|STORAGE_|getObject|putObject/i, message: "文件导出服务暂时不可用，请稍后重试。" },
+  { pattern: /INTERNAL_API_TOKEN|Moling internal API|app-launch|user-entitlements/i, message: "墨灵平台连接暂时不可用，请稍后重试。" },
+  { pattern: /LLM|AI request|chat\/completions|API key|401|403|429|timeout|aborted|fetch/i, message: "AI 服务暂时不可用，请稍后重试。" },
+  { pattern: /Document not found|File not found/i, message: "资源不存在或已被删除。" }
+];
+
+function toPublicErrorMessage(error, fallback = "操作失败，请稍后重试。") {
+  const rawMessage = error instanceof Error ? error.message : String(error || "");
+  const matched = publicErrorPatterns.find((item) => item.pattern.test(rawMessage));
+  return matched?.message || fallback;
+}
+
+function sendError(response, error, status = 500, fallback) {
+  // 中文注解：接口只返回用户能理解的中文提示，真实错误保留在服务端日志里用于排查。
+  console.error(error);
+  response.status(status).json({ message: toPublicErrorMessage(error, fallback) });
+}
+
 function createMinioClient() {
   if (!process.env.STORAGE_ENDPOINT || !process.env.STORAGE_ACCESS_KEY_ID || !process.env.STORAGE_SECRET_ACCESS_KEY) {
     return null;
@@ -161,7 +191,7 @@ function extractDocxParagraphsFromHtml(html = "") {
 
   return paragraphs.length
     ? paragraphs
-    : [new Paragraph({ text: stripHtml(html) || "绌虹櫧鏂囨。", spacing: { after: 120 } })];
+    : [new Paragraph({ text: stripHtml(html) || "空白文档", spacing: { after: 120 } })];
 }
 
 async function createDocxBuffer({ title, content }) {
@@ -186,7 +216,7 @@ async function createDocxBuffer({ title, content }) {
 
 async function ensureStorage() {
   if (!minioClient) {
-    throw new Error("鏈厤缃?MinIO 瀛樺偍鐜鍙橀噺");
+    throw new Error("未配置 MinIO 存储环境变量");
   }
 
   const exists = await minioClient.bucketExists(storageBucket);
@@ -216,12 +246,12 @@ function toDocument(row) {
 
 async function ensureDb() {
   if (!dbPool) {
-    throw new Error("鏈厤缃?DATABASE_URL");
+    throw new Error("未配置 DATABASE_URL");
   }
   return dbPool;
 }
 
-async function createDocumentVersion(connection, documentId, outline, content, versionNote = "鎵嬪姩淇濆瓨") {
+async function createDocumentVersion(connection, documentId, outline, content, versionNote = "手动保存") {
   const [[versionRow]] = await connection.query(
     "SELECT COALESCE(MAX(version_no), 0) + 1 AS next_version FROM document_versions WHERE document_id = ?",
     [documentId]
@@ -348,7 +378,7 @@ function clearSessionCookie(response) {
 function unwrapMolingData(result) {
   if (result && typeof result === "object" && "code" in result) {
     if (result.code !== 0) {
-      const error = new Error(result.message || "Moling API failed");
+      const error = new Error(result.message || "墨灵平台接口调用失败");
       error.code = result.code;
       throw error;
     }
@@ -361,7 +391,7 @@ function unwrapMolingData(result) {
 
 async function callMolingInternal(path, options = {}) {
   if (!internalApiToken) {
-    throw new Error("Missing INTERNAL_API_TOKEN for Moling internal API");
+    throw new Error("未配置 INTERNAL_API_TOKEN");
   }
 
   const url = new URL(path, molingApiBaseUrl);
@@ -377,7 +407,7 @@ async function callMolingInternal(path, options = {}) {
   const result = await response.json().catch(() => null);
 
   if (!response.ok) {
-    const message = result?.message || result?.error || `Moling internal API failed: ${response.status}`;
+    const message = result?.message || result?.error || `墨灵平台接口调用失败：${response.status}`;
     const error = new Error(message);
     error.status = response.status;
     error.code = result?.code;
@@ -501,7 +531,7 @@ async function findUsableEntitlement(userId, productId) {
   const entitlement = entitlements.find((item) => item.usable);
 
   if (!entitlement) {
-    const error = new Error("Moling points are insufficient or no usable plan was purchased");
+    const error = new Error("积分不足或没有可用套餐");
     error.code = 60005;
     throw error;
   }
@@ -561,10 +591,10 @@ function parseOutline(text, topic) {
     return fromJson.slice(0, 8);
   }
 
-  // Note: split numbered plain text when the model does not return JSON.
+  // 中文注解：模型没有按 JSON 返回时，尝试从普通编号文本中提取大纲。
   const lines = text
     .split(/\r?\n/)
-    .map((line) => line.replace(/^[-*\d.銆乗s]+/, "").trim())
+    .map((line) => line.replace(/^[-*\d.、\s]+/, "").trim())
     .filter(Boolean)
     .filter((line) => line.length <= 80);
 
@@ -617,7 +647,7 @@ function validateAiText(text, options = {}) {
 
 async function callMolinChat(messages) {
   if (!hasGatewayConfig()) {
-    throw new Error("鏈厤缃ⅷ鐏?Token 缃戝叧鐜鍙橀噺");
+    throw new Error("未配置 AI 模型服务环境变量");
   }
 
   let lastError;
@@ -627,7 +657,7 @@ async function callMolinChat(messages) {
     const timeout = setTimeout(() => controller.abort(), llmTimeoutMs);
 
     try {
-      // Note: compatible with OpenAI chat/completions style gateways.
+      // 中文注解：这里兼容 OpenAI chat/completions 风格的 DeepSeek 或墨灵网关。
       const response = await fetch(llmApiUrl, {
         method: "POST",
         headers: {
@@ -646,13 +676,13 @@ async function callMolinChat(messages) {
       const result = await response.json().catch(() => null);
 
       if (!response.ok) {
-        const message = result?.message || result?.error?.message || "LLM gateway request failed";
+        const message = result?.message || result?.error?.message || "AI 网关请求失败";
         throw new Error(message);
       }
 
       const text = normalizeModelText(result);
       if (!text) {
-        throw new Error("妯″瀷杩斿洖鍐呭涓虹┖");
+        throw new Error("模型返回内容为空");
       }
 
       return text;
@@ -662,7 +692,7 @@ async function callMolinChat(messages) {
     }
   }
 
-  throw lastError instanceof Error ? lastError : new Error("AI 璇锋眰澶辫触");
+  throw lastError instanceof Error ? lastError : new Error("AI 请求失败");
 }
 
 function fallbackOutline(topic) {
@@ -693,7 +723,7 @@ app.post("/api/molin/launch", async (request, response) => {
   const { ticket } = request.body || {};
 
   if (!ticket && !localMolingMock) {
-    response.status(400).json({ message: "Missing Moling launch ticket" });
+    response.status(400).json({ message: "请从墨灵平台重新进入应用。" });
     return;
   }
 
@@ -706,12 +736,12 @@ app.post("/api/molin/launch", async (request, response) => {
     const productId = normalizeMolingId(launchData.product_id || molingProductId);
 
     if (molingAppId && appId && appId !== normalizeMolingId(molingAppId)) {
-      response.status(403).json({ message: "Moling ticket app mismatch" });
+      response.status(403).json({ message: "墨灵入口信息与当前应用不匹配，请检查应用 ID。" });
       return;
     }
 
     if (molingProductId && productId && productId !== normalizeMolingId(molingProductId)) {
-      response.status(403).json({ message: "Moling ticket product mismatch" });
+      response.status(403).json({ message: "墨灵入口信息与当前商品不匹配，请检查商品 ID。" });
       return;
     }
 
@@ -719,20 +749,20 @@ app.post("/api/molin/launch", async (request, response) => {
     setSessionCookie(response, session.token);
 
     const user = { userId, appId, productId, isMolingUser: true, expiresAt: session.expiresAt };
-    const points = await getPointsSummary(user).catch((error) => ({ enabled: true, error: error.message, entitlements: [], remaining: null }));
+    const points = await getPointsSummary(user).catch((error) => ({ enabled: true, error: toPublicErrorMessage(error, "积分读取失败，请稍后刷新。"), entitlements: [], remaining: null }));
     response.json({ user: serializeUserContext(user), points });
   } catch (error) {
-    response.status(401).json({ message: error instanceof Error ? error.message : "Moling launch verification failed" });
+    sendError(response, error, 401, "墨灵登录校验失败，请从墨灵平台重新进入。");
   }
 });
 
 app.get("/api/session", async (request, response) => {
   try {
     const user = await getCurrentUser(request);
-    const points = await getPointsSummary(user).catch((error) => ({ enabled: user.isMolingUser, error: error.message, entitlements: [], remaining: null }));
+    const points = await getPointsSummary(user).catch((error) => ({ enabled: user.isMolingUser, error: toPublicErrorMessage(error, "积分读取失败，请稍后刷新。"), entitlements: [], remaining: null }));
     response.json({ user: serializeUserContext(user), points });
   } catch (error) {
-    response.status(500).json({ message: error instanceof Error ? error.message : "Read session failed" });
+    sendError(response, error, 500, "读取登录状态失败，请刷新页面重试。");
   }
 });
 
@@ -746,7 +776,7 @@ app.post("/api/logout", async (request, response) => {
     clearSessionCookie(response);
     response.json({ ok: true });
   } catch (error) {
-    response.status(500).json({ message: error instanceof Error ? error.message : "Logout failed" });
+    sendError(response, error, 500, "退出登录失败，请稍后重试。");
   }
 });
 
@@ -755,7 +785,7 @@ app.get("/api/billing/points", async (request, response) => {
     const user = await getCurrentUser(request);
     response.json({ points: await getPointsSummary(user) });
   } catch (error) {
-    response.status(500).json({ message: error instanceof Error ? error.message : "Read points failed" });
+    sendError(response, error, 500, "积分读取失败，请稍后刷新。");
   }
 });
 
@@ -775,7 +805,7 @@ app.get("/api/documents", async (request, response) => {
 
     response.json({ documents: rows.map(toDocument) });
   } catch (error) {
-    response.status(500).json({ message: error instanceof Error ? error.message : "Read documents failed" });
+    sendError(response, error, 500, "读取最近文档失败，请稍后重试。");
   }
 });
 
@@ -791,9 +821,9 @@ app.post("/api/documents", async (request, response) => {
        VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, NOW())`,
       [
         currentUser.userId,
-        title || "Untitled document",
-        documentType || "Word 鏂囨。",
-        tone || "姝ｅ紡",
+        title || "未命名文档",
+        documentType || "Word 文档",
+        tone || "正式",
         jsonString(outline || []),
         content || "",
         countWords(content || "")
@@ -804,7 +834,7 @@ app.post("/api/documents", async (request, response) => {
     const [[row]] = await pool.query("SELECT * FROM documents WHERE id = ? AND user_id = ?", [documentId, currentUser.userId]);
     response.status(201).json({ document: toDocument(row) });
   } catch (error) {
-    response.status(500).json({ message: error instanceof Error ? error.message : "Create document failed" });
+    sendError(response, error, 500, "创建文档失败，请稍后重试。");
   }
 });
 
@@ -818,14 +848,14 @@ app.get("/api/documents/:id", async (request, response) => {
     );
 
     if (!row) {
-      response.status(404).json({ message: "Document not found" });
+      response.status(404).json({ message: "文档不存在或已被删除。" });
       return;
     }
 
     await pool.query("UPDATE documents SET last_opened_at = NOW() WHERE id = ? AND user_id = ?", [request.params.id, currentUser.userId]);
     response.json({ document: toDocument(row) });
   } catch (error) {
-    response.status(500).json({ message: error instanceof Error ? error.message : "Read document failed" });
+    sendError(response, error, 500, "读取文档失败，请稍后重试。");
   }
 });
 
@@ -846,7 +876,7 @@ app.patch("/api/documents/:id", async (request, response) => {
 
     if (!current) {
       await connection.rollback();
-      response.status(404).json({ message: "Document not found" });
+      response.status(404).json({ message: "文档不存在或已被删除。" });
       return;
     }
 
@@ -872,7 +902,7 @@ app.patch("/api/documents/:id", async (request, response) => {
     );
 
     if (saveVersion) {
-      await createDocumentVersion(connection, request.params.id, nextOutline, nextContent, versionNote || "manual save");
+      await createDocumentVersion(connection, request.params.id, nextOutline, nextContent, versionNote || "手动保存");
     }
 
     const [[row]] = await connection.query("SELECT * FROM documents WHERE id = ? AND user_id = ?", [request.params.id, currentUser.userId]);
@@ -880,7 +910,7 @@ app.patch("/api/documents/:id", async (request, response) => {
     response.json({ document: toDocument(row) });
   } catch (error) {
     if (connection) await connection.rollback();
-    response.status(500).json({ message: error instanceof Error ? error.message : "Save document failed" });
+    sendError(response, error, 500, "保存文档失败，请稍后重试。");
   } finally {
     if (connection) connection.release();
   }
@@ -897,7 +927,7 @@ app.delete("/api/documents/:id", async (request, response) => {
 
     response.json({ deleted: result.affectedRows > 0 });
   } catch (error) {
-    response.status(500).json({ message: error instanceof Error ? error.message : "Delete document failed" });
+    sendError(response, error, 500, "删除文档失败，请稍后重试。");
   }
 });
 
@@ -911,7 +941,7 @@ app.post("/api/documents/:id/duplicate", async (request, response) => {
     );
 
     if (!source) {
-      response.status(404).json({ message: "Document not found" });
+      response.status(404).json({ message: "文档不存在或已被删除。" });
       return;
     }
 
@@ -921,10 +951,10 @@ app.post("/api/documents/:id/duplicate", async (request, response) => {
        VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, NOW())`,
       [
         currentUser.userId,
-        `${source.title} 鍓湰`,
+        `${source.title} 副本`,
         source.document_type,
         source.tone,
-        // Note: MySQL JSON may already be parsed; serialize it again before inserting.
+        // 中文注解：MySQL JSON 可能已经被解析成对象，复制前统一重新序列化。
         jsonString(parseJson(source.outline_json, [])),
         source.content,
         source.word_count
@@ -934,7 +964,7 @@ app.post("/api/documents/:id/duplicate", async (request, response) => {
     const [[row]] = await pool.query("SELECT * FROM documents WHERE id = ? AND user_id = ?", [result.insertId, currentUser.userId]);
     response.status(201).json({ document: toDocument(row) });
   } catch (error) {
-    response.status(500).json({ message: error instanceof Error ? error.message : "Duplicate document failed" });
+    sendError(response, error, 500, "复制文档失败，请稍后重试。");
   }
 });
 
@@ -1002,7 +1032,7 @@ app.post("/api/documents/:id/export-docx", async (request, response) => {
     });
   } catch (error) {
     await releasePoints(pointHold).catch((releaseError) => console.warn("Moling point release failed:", releaseError.message));
-    response.status(500).json({ message: error instanceof Error ? error.message : "导出 Word 失败" });
+    sendError(response, error, 500, "导出 Word 失败，请稍后重试。");
   }
 });
 app.get("/api/files/:id/download", async (request, response) => {
@@ -1016,7 +1046,7 @@ app.get("/api/files/:id/download", async (request, response) => {
     );
 
     if (!fileRow) {
-      response.status(404).json({ message: "File not found" });
+      response.status(404).json({ message: "文件不存在或已被删除。" });
       return;
     }
 
@@ -1026,18 +1056,19 @@ app.get("/api/files/:id/download", async (request, response) => {
     response.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(fileRow.original_name)}`);
     objectStream.pipe(response);
   } catch (error) {
-    response.status(500).json({ message: error instanceof Error ? error.message : "Download file failed" });
+    sendError(response, error, 500, "下载文件失败，请稍后重试。");
   }
 });
 
 app.post("/api/ai/generate-outline", async (request, response) => {
-  const { topic, documentType, tone, documentId } = request.body;
+  const { topic, documentType, tone, requirement, documentId } = request.body;
   const startedAt = Date.now();
-  const currentUser = await getCurrentUser(request);
+  let currentUser = { userId: localUserId, appId: normalizeMolingId(molingAppId), productId: normalizeMolingId(molingProductId), isMolingUser: false };
   let pointHold = null;
-  const prompt = `Generate 5 first-level outline items for a ${documentType || "Word"} document. Topic: ${topic || "AI Word document"}. Tone: ${tone || "formal"}. Return only a JSON string array. Use Simplified Chinese.`;
+  const prompt = `Generate 5 first-level outline items for a ${documentType || "Word"} document. Topic: ${topic || "AI Word document"}. Tone: ${tone || "formal"}. Extra requirement: ${requirement || "none"}. Return only a JSON string array. Use Simplified Chinese.`;
 
   try {
+    currentUser = await getCurrentUser(request);
     pointHold = await reservePoints(currentUser, "word_outline_generate", 1, documentId || topic || "outline");
     const content = await callMolinChat([
       {
@@ -1067,26 +1098,27 @@ app.post("/api/ai/generate-outline", async (request, response) => {
       prompt,
       responseText: "",
       status: "failed",
-      errorMessage: error instanceof Error ? error.message : "outline generation failed",
+      errorMessage: error instanceof Error ? error.message : "大纲生成失败",
       latencyMs: Date.now() - startedAt
     });
     response.json({
       outline: fallbackOutline(topic || "AI Word document"),
       fallback: true,
-      message: error instanceof Error ? error.message : "Using local fallback outline"
+      message: toPublicErrorMessage(error, "AI 大纲生成失败，已使用本地兜底大纲。")
     });
   }
 });
 
 app.post("/api/ai/generate-body", async (request, response) => {
-  const { topic, documentType, tone, outline, documentId } = request.body;
+  const { topic, documentType, tone, requirement, outline, documentId } = request.body;
   const normalizedOutline = Array.isArray(outline) ? outline : [];
   const startedAt = Date.now();
-  const currentUser = await getCurrentUser(request);
+  let currentUser = { userId: localUserId, appId: normalizeMolingId(molingAppId), productId: normalizeMolingId(molingProductId), isMolingUser: false };
   let pointHold = null;
-  const prompt = `Write the main body for a ${documentType || "Word"} document in Simplified Chinese. Topic: ${topic || "AI Word document"}. Tone: ${tone || "formal"}. Outline:\n${normalizedOutline.map((item, index) => `${index + 1}. ${item}`).join("\n")}\nRequirement: each section should have 1-2 complete paragraphs, suitable for Word export.`;
+  const prompt = `Write the main body for a ${documentType || "Word"} document in Simplified Chinese. Topic: ${topic || "AI Word document"}. Tone: ${tone || "formal"}. Extra requirement: ${requirement || "none"}.\nOutline:\n${normalizedOutline.map((item, index) => `${index + 1}. ${item}`).join("\n")}\nRequirement: each section should have 1-2 complete paragraphs, suitable for Word export.`;
 
   try {
+    currentUser = await getCurrentUser(request);
     pointHold = await reservePoints(currentUser, "word_body_generate", 5, documentId || topic || "body");
     const content = await callMolinChat([
       {
@@ -1116,13 +1148,13 @@ app.post("/api/ai/generate-body", async (request, response) => {
       prompt,
       responseText: "",
       status: "failed",
-      errorMessage: error instanceof Error ? error.message : "body generation failed",
+      errorMessage: error instanceof Error ? error.message : "正文生成失败",
       latencyMs: Date.now() - startedAt
     });
     response.json({
-      content: `${topic || "AI Word document"}\n\n1. Project overview\n\nThe current AI service is unavailable. Please check the AI configuration and try again.`,
+      content: `${topic || "AI Word 文档"}\n\n1. 项目概述\n\n当前 AI 服务暂时不可用，请检查模型配置或稍后重试。你可以先基于已有大纲继续手动编辑文档。`,
       fallback: true,
-      message: error instanceof Error ? error.message : "Using local fallback body"
+      message: toPublicErrorMessage(error, "AI 正文生成失败，已使用本地兜底内容。")
     });
   }
 });
@@ -1131,7 +1163,7 @@ app.post("/api/ai/edit", async (request, response) => {
   const { action, content, documentId } = request.body;
   const sourceContent = typeof content === "string" ? content : "";
   const startedAt = Date.now();
-  const currentUser = await getCurrentUser(request);
+  let currentUser = { userId: localUserId, appId: normalizeMolingId(molingAppId), productId: normalizeMolingId(molingProductId), isMolingUser: false };
   let pointHold = null;
   const actionMap = {
     continue: "Continue writing based on the selected text.",
@@ -1144,6 +1176,7 @@ app.post("/api/ai/edit", async (request, response) => {
   const prompt = `${instruction}\nReturn only the revised Simplified Chinese text.\n\n<<<TEXT_START\n${sourceContent}\nTEXT_END>>>`;
 
   try {
+    currentUser = await getCurrentUser(request);
     pointHold = await reservePoints(currentUser, "word_polish", 2, documentId || action || "edit");
     const result = await callMolinChat([
       {
@@ -1173,13 +1206,13 @@ app.post("/api/ai/edit", async (request, response) => {
       prompt,
       responseText: "",
       status: "failed",
-      errorMessage: error instanceof Error ? error.message : "AI edit failed",
+      errorMessage: error instanceof Error ? error.message : "AI 编辑失败",
       latencyMs: Date.now() - startedAt
     });
     response.json({
       content: sourceContent,
       fallback: true,
-      message: error instanceof Error ? error.message : "AI edit failed"
+      message: toPublicErrorMessage(error, "AI 编辑失败，已保留原文。")
     });
   }
 });
@@ -1204,7 +1237,7 @@ app.post("/api/ai/polish", async (request, response) => {
     response.json({
       content: sourceContent,
       fallback: true,
-      message: error instanceof Error ? error.message : "Using local fallback polish"
+      message: toPublicErrorMessage(error, "AI 润色失败，已保留原文。")
     });
   }
 });
