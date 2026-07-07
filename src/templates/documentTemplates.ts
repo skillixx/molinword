@@ -40,6 +40,7 @@ export const documentTemplates: TemplateItem[] = [
   { name: "会议纪要", category: "办公通用", documentType: "会议纪要", topic: "项目推进会议纪要", requirement: "记录会议结论、待办事项、责任人和时间节点。", outline: ["一、会议基本信息", "二、讨论要点", "三、形成结论", "四、后续行动"], sortOrder: 25 },
   { name: "商业计划书", category: "商业经营", documentType: "商业计划书", topic: "AI Word 文档助手商业计划书", requirement: "覆盖市场机会、产品方案、商业模式、推广计划和风险控制。", outline: ["一、项目概述", "二、市场分析", "三、产品方案", "四、商业模式", "五、实施计划"], sortOrder: 30 },
   { name: "项目立项书", category: "商业经营", documentType: "商业计划书", topic: "项目立项申请书", requirement: "适合企业内部项目申请、项目评审和资源审批，突出项目背景、建设目标、可行性分析、预算资源、预期收益和风险评估。", outline: ["一、项目背景与立项必要性", "二、建设目标与范围", "三、需求分析与可行性论证", "四、实施方案与里程碑计划", "五、预算资源与组织保障", "六、预期收益与评估指标", "七、风险评估与应对措施"], sortOrder: 35 },
+  { name: "市场调研报告", category: "商业经营", documentType: "商业计划书", topic: "目标市场调研报告", requirement: "适合产品、运营、市场团队分析目标市场、用户需求和竞争格局，突出数据支撑、洞察结论和策略建议。", outline: ["一、调研背景与目标", "二、市场规模与发展趋势", "三、目标用户画像与需求分析", "四、竞争格局与竞品观察", "五、机会点与风险判断", "六、结论建议与行动计划"], sortOrder: 37 },
   { name: "活动方案", category: "市场活动", documentType: "活动方案", topic: "新品发布活动方案", requirement: "说明活动目标、流程安排、人员分工、预算和风险预案。", outline: ["一、活动目标", "二、活动流程", "三、资源与分工", "四、预算安排", "五、风险预案"], sortOrder: 40 },
   { name: "合同协议", category: "法务合同", documentType: "合同协议", topic: "服务合作协议", requirement: "梳理合作范围、双方责任、交付标准、费用与违约条款。", outline: ["一、合作背景", "二、服务内容", "三、双方权责", "四、费用结算", "五、违约与终止"], sortOrder: 50 },
   { name: "论文材料", category: "学术研究", documentType: "论文材料", topic: "智能写作工具应用研究", requirement: "强调研究背景、方法、分析过程、结论和参考方向。", outline: ["一、研究背景", "二、研究方法", "三、结果分析", "四、结论与展望"], sortOrder: 60 }

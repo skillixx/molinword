@@ -84,6 +84,16 @@ const templates = [
     sortOrder: 35
   },
   {
+    name: "市场调研报告",
+    category: "商业经营",
+    documentType: "商业计划书",
+    topic: "目标市场调研报告",
+    requirement: "适合产品、运营、市场团队分析目标市场、用户需求和竞争格局，突出数据支撑、洞察结论和策略建议。",
+    outline: ["一、调研背景与目标", "二、市场规模与发展趋势", "三、目标用户画像与需求分析", "四、竞争格局与竞品观察", "五、机会点与风险判断", "六、结论建议与行动计划"],
+    content: "",
+    sortOrder: 37
+  },
+  {
     name: "活动方案",
     category: "市场活动",
     documentType: "活动方案",
@@ -124,6 +134,7 @@ const coverPalettes = [
   { bg: "#f2f5fb", accent: "#3f5f9f", text: "#1f3158" },
   { bg: "#fff7ed", accent: "#c76a2b", text: "#623714" },
   { bg: "#f7f5ef", accent: "#8b6f2f", text: "#3f3518" },
+  { bg: "#f1f3ff", accent: "#4f5fb8", text: "#242b63" },
   { bg: "#f6f4ff", accent: "#6953b8", text: "#332563" },
   { bg: "#f4f7fb", accent: "#475569", text: "#17212b" },
   { bg: "#f7f8ef", accent: "#6b7a2f", text: "#39410f" }
@@ -138,6 +149,7 @@ const stylePresets = [
   { fontFamily: "Microsoft YaHei", titleColor: "3f5f9f", headingColor: "2f4778", accentColor: "91a7d8", titleSize: 36, headingSize: 28, bodySize: 22, lineSpacing: 360 },
   { fontFamily: "SimSun", titleColor: "9a4f18", headingColor: "7c3f12", accentColor: "e6b17f", titleSize: 38, headingSize: 29, bodySize: 22, lineSpacing: 380 },
   { fontFamily: "Microsoft YaHei", titleColor: "8b6f2f", headingColor: "6f5926", accentColor: "d6c389", titleSize: 36, headingSize: 28, bodySize: 22, lineSpacing: 360 },
+  { fontFamily: "Microsoft YaHei", titleColor: "4f5fb8", headingColor: "3c478f", accentColor: "a8b1f0", titleSize: 36, headingSize: 28, bodySize: 22, lineSpacing: 360 },
   { fontFamily: "Microsoft YaHei", titleColor: "5b45a4", headingColor: "463487", accentColor: "b8a9ef", titleSize: 36, headingSize: 28, bodySize: 22, lineSpacing: 360 },
   { fontFamily: "Microsoft YaHei", titleColor: "334155", headingColor: "475569", accentColor: "cbd5e1", titleSize: 34, headingSize: 27, bodySize: 22, lineSpacing: 360 },
   { fontFamily: "SimSun", titleColor: "5f6f24", headingColor: "4d5b1c", accentColor: "c5cd91", titleSize: 38, headingSize: 29, bodySize: 22, lineSpacing: 380 }
