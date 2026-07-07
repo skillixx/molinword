@@ -24,6 +24,16 @@ const templates = [
     sortOrder: 15
   },
   {
+    name: "项目周报",
+    category: "办公通用",
+    documentType: "工作总结",
+    topic: "项目周进展报告",
+    requirement: "面向管理层汇报项目进展、里程碑完成情况、风险阻塞、资源需求和下周计划，表达要专业稳重、重点清晰。",
+    outline: ["一、项目整体进展", "二、本周里程碑完成情况", "三、重点任务与交付成果", "四、风险问题与阻塞事项", "五、资源需求与协同事项", "六、下周工作计划"],
+    content: "",
+    sortOrder: 18
+  },
+  {
     name: "会议纪要",
     category: "办公通用",
     documentType: "会议纪要",
@@ -78,6 +88,7 @@ const templates = [
 const coverPalettes = [
   { bg: "#eef7f4", accent: "#2f6f63", text: "#173c35" },
   { bg: "#edf7fb", accent: "#1f7a8c", text: "#123844" },
+  { bg: "#eef3f8", accent: "#315a7c", text: "#183247" },
   { bg: "#f2f5fb", accent: "#3f5f9f", text: "#1f3158" },
   { bg: "#fff7ed", accent: "#c76a2b", text: "#623714" },
   { bg: "#f6f4ff", accent: "#6953b8", text: "#332563" },
@@ -88,6 +99,7 @@ const coverPalettes = [
 const stylePresets = [
   { fontFamily: "Microsoft YaHei", titleColor: "2f6f63", headingColor: "245f55", accentColor: "8dbdb2", titleSize: 36, headingSize: 28, bodySize: 22, lineSpacing: 360 },
   { fontFamily: "Microsoft YaHei", titleColor: "1f7a8c", headingColor: "155e75", accentColor: "8ecae6", titleSize: 36, headingSize: 28, bodySize: 22, lineSpacing: 360 },
+  { fontFamily: "Microsoft YaHei", titleColor: "315a7c", headingColor: "254864", accentColor: "9eb6cb", titleSize: 36, headingSize: 28, bodySize: 22, lineSpacing: 360 },
   { fontFamily: "Microsoft YaHei", titleColor: "3f5f9f", headingColor: "2f4778", accentColor: "91a7d8", titleSize: 36, headingSize: 28, bodySize: 22, lineSpacing: 360 },
   { fontFamily: "SimSun", titleColor: "9a4f18", headingColor: "7c3f12", accentColor: "e6b17f", titleSize: 38, headingSize: 29, bodySize: 22, lineSpacing: 380 },
   { fontFamily: "Microsoft YaHei", titleColor: "5b45a4", headingColor: "463487", accentColor: "b8a9ef", titleSize: 36, headingSize: 28, bodySize: 22, lineSpacing: 360 },
