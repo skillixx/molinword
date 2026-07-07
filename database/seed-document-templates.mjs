@@ -144,6 +144,16 @@ const templates = [
     sortOrder: 55
   },
   {
+    name: "开题报告",
+    category: "学术研究",
+    documentType: "论文材料",
+    topic: "论文课题开题报告",
+    requirement: "适合本科、硕士论文或课题研究前期立项说明，重点呈现研究背景与意义、国内外研究现状、研究内容与方法、创新点、进度安排和参考文献，表达学术严谨、结构完整。",
+    outline: ["一、选题背景与研究意义", "二、国内外研究现状", "三、研究目标、内容与关键问题", "四、研究方法、技术路线与可行性分析", "五、创新点、预期成果与进度安排", "六、参考文献与研究基础"],
+    content: "",
+    sortOrder: 58
+  },
+  {
     name: "论文材料",
     category: "学术研究",
     documentType: "论文材料",
@@ -170,6 +180,7 @@ const coverPalettes = [
   { bg: "#eef8fb", accent: "#2d7f9f", text: "#183f52" },
   { bg: "#f4f7fb", accent: "#475569", text: "#17212b" },
   { bg: "#eef2f7", accent: "#334e68", text: "#152536" },
+  { bg: "#eef6f7", accent: "#2f6f7e", text: "#143843" },
   { bg: "#f7f8ef", accent: "#6b7a2f", text: "#39410f" }
 ];
 
@@ -188,6 +199,7 @@ const stylePresets = [
   { fontFamily: "Microsoft YaHei", titleColor: "2d7f9f", headingColor: "24677f", accentColor: "9bcfe0", titleSize: 36, headingSize: 28, bodySize: 22, lineSpacing: 360 },
   { fontFamily: "Microsoft YaHei", titleColor: "334155", headingColor: "475569", accentColor: "cbd5e1", titleSize: 34, headingSize: 27, bodySize: 22, lineSpacing: 360 },
   { fontFamily: "SimSun", titleColor: "334e68", headingColor: "263d54", accentColor: "9fb3c8", titleSize: 36, headingSize: 28, bodySize: 22, lineSpacing: 380 },
+  { fontFamily: "SimSun", titleColor: "2f6f7e", headingColor: "245866", accentColor: "9bc8d1", titleSize: 38, headingSize: 29, bodySize: 22, lineSpacing: 400 },
   { fontFamily: "SimSun", titleColor: "5f6f24", headingColor: "4d5b1c", accentColor: "c5cd91", titleSize: 38, headingSize: 29, bodySize: 22, lineSpacing: 380 }
 ];
 
