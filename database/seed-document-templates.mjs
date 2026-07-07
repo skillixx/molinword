@@ -44,6 +44,16 @@ const templates = [
     sortOrder: 19
   },
   {
+    name: "工作计划",
+    category: "办公通用",
+    documentType: "工作总结",
+    topic: "月度工作计划",
+    requirement: "适合个人、团队或部门制定月度/季度计划，突出目标拆解、重点任务、时间安排、资源需求和执行跟踪。",
+    outline: ["一、计划周期与总体目标", "二、目标拆解与关键指标", "三、重点任务与执行安排", "四、时间节点与里程碑", "五、资源需求与协同事项", "六、风险预案与跟踪机制"],
+    content: "",
+    sortOrder: 20
+  },
+  {
     name: "会议纪要",
     category: "办公通用",
     documentType: "会议纪要",
@@ -51,7 +61,7 @@ const templates = [
     requirement: "记录会议结论、待办事项、责任人和时间节点。",
     outline: ["一、会议基本信息", "二、讨论要点", "三、形成结论", "四、后续行动"],
     content: "",
-    sortOrder: 20
+    sortOrder: 25
   },
   {
     name: "商业计划书",
@@ -100,6 +110,7 @@ const coverPalettes = [
   { bg: "#edf7fb", accent: "#1f7a8c", text: "#123844" },
   { bg: "#eef3f8", accent: "#315a7c", text: "#183247" },
   { bg: "#f8f1f4", accent: "#8a3f5f", text: "#3f1f2e" },
+  { bg: "#eef8f6", accent: "#258575", text: "#143d38" },
   { bg: "#f2f5fb", accent: "#3f5f9f", text: "#1f3158" },
   { bg: "#fff7ed", accent: "#c76a2b", text: "#623714" },
   { bg: "#f6f4ff", accent: "#6953b8", text: "#332563" },
@@ -112,6 +123,7 @@ const stylePresets = [
   { fontFamily: "Microsoft YaHei", titleColor: "1f7a8c", headingColor: "155e75", accentColor: "8ecae6", titleSize: 36, headingSize: 28, bodySize: 22, lineSpacing: 360 },
   { fontFamily: "Microsoft YaHei", titleColor: "315a7c", headingColor: "254864", accentColor: "9eb6cb", titleSize: 36, headingSize: 28, bodySize: 22, lineSpacing: 360 },
   { fontFamily: "Microsoft YaHei", titleColor: "8a3f5f", headingColor: "6f314d", accentColor: "d8a7bc", titleSize: 36, headingSize: 28, bodySize: 22, lineSpacing: 360 },
+  { fontFamily: "Microsoft YaHei", titleColor: "258575", headingColor: "1f6f62", accentColor: "9bd5cb", titleSize: 36, headingSize: 28, bodySize: 22, lineSpacing: 360 },
   { fontFamily: "Microsoft YaHei", titleColor: "3f5f9f", headingColor: "2f4778", accentColor: "91a7d8", titleSize: 36, headingSize: 28, bodySize: 22, lineSpacing: 360 },
   { fontFamily: "SimSun", titleColor: "9a4f18", headingColor: "7c3f12", accentColor: "e6b17f", titleSize: 38, headingSize: 29, bodySize: 22, lineSpacing: 380 },
   { fontFamily: "Microsoft YaHei", titleColor: "5b45a4", headingColor: "463487", accentColor: "b8a9ef", titleSize: 36, headingSize: 28, bodySize: 22, lineSpacing: 360 },
