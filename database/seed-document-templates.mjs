@@ -114,6 +114,16 @@ const templates = [
     sortOrder: 40
   },
   {
+    name: "培训方案",
+    category: "市场活动",
+    documentType: "活动方案",
+    topic: "企业内部培训方案",
+    requirement: "适合企业培训负责人制定内部培训计划，突出培训目标、对象需求、课程安排、讲师资源、实施计划和效果评估，表达专业清爽、有组织感。",
+    outline: ["一、培训背景与目标", "二、培训对象与需求分析", "三、培训内容与课程安排", "四、讲师资源与实施计划", "五、效果评估与跟进机制", "六、风险预案与保障措施"],
+    content: "",
+    sortOrder: 45
+  },
+  {
     name: "合同协议",
     category: "法务合同",
     documentType: "合同协议",
@@ -147,6 +157,7 @@ const coverPalettes = [
   { bg: "#f1f3ff", accent: "#4f5fb8", text: "#242b63" },
   { bg: "#eef6ff", accent: "#256a9b", text: "#163a54" },
   { bg: "#f6f4ff", accent: "#6953b8", text: "#332563" },
+  { bg: "#eef8fb", accent: "#2d7f9f", text: "#183f52" },
   { bg: "#f4f7fb", accent: "#475569", text: "#17212b" },
   { bg: "#f7f8ef", accent: "#6b7a2f", text: "#39410f" }
 ];
@@ -163,6 +174,7 @@ const stylePresets = [
   { fontFamily: "Microsoft YaHei", titleColor: "4f5fb8", headingColor: "3c478f", accentColor: "a8b1f0", titleSize: 36, headingSize: 28, bodySize: 22, lineSpacing: 360 },
   { fontFamily: "Microsoft YaHei", titleColor: "256a9b", headingColor: "1e567d", accentColor: "8ec5e6", titleSize: 36, headingSize: 28, bodySize: 22, lineSpacing: 360 },
   { fontFamily: "Microsoft YaHei", titleColor: "5b45a4", headingColor: "463487", accentColor: "b8a9ef", titleSize: 36, headingSize: 28, bodySize: 22, lineSpacing: 360 },
+  { fontFamily: "Microsoft YaHei", titleColor: "2d7f9f", headingColor: "24677f", accentColor: "9bcfe0", titleSize: 36, headingSize: 28, bodySize: 22, lineSpacing: 360 },
   { fontFamily: "Microsoft YaHei", titleColor: "334155", headingColor: "475569", accentColor: "cbd5e1", titleSize: 34, headingSize: 27, bodySize: 22, lineSpacing: 360 },
   { fontFamily: "SimSun", titleColor: "5f6f24", headingColor: "4d5b1c", accentColor: "c5cd91", titleSize: 38, headingSize: 29, bodySize: 22, lineSpacing: 380 }
 ];
