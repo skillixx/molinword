@@ -35,6 +35,7 @@ export const documentTemplates: TemplateItem[] = [
   { name: "工作总结", category: "办公通用", documentType: "工作总结", topic: "季度工作总结", requirement: "突出目标完成情况、关键成果、问题复盘和下阶段计划。", outline: ["一、整体工作回顾", "二、重点成果与数据", "三、问题与改进", "四、下阶段计划"], sortOrder: 10 },
   { name: "个人周报", category: "办公通用", documentType: "工作总结", topic: "个人周工作总结", requirement: "围绕本周目标、重点任务、量化成果、问题风险和下周计划进行简洁汇报，突出结果导向。", outline: ["一、本周工作概览", "二、重点任务完成情况", "三、关键数据与成果", "四、问题风险与改进", "五、下周工作计划"], sortOrder: 15 },
   { name: "项目周报", category: "办公通用", documentType: "工作总结", topic: "项目周进展报告", requirement: "面向管理层汇报项目进展、里程碑完成情况、风险阻塞、资源需求和下周计划，表达要专业稳重、重点清晰。", outline: ["一、项目整体进展", "二、本周里程碑完成情况", "三、重点任务与交付成果", "四、风险问题与阻塞事项", "五、资源需求与协同事项", "六、下周工作计划"], sortOrder: 18 },
+  { name: "述职报告", category: "办公通用", documentType: "工作总结", topic: "个人述职报告", requirement: "适用于转正、晋升、年度述职和阶段性汇报，突出岗位职责、关键成果、能力成长、问题复盘和后续规划，表达正式可信。", outline: ["一、岗位职责与述职周期", "二、阶段目标完成情况", "三、关键成果与业务贡献", "四、能力成长与经验沉淀", "五、问题不足与改进措施", "六、后续工作规划"], sortOrder: 19 },
   { name: "会议纪要", category: "办公通用", documentType: "会议纪要", topic: "项目推进会议纪要", requirement: "记录会议结论、待办事项、责任人和时间节点。", outline: ["一、会议基本信息", "二、讨论要点", "三、形成结论", "四、后续行动"], sortOrder: 20 },
   { name: "商业计划书", category: "商业经营", documentType: "商业计划书", topic: "AI Word 文档助手商业计划书", requirement: "覆盖市场机会、产品方案、商业模式、推广计划和风险控制。", outline: ["一、项目概述", "二、市场分析", "三、产品方案", "四、商业模式", "五、实施计划"], sortOrder: 30 },
   { name: "活动方案", category: "市场活动", documentType: "活动方案", topic: "新品发布活动方案", requirement: "说明活动目标、流程安排、人员分工、预算和风险预案。", outline: ["一、活动目标", "二、活动流程", "三、资源与分工", "四、预算安排", "五、风险预案"], sortOrder: 40 },
