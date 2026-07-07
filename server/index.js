@@ -144,6 +144,41 @@ function textRunsFromNode(node, marks = {}) {
   return (node.children || []).flatMap((child) => textRunsFromNode(child, nextMarks));
 }
 
+function parseStyleMap(style = "") {
+  return String(style)
+    .split(";")
+    .map((item) => item.split(":").map((part) => part.trim()))
+    .filter(([key, value]) => key && value)
+    .reduce((styles, [key, value]) => ({ ...styles, [key.toLowerCase()]: value }), {});
+}
+
+function parseFirstLineIndentLevel(node) {
+  const attrs = node.attribs || {};
+  const dataIndent = Number(attrs["data-indent"] || 0);
+  if (dataIndent > 0) return Math.min(dataIndent, 6);
+
+  const styles = parseStyleMap(attrs.style);
+  const cssLevel = Number(styles["--indent-level"] || 0);
+  if (cssLevel > 0) return Math.min(cssLevel, 6);
+
+  const textIndent = styles["text-indent"] || "";
+  const emMatch = textIndent.match(/([\d.]+)em/i);
+  if (emMatch) return Math.min(Math.round(Number(emMatch[1]) / 2), 6);
+
+  const pxMatch = textIndent.match(/([\d.]+)px/i);
+  if (pxMatch) return Math.min(Math.round(Number(pxMatch[1]) / 32), 6);
+
+  return 0;
+}
+
+function paragraphIndentFromNode(node) {
+  const level = parseFirstLineIndentLevel(node);
+  if (!level) return {};
+
+  // 中文注解：编辑器里 1 级首行缩进约等于 2 个中文字符，Word 使用 twip 单位表示。
+  return { indent: { firstLine: level * 440 } };
+}
+
 function paragraphFromNode(node) {
   const tagName = node.name;
   const text = collectText(node).replace(/\s+/g, " ").trim();
@@ -172,7 +207,8 @@ function paragraphFromNode(node) {
 
   return new Paragraph({
     children: textRunsFromNode(node),
-    spacing: { after: 120 }
+    spacing: { after: 120 },
+    ...paragraphIndentFromNode(node)
   });
 }
 
@@ -1425,6 +1461,7 @@ app.post("/api/ai/edit", async (request, response) => {
     expand: "Expand the selected text with more detail.",
     shorten: "Shorten the selected text while keeping key information.",
     correct: "Correct typos, grammar issues, and unnatural expressions.",
+    format: "Optimize the selected text as a professional Word document section. Keep the original meaning, improve paragraph hierarchy, normalize section titles, split long paragraphs, convert obvious enumerations into clear numbered or bullet-style lines, and make the structure easier to read.",
     polish: "Polish the selected text to be more formal, clear, and suitable for an office Word document."
   };
   const instruction = actionMap[action] || actionMap.polish;

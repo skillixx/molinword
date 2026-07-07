@@ -34,6 +34,11 @@ button:disabled {
   display: grid;
   min-height: 100vh;
   grid-template-columns: 248px 1fr;
+  transition: grid-template-columns 0.18s ease;
+}
+
+.app-shell.sidebar-collapsed {
+  grid-template-columns: 76px 1fr;
 }
 
 .global-loading,
@@ -87,12 +92,32 @@ button:disabled {
   padding: 24px 18px;
   background: #ffffff;
   border-right: 1px solid #dfe5eb;
+  min-width: 0;
+  transition: padding 0.18s ease;
+}
+
+.sidebar-collapsed .sidebar {
+  align-items: center;
+  gap: 18px;
+  padding: 22px 12px;
+}
+
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sidebar-collapsed .sidebar-head {
+  flex-direction: column;
 }
 
 .brand {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
 }
 
 .brand-mark {
@@ -110,6 +135,37 @@ button:disabled {
   display: block;
 }
 
+.brand-copy {
+  min-width: 0;
+}
+
+.sidebar-collapsed .brand-copy,
+.sidebar-collapsed .side-nav span,
+.sidebar-collapsed .platform-box {
+  display: none;
+}
+
+.collapse-button,
+.panel-collapse-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border: 1px solid #dfe5eb;
+  border-radius: 8px;
+  color: #53616d;
+  background: #ffffff;
+}
+
+.collapse-button:hover,
+.panel-collapse-button:hover {
+  color: #164f45;
+  border-color: #8dbdb2;
+  background: #e8f3f0;
+}
+
 .brand span,
 .topbar p,
 .editor-toolbar p {
@@ -121,6 +177,11 @@ button:disabled {
 .side-nav {
   display: grid;
   gap: 8px;
+  min-width: 0;
+}
+
+.sidebar-collapsed .side-nav {
+  width: 100%;
 }
 
 .side-nav button,
@@ -137,6 +198,11 @@ button:disabled {
   color: #24313d;
   background: transparent;
   padding: 0 12px;
+}
+
+.sidebar-collapsed .side-nav button {
+  justify-content: center;
+  padding: 0;
 }
 
 .side-nav button.active,
@@ -522,6 +588,11 @@ textarea {
   grid-template-columns: 260px minmax(420px, 1fr) 280px;
   gap: 16px;
   align-items: start;
+  transition: grid-template-columns 0.18s ease;
+}
+
+.editor-layout.outline-collapsed {
+  grid-template-columns: 52px minmax(520px, 1fr) 280px;
 }
 
 .editor-toolbar {
@@ -541,6 +612,27 @@ textarea {
 .outline-panel,
 .ai-panel {
   padding: 16px;
+}
+
+.outline-panel {
+  overflow: hidden;
+}
+
+.outline-collapsed .outline-panel {
+  padding: 12px 8px;
+}
+
+.outline-panel .section-title {
+  justify-content: space-between;
+}
+
+.outline-collapsed .outline-panel .section-title {
+  justify-content: center;
+}
+
+.outline-collapsed .outline-panel .section-title h2,
+.outline-collapsed .outline-content {
+  display: none;
 }
 
 .outline-panel button,
@@ -575,10 +667,17 @@ textarea {
 
 .format-bar {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 12px;
   border-bottom: 1px solid #dfe5eb;
   background: #f8fafb;
+}
+
+.format-divider {
+  width: 1px;
+  min-height: 34px;
+  background: #dfe5eb;
 }
 
 .format-bar button {
@@ -602,6 +701,10 @@ textarea {
   line-height: 1.9;
   outline: none;
   color: #17212b;
+}
+
+.word-editor p[data-indent] {
+  text-indent: calc(var(--indent-level, 0) * 2em);
 }
 
 .word-editor h1,
