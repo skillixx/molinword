@@ -134,6 +134,16 @@ const templates = [
     sortOrder: 50
   },
   {
+    name: "技术服务合同",
+    category: "法务合同",
+    documentType: "合同协议",
+    topic: "企业技术服务合作合同",
+    requirement: "适合软件开发、系统集成、技术外包和企业技术服务合作场景，重点明确服务范围、交付标准、验收方式、费用结算、知识产权、保密义务、违约责任和争议解决，表达正式规范、条款清晰。",
+    outline: ["一、合同主体与合作背景", "二、技术服务范围与交付内容", "三、项目周期、里程碑与验收标准", "四、费用结算与付款安排", "五、知识产权与保密条款", "六、违约责任、变更终止与争议解决"],
+    content: "",
+    sortOrder: 55
+  },
+  {
     name: "论文材料",
     category: "学术研究",
     documentType: "论文材料",
@@ -159,6 +169,7 @@ const coverPalettes = [
   { bg: "#f6f4ff", accent: "#6953b8", text: "#332563" },
   { bg: "#eef8fb", accent: "#2d7f9f", text: "#183f52" },
   { bg: "#f4f7fb", accent: "#475569", text: "#17212b" },
+  { bg: "#eef2f7", accent: "#334e68", text: "#152536" },
   { bg: "#f7f8ef", accent: "#6b7a2f", text: "#39410f" }
 ];
 
@@ -176,6 +187,7 @@ const stylePresets = [
   { fontFamily: "Microsoft YaHei", titleColor: "5b45a4", headingColor: "463487", accentColor: "b8a9ef", titleSize: 36, headingSize: 28, bodySize: 22, lineSpacing: 360 },
   { fontFamily: "Microsoft YaHei", titleColor: "2d7f9f", headingColor: "24677f", accentColor: "9bcfe0", titleSize: 36, headingSize: 28, bodySize: 22, lineSpacing: 360 },
   { fontFamily: "Microsoft YaHei", titleColor: "334155", headingColor: "475569", accentColor: "cbd5e1", titleSize: 34, headingSize: 27, bodySize: 22, lineSpacing: 360 },
+  { fontFamily: "SimSun", titleColor: "334e68", headingColor: "263d54", accentColor: "9fb3c8", titleSize: 36, headingSize: 28, bodySize: 22, lineSpacing: 380 },
   { fontFamily: "SimSun", titleColor: "5f6f24", headingColor: "4d5b1c", accentColor: "c5cd91", titleSize: 38, headingSize: 29, bodySize: 22, lineSpacing: 380 }
 ];
 
