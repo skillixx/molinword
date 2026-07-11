@@ -11,6 +11,8 @@ import mysql from "mysql2/promise";
 import sanitizeHtml from "sanitize-html";
 const require = createRequire(import.meta.url);
 const pdf = require("pdf-parse");
+const WordExtractor = require("word-extractor");
+const wordExtractor = new WordExtractor();
 
 const app = express();
 const port = Number(process.env.LOCAL_API_PORT || process.env.APP_PORT || process.env.PORT || 3001);
@@ -157,10 +159,39 @@ function extractImportedOutline(html = "") {
   return headings.slice(0, 30);
 }
 
+function extractPlainTextOutline(value = "") {
+  // 中文注解：旧版 DOC 没有可靠的 HTML 标题结构，按常见中文章节编号识别可用大纲。
+  return String(value)
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^(?:[一二三四五六七八九十]+[、.]|第[一二三四五六七八九十]+[章节]|\d+[、.])/.test(line))
+    .slice(0, 30);
+}
+
+function legacyDocTextToHtml(value = "") {
+  // 中文注解：Word 97-2003 提取结果以换行表达结构，将章节行恢复成标题，其余内容保留为独立段落。
+  return String(value)
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const tag = /^(?:[一二三四五六七八九十]+[、.]|第[一二三四五六七八九十]+[章节]|\d+[、.])/.test(line) ? "h2" : "p";
+      return `<${tag}>${escapeHtml(line)}</${tag}>`;
+    })
+    .join("") || "<p></p>";
+}
+
 async function parseImportedDocument(file) {
   const extension = file.originalname.toLowerCase().split(".").pop();
   if (extension === "doc") {
-    throw createPublicError("暂不支持旧版 .doc 文件，请先用 Word 另存为 .docx 后再导入。", 400);
+    const document = await wordExtractor.extract(file.buffer);
+    const text = document.getBody();
+    if (!text?.trim()) {
+      throw createPublicError("该 DOC 文件未识别到可编辑文字，文件可能为空、损坏或已加密。", 400);
+    }
+    return { content: legacyDocTextToHtml(text), outline: extractPlainTextOutline(text), documentType: "Word 文档" };
   }
   if (extension === "docx") {
     const result = await mammoth.convertToHtml({ buffer: file.buffer });

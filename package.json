@@ -29,7 +29,8 @@
     "react-dom": "^19.0.0",
     "sanitize-html": "^2.17.0",
     "typescript": "^5.8.0",
-    "vite": "^7.0.0"
+    "vite": "^7.0.0",
+    "word-extractor": "^1.0.4"
   },
   "devDependencies": {
     "@types/react": "^19.2.17",

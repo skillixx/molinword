@@ -862,14 +862,14 @@ function Workspace(props: {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                accept=".doc,.docx,.pdf,application/msword,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 onChange={(event) => {
                   const file = event.target.files?.[0];
                   if (file) props.importDocument(file);
                   event.target.value = "";
                 }}
               />
-              <button onClick={() => fileInputRef.current?.click()} disabled={props.documentImporting} title="导入 DOCX 或文字型 PDF（最大 15MB）">
+              <button onClick={() => fileInputRef.current?.click()} disabled={props.documentImporting} title="导入 DOC、DOCX 或文字型 PDF（最大 15MB）">
                 {props.documentImporting ? <LoaderCircle className="spin-icon" size={16} /> : <FileUp size={16} />}
                 {props.documentImporting ? "导入中" : "导入文档"}
               </button>
