@@ -329,6 +329,22 @@ h2 {
   justify-content: space-between;
 }
 
+.import-document input {
+  display: none;
+}
+
+.import-document button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  border: 1px solid #b8c8d2;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #275e55;
+  padding: 0 11px;
+}
+
 .search-box {
   position: relative;
   margin-bottom: 14px;
@@ -477,6 +493,24 @@ textarea {
   color: #8a6418;
 }
 
+.template-search-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.template-search-row .search-box {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.template-search-row span {
+  flex-shrink: 0;
+  color: #687684;
+  font-size: 13px;
+}
+
 .template-card {
   display: grid;
   gap: 12px;
@@ -567,6 +601,10 @@ textarea {
   border-radius: 8px;
   background: #ffffff;
   color: #245f55;
+}
+
+.template-grid > .empty-state {
+  grid-column: 1 / -1;
 }
 
 .save-status {

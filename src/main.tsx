@@ -15,6 +15,7 @@ import {
   Download,
   Eraser,
   FileText,
+  FileUp,
   FolderOpen,
   IndentDecrease,
   IndentIncrease,
@@ -331,6 +332,7 @@ function App() {
   const [launchStatus, setLaunchStatus] = React.useState("");
   const [appInitializing, setAppInitializing] = React.useState(true);
   const [documentsLoading, setDocumentsLoading] = React.useState(false);
+  const [documentImporting, setDocumentImporting] = React.useState(false);
   const [pointsRefreshing, setPointsRefreshing] = React.useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = React.useState(false);
   const [isOutlineCollapsed, setIsOutlineCollapsed] = React.useState(false);
@@ -583,8 +585,28 @@ function App() {
       setActivePanel("editor");
       setSaveStatus("已打开");
       await loadRecentDocuments();
+      return true;
     } catch (error) {
       setAiError(error instanceof Error ? error.message : "读取文档失败");
+      return false;
+    }
+  };
+
+  const importDocument = async (file: File) => {
+    setDocumentImporting(true);
+    setAiError("");
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await fetch("/api/documents/import", { method: "POST", body: formData });
+      const result = await readApiJson(response);
+      await loadRecentDocuments();
+      const opened = await openDocument((result.document as ApiDocument).id);
+      if (opened && !result.sourceStored) setAiError("文档已成功导入；原文件暂未归档到 MinIO，不影响编辑。");
+    } catch (error) {
+      setAiError(error instanceof Error ? error.message : "文档导入失败");
+    } finally {
+      setDocumentImporting(false);
     }
   };
 
@@ -729,6 +751,8 @@ function App() {
           deleteDocument={deleteDocument}
           duplicateDocument={duplicateDocument}
           documentsLoading={documentsLoading}
+          documentImporting={documentImporting}
+          importDocument={importDocument}
         />
       ) : activePanel === "templates" ? (
         <TemplateLibrary applyTemplate={applyTemplate} templates={templates} templatesLoading={templatesLoading} templatesError={templatesError} />
@@ -803,8 +827,11 @@ function Workspace(props: {
   deleteDocument: (documentId: number) => void;
   duplicateDocument: (documentId: number) => void;
   documentsLoading: boolean;
+  documentImporting: boolean;
+  importDocument: (file: File) => void;
 }) {
   const [keyword, setKeyword] = React.useState("");
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
   const filteredDocuments = props.recentDocuments.filter((item) => {
     const text = `${item.title} ${item.type}`.toLowerCase();
     return text.includes(keyword.trim().toLowerCase());
@@ -829,7 +856,26 @@ function Workspace(props: {
           <button className="wide-action" onClick={props.generateOutline} disabled={Boolean(props.aiLoading)}>{props.aiLoading ? <LoaderCircle className="spin-icon" size={18} /> : <Wand2 size={18} />}{props.aiLoading || "开始生成"}</button>
         </section>
         <section className="recent-panel">
-          <div className="section-title spread"><div><FileText size={18} /><h2>最近文档</h2></div></div>
+          <div className="section-title spread">
+            <div><FileText size={18} /><h2>最近文档</h2></div>
+            <div className="import-document">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) props.importDocument(file);
+                  event.target.value = "";
+                }}
+              />
+              <button onClick={() => fileInputRef.current?.click()} disabled={props.documentImporting} title="导入 DOCX 或文字型 PDF（最大 15MB）">
+                {props.documentImporting ? <LoaderCircle className="spin-icon" size={16} /> : <FileUp size={16} />}
+                {props.documentImporting ? "导入中" : "导入文档"}
+              </button>
+            </div>
+          </div>
+          {props.documentImporting ? <LoadingProcess label="正在导入文档" compact /> : null}
           <label className="search-box"><Search size={16} /><input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="搜索标题或类型" /></label>
           <div className="document-list">
             {props.documentsLoading ? <div className="empty-state">正在读取最近文档...</div> : null}
@@ -849,6 +895,25 @@ function Workspace(props: {
 }
 
 function TemplateLibrary(props: { applyTemplate: (template: TemplateItem) => void; templates: TemplateItem[]; templatesLoading: boolean; templatesError: string }) {
+  const [keyword, setKeyword] = React.useState("");
+  const normalizedKeyword = keyword.trim().toLowerCase();
+  const filteredTemplates = React.useMemo(() => {
+    if (!normalizedKeyword) return props.templates;
+
+    return props.templates.filter((template) => {
+      const searchableText = [
+        template.name,
+        template.category,
+        template.documentType,
+        template.topic,
+        template.requirement,
+        ...template.outline
+      ].join(" ").toLowerCase();
+
+      return searchableText.includes(normalizedKeyword);
+    });
+  }, [normalizedKeyword, props.templates]);
+
   return (
     <section className="workspace">
       <header className="topbar">
@@ -856,9 +921,14 @@ function TemplateLibrary(props: { applyTemplate: (template: TemplateItem) => voi
       </header>
       {props.templatesLoading ? <div className="template-status">正在读取模板...</div> : null}
       {props.templatesError ? <div className="template-status warning">{props.templatesError}</div> : null}
+      <div className="template-search-row">
+        <label className="search-box"><Search size={16} /><input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="搜索模板名称、类型、场景或大纲" /></label>
+        <span>{props.templatesLoading ? "读取中" : `共 ${filteredTemplates.length} / ${props.templates.length} 个模板`}</span>
+      </div>
       <div className="template-grid">
         {!props.templatesLoading && props.templates.length === 0 ? <div className="empty-state">暂无可用模板。</div> : null}
-        {props.templates.map((template) => (
+        {!props.templatesLoading && props.templates.length > 0 && filteredTemplates.length === 0 ? <div className="empty-state">没有匹配的模板。</div> : null}
+        {filteredTemplates.map((template) => (
           <article className="template-card" key={template.id ?? template.name}>
             <div className="template-cover">
               {template.coverUrl ? <img src={template.coverUrl} alt={`${template.name}封面`} /> : <div className="template-cover-fallback"><LayoutTemplate size={28} /></div>}

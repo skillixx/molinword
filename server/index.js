@@ -1,10 +1,16 @@
 ﻿import "dotenv/config";
 import crypto from "node:crypto";
+import { createRequire } from "node:module";
 import express from "express";
 import { Document, HeadingLevel, Packer, Paragraph, TextRun } from "docx";
 import { parseDocument } from "htmlparser2";
+import mammoth from "mammoth";
 import { Client as MinioClient } from "minio";
+import multer from "multer";
 import mysql from "mysql2/promise";
+import sanitizeHtml from "sanitize-html";
+const require = createRequire(import.meta.url);
+const pdf = require("pdf-parse");
 
 const app = express();
 const port = Number(process.env.LOCAL_API_PORT || process.env.APP_PORT || process.env.PORT || 3001);
@@ -12,6 +18,32 @@ const localUserId = process.env.LOCAL_USER_ID || "local-dev-user";
 const sessionCookieName = "moling_word_session";
 
 app.use(express.json({ limit: "1mb" }));
+
+const documentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024, files: 1 }
+});
+
+function receiveImportedDocument(request, response, next) {
+  documentUpload.single("file")(request, response, (error) => {
+    if (!error) return next();
+    if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {
+      response.status(400).json({ message: "文件不能超过 15MB。" });
+      return;
+    }
+    response.status(400).json({ message: "文件上传失败，请重新选择文档。" });
+  });
+}
+
+async function authenticateDocumentImport(request, response, next) {
+  try {
+    // 中文注解：先确认用户身份再接收文件，避免无效会话占用上传内存。
+    request.importUser = await getCurrentUser(request);
+    next();
+  } catch (error) {
+    sendError(response, error, error?.httpStatus || 401, "请重新进入应用后再导入文档。");
+  }
+}
 
 const molingApiBaseUrl = process.env.MOLING_API_BASE_URL || "http://8.130.9.163:8080";
 const gatewayBaseUrl = process.env.MOLIN_GATEWAY_BASE_URL || `${molingApiBaseUrl}/v1`;
@@ -88,6 +120,61 @@ function createMinioClient() {
 
 function jsonString(value) {
   return value == null ? null : JSON.stringify(value);
+}
+
+function escapeHtml(value = "") {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function importedTextToHtml(value = "") {
+  // 中文注解：PDF 通常只能提供文本流，这里按空行恢复段落，避免把整份文件塞进一个段落。
+  return String(value)
+    .replace(/\r\n?/g, "\n")
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.split("\n").map((line) => line.trim()).filter(Boolean).join(" "))
+    .filter(Boolean)
+    .map((paragraph) => `<p>${escapeHtml(paragraph)}</p>`)
+    .join("") || "<p></p>";
+}
+
+function sanitizeImportedHtml(value = "") {
+  // 中文注解：只保留 Tiptap 当前支持的正文标签，所有属性、链接、脚本和内嵌媒体都不进入编辑器。
+  return sanitizeHtml(String(value).replace(/<img\b[^>]*>/gi, "<p>[图片内容暂未导入]</p>"), {
+    allowedTags: ["h1", "h2", "h3", "p", "strong", "b", "em", "i", "u", "s", "ul", "ol", "li", "blockquote", "br"],
+    allowedAttributes: {}
+  });
+}
+
+function extractImportedOutline(html = "") {
+  const headings = [...String(html).matchAll(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/gi)]
+    .map((match) => match[1].replace(/<[^>]+>/g, "").trim())
+    .filter(Boolean);
+  return headings.slice(0, 30);
+}
+
+async function parseImportedDocument(file) {
+  const extension = file.originalname.toLowerCase().split(".").pop();
+  if (extension === "doc") {
+    throw createPublicError("暂不支持旧版 .doc 文件，请先用 Word 另存为 .docx 后再导入。", 400);
+  }
+  if (extension === "docx") {
+    const result = await mammoth.convertToHtml({ buffer: file.buffer });
+    const content = sanitizeImportedHtml(result.value);
+    return { content: content || "<p></p>", outline: extractImportedOutline(content), documentType: "Word 文档" };
+  }
+  if (extension === "pdf") {
+    const result = await pdf(file.buffer);
+    if (!result.text?.trim()) {
+      throw createPublicError("该 PDF 未识别到可编辑文字，扫描件需要接入 OCR 后才能导入。", 400);
+    }
+    return { content: importedTextToHtml(result.text), outline: [], documentType: "PDF 导入" };
+  }
+  throw createPublicError("仅支持导入 .docx 和文字型 .pdf 文件。", 400);
 }
 
 function parseJson(value, fallback = null) {
@@ -1098,6 +1185,55 @@ app.get("/api/documents", async (request, response) => {
     response.json({ documents: rows.map(toDocument) });
   } catch (error) {
     sendError(response, error, 500, "读取最近文档失败，请稍后重试。");
+  }
+});
+
+app.post("/api/documents/import", authenticateDocumentImport, receiveImportedDocument, async (request, response) => {
+  try {
+    if (!request.file) throw createPublicError("请选择需要导入的文档。", 400);
+
+    const pool = await ensureDb();
+    const currentUser = request.importUser;
+    const imported = await parseImportedDocument(request.file);
+    const title = request.file.originalname.replace(/\.(docx?|pdf)$/i, "").trim() || "导入文档";
+    const [result] = await pool.query(
+      `INSERT INTO documents
+        (user_id, title, document_type, tone, outline_json, content, status, word_count, last_opened_at)
+       VALUES (?, ?, ?, '正式', ?, ?, 'draft', ?, NOW())`,
+      [currentUser.userId, title, imported.documentType, jsonString(imported.outline), imported.content, countWords(imported.content)]
+    );
+
+    let sourceStored = false;
+    if (minioClient) {
+      try {
+        const extension = request.file.originalname.toLowerCase().split(".").pop();
+        const objectKey = `documents/${result.insertId}/sources/${crypto.randomUUID()}.${extension}`;
+        await minioClient.putObject(storageBucket, objectKey, request.file.buffer, request.file.size, {
+          "Content-Type": request.file.mimetype || "application/octet-stream"
+        });
+        try {
+          await pool.query(
+            `INSERT INTO files
+              (user_id, document_id, original_name, file_name, file_type, mime_type, file_size, bucket, object_key, purpose)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'upload')`,
+            [currentUser.userId, result.insertId, request.file.originalname, request.file.originalname, extension, request.file.mimetype, request.file.size, storageBucket, objectKey]
+          );
+        } catch (indexError) {
+          // 中文注解：索引失败时删除刚上传的对象，避免 MinIO 中遗留无法追踪的孤立文件。
+          await minioClient.removeObject(storageBucket, objectKey).catch(() => undefined);
+          throw indexError;
+        }
+        sourceStored = true;
+      } catch (storageError) {
+        // 中文注解：原文件归档失败不回滚已解析正文，用户仍可继续编辑，服务端日志保留失败原因。
+        console.error("Imported source file storage failed", storageError);
+      }
+    }
+
+    const [[row]] = await pool.query("SELECT * FROM documents WHERE id = ? AND user_id = ?", [result.insertId, currentUser.userId]);
+    response.status(201).json({ document: toDocument(row), sourceStored });
+  } catch (error) {
+    sendError(response, error, error?.httpStatus || 500, "文档导入失败，请检查文件格式后重试。");
   }
 });
 
