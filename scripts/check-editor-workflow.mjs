@@ -9,6 +9,7 @@ import { createDocxBuffer } from "../server/index.js";
 const listText = "这是一个需要跨页显示的超长编号列表项，必须保持同一个编号并在续页继续排版。".repeat(180);
 const cellA = "左侧单元格包含大量业务说明，用于验证超高表格行可以跨页展示。".repeat(145);
 const cellB = "右侧单元格包含对应的验收标准，分页后仍需保持两列结构。".repeat(120);
+const widowText = "孤行控制验证段落需要在每个分页片段保留至少两行文字，避免页首或页尾出现单独一行。".repeat(120);
 const tinyPng = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lT3g6wAAAABJRU5ErkJggg==";
 const defaultPageTextStyle = { alignment: "center", fontFamily: "Microsoft YaHei", fontSizePt: 9, color: "#6B7280", bold: false, italic: false };
 const styledHeader = { alignment: "left", fontFamily: "SimSun", fontSizePt: 12, color: "#C00000", bold: true, italic: false };
@@ -20,7 +21,7 @@ const fixtureDocument = {
   tone: "正式",
   templateId: 3,
   outline: ["超长结构分页"],
-  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table><tbody><tr><th>审批阶段</th><th>状态</th></tr><tr><td>商务评审</td><td>通过</td></tr><tr><td>归档确认</td><td>完成</td></tr></tbody></table><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p>`,
+  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table><tbody><tr><th>审批阶段</th><th>状态</th></tr><tr><td>商务评审</td><td>通过</td></tr><tr><td>归档确认</td><td>完成</td></tr></tbody></table><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p><p>${widowText}</p>`,
   // 中文注解：模拟升级前数据库里的旧页面设置，确保真实历史文档开启高级页眉时不会崩溃。
   pageLayout: { headerText: "", footerText: "", pageNumberEnabled: false },
   status: "draft",
@@ -229,8 +230,11 @@ try {
   await page.getByRole("button", { name: "与下段同页", exact: true }).click();
   await page.getByRole("button", { name: "段中不分页", exact: true }).click();
   await page.getByRole("button", { name: "段前分页", exact: true }).click();
+  await page.getByRole("button", { name: "孤行控制", exact: true }).click();
+  assert.match(await editor.innerHTML(), /data-widow-control="false"[^>]*>[\s\S]*?分页控制段落/);
+  await page.getByRole("button", { name: "孤行控制", exact: true }).click();
   const paginationControlHtml = await editor.innerHTML();
-  assert.match(paginationControlHtml, /<p[^>]+data-keep-next="true"[^>]+data-keep-lines="true"[^>]+data-page-break-before="true"[^>]*>[\s\S]*?分页控制段落[\s\S]*?<\/p>/);
+  assert.match(paginationControlHtml, /<p[^>]+data-keep-next="true"[^>]+data-keep-lines="true"[^>]+data-page-break-before="true"[^>]+data-widow-control="true"[^>]*>[\s\S]*?分页控制段落[\s\S]*?<\/p>/);
 
   const sourceTables = editor.locator("table");
   assert.equal(await sourceTables.count(), 2);
@@ -426,6 +430,7 @@ try {
   assert.match(paginationParagraph, /<w:keepNext\/>/);
   assert.match(paginationParagraph, /<w:keepLines\/>/);
   assert.match(paginationParagraph, /<w:pageBreakBefore\/>/);
+  assert.match(paginationParagraph, /<w:widowControl\/>/);
   assert.ok(headerXmlParts.some((xml) => xml.includes("首页项目封面")));
   assert.ok(headerXmlParts.some((xml) => xml.includes("奇数页项目页眉")));
   assert.ok(headerXmlParts.some((xml) => xml.includes("奇数页项目页眉") && /<w:jc w:val="left"\/>/.test(xml) && /<w:rFonts[^>]+SimSun/.test(xml) && /<w:sz w:val="24"\/>/.test(xml) && /<w:color w:val="C00000"\/>/.test(xml) && /<w:b\/>/.test(xml)));
@@ -500,6 +505,16 @@ try {
         return blocks[0]?.textContent?.includes("分页控制段落") && !page.textContent?.includes("分页控制前置段落");
       }),
       paginationControlKeepsNext: Array.from(document.querySelectorAll(".page-sheet")).some((page) => page.textContent?.includes("分页控制段落") && page.textContent?.includes("分页控制后续段落")),
+      widowFragmentLineCounts: Array.from(document.querySelectorAll(".page-body p")).filter((paragraph) => paragraph.textContent?.includes("孤行控制验证段落")).map((paragraph) => {
+        const range = document.createRange();
+        range.selectNodeContents(paragraph);
+        const tops = [];
+        for (const rect of Array.from(range.getClientRects())) {
+          if (rect.width > 0 && rect.height > 0 && !tops.some((top) => Math.abs(top - rect.top) < 1)) tops.push(rect.top);
+        }
+        return tops.length;
+      }),
+      widowPreviewText: Array.from(document.querySelectorAll(".page-body p")).filter((paragraph) => paragraph.textContent?.includes("孤行控制验证段落")).map((paragraph) => paragraph.textContent || "").join(""),
       templateLabelVisible: document.body.textContent?.includes("模板样式：商业计划书") || false,
       fontVariable: getComputedStyle(document.querySelector(".editor-scroll")).getPropertyValue("--document-font-family").trim(),
       lineVariable: getComputedStyle(document.querySelector(".editor-scroll")).getPropertyValue("--document-line-height").trim(),
@@ -538,6 +553,9 @@ try {
   assert.ok(result.previewRowSpanCount > 0, "分页预览应保留纵向合并单元格");
   assert.equal(result.paginationControlStartsPage, true, "段前分页段落应成为新页首段");
   assert.equal(result.paginationControlKeepsNext, true, "与下段同页应保留后续段落在同一页");
+  assert.ok(result.widowFragmentLineCounts.length > 1, "孤行控制夹具应跨越多个页面");
+  assert.ok(result.widowFragmentLineCounts.every((lines) => lines >= 2), "孤行控制段落的每个分页片段都应至少保留两行");
+  assert.equal(result.widowPreviewText, widowText);
   assert.equal(result.templateLabelVisible, true);
   assert.equal(result.fontVariable, '"SimSun"');
   assert.equal(result.lineVariable, "1.5833");
@@ -558,8 +576,14 @@ try {
     const expectedLabel = pageNumber % 2 === 0 ? "偶数页办公文档" : "奇数页办公文档";
     return text.includes(expectedLabel) && text.includes(`第 ${pageNumber} 页 / 共 ${result.pageCount} 页`);
   }));
-  const romanPageNumbers = ["III", "IV", "V", "VI", "VII", "VIII", "IX", "X"];
-  assert.ok(result.footerTexts.slice(secondSectionFirstPage).every((text, index) => text.includes("第二节横向页脚") && text.includes(`第 ${romanPageNumbers[index]} 页 / 共 ${result.pageCount} 页`)));
+  const toRoman = (value) => {
+    const numerals = [[1000, "M"], [900, "CM"], [500, "D"], [400, "CD"], [100, "C"], [90, "XC"], [50, "L"], [40, "XL"], [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]];
+    let number = value;
+    let result = "";
+    for (const [amount, numeral] of numerals) while (number >= amount) { result += numeral; number -= amount; }
+    return result;
+  };
+  assert.ok(result.footerTexts.slice(secondSectionFirstPage).every((text, index) => text.includes("第二节横向页脚") && text.includes(`第 ${toRoman(index + 3)} 页 / 共 ${result.pageCount} 页`)));
   assert.deepEqual(result.oddFooterStyle, { fontFamily: 'Arial, sans-serif', fontSize: "14px", color: "rgb(31, 78, 121)", fontStyle: "italic", textAlign: "right" });
   assert.equal(maxConcurrentSaveRequestCount, 1);
 

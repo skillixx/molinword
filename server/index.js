@@ -340,11 +340,11 @@ function sanitizeImportedHtml(value = "") {
   return sanitizeHtml(String(value), {
     allowedTags: ["h1", "h2", "h3", "p", "span", "strong", "b", "em", "i", "u", "s", "mark", "sup", "sub", "ul", "ol", "li", "blockquote", "br", "table", "tbody", "thead", "tr", "th", "td", "img", "div"],
     allowedAttributes: {
-      h1: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before"],
-      h2: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before"],
-      h3: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before"],
-      p: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before"],
-      li: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before"],
+      h1: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control"],
+      h2: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control"],
+      h3: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control"],
+      p: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control"],
+      li: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control"],
       span: ["style"],
       mark: ["data-highlight", "style"],
       th: ["colspan", "rowspan"],
@@ -660,7 +660,8 @@ function parseParagraphProperties(pPr) {
   const paginationProperties = [
     ["w:keepNext", "$keepNext"],
     ["w:keepLines", "$keepLines"],
-    ["w:pageBreakBefore", "$pageBreakBefore"]
+    ["w:pageBreakBefore", "$pageBreakBefore"],
+    ["w:widowControl", "$widowControl"]
   ];
   for (const [elementName, styleName] of paginationProperties) {
     const element = xmlChild(pPr, elementName);
@@ -984,6 +985,7 @@ async function parseStyledDocxParagraph(paragraphNode, context) {
   if (paragraphStyles.$keepNext === "1") attrs.push('data-keep-next="true"');
   if (paragraphStyles.$keepLines === "1") attrs.push('data-keep-lines="true"');
   if (paragraphStyles.$pageBreakBefore === "1") attrs.push('data-page-break-before="true"');
+  if (paragraphStyles.$widowControl) attrs.push(`data-widow-control="${paragraphStyles.$widowControl === "1" ? "true" : "false"}"`);
   if (body.includes(pageBreakHtml())) {
     // 中文注解：分页符是块级语义，导入时拆出段落外层，避免保存为非法的 p > div 结构。
     const chunks = body.split(pageBreakHtml());
@@ -1685,6 +1687,7 @@ function paragraphStyleFromNode(node) {
   if (node?.attribs?.["data-keep-next"] === "true") paragraphStyle.keepNext = true;
   if (node?.attribs?.["data-keep-lines"] === "true") paragraphStyle.keepLines = true;
   if (node?.attribs?.["data-page-break-before"] === "true") paragraphStyle.pageBreakBefore = true;
+  if (["true", "false"].includes(node?.attribs?.["data-widow-control"])) paragraphStyle.widowControl = node.attribs["data-widow-control"] === "true";
   // 中文注解：分页控制写入 Word 原生段落属性，不能用额外空段落或手动分页符模拟。
   return paragraphStyle;
 }

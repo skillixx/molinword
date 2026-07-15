@@ -66,7 +66,7 @@ type TextCaseMode = "upper" | "lower" | "title";
 type EditorViewMode = "edit" | "page";
 type ParagraphSpacingProperty = "line-height" | "margin-top" | "margin-bottom" | "--word-line-rule";
 type ParagraphSpacingStyles = Partial<Record<ParagraphSpacingProperty, string>>;
-type ParagraphPaginationAttribute = "keepNext" | "keepLines" | "pageBreakBefore";
+type ParagraphPaginationAttribute = "keepNext" | "keepLines" | "pageBreakBefore" | "widowControl";
 type FormatSelectOption = { label: string; value: string };
 type DocumentPageTextStyle = {
   alignment: "left" | "center" | "right";
@@ -823,6 +823,12 @@ const ParagraphIndent = Extension.create({
             default: false,
             parseHTML: (element) => element.getAttribute("data-page-break-before") === "true",
             renderHTML: (attributes) => attributes.pageBreakBefore ? { "data-page-break-before": "true" } : {}
+          },
+          widowControl: {
+            default: true,
+            parseHTML: (element) => element.getAttribute("data-widow-control") !== "false",
+            // 中文注解：显式保存 true/false，导入文件关闭孤行控制时重新打开后不能被默认值覆盖。
+            renderHTML: (attributes) => ({ "data-widow-control": attributes.widowControl === false ? "false" : "true" })
           }
         }
       }
@@ -2177,6 +2183,20 @@ function Editor(props: {
       measureElement.innerHTML = html;
       return measuredBlockHeight(measureElement.firstElementChild);
     };
+    const measureTextLineCount = (html: string) => {
+      measureElement.style.width = `${currentGeometry.contentWidthPx}px`;
+      measureElement.innerHTML = html;
+      const element = measureElement.firstElementChild;
+      if (!element) return 0;
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const lineTops: number[] = [];
+      for (const rect of Array.from(range.getClientRects())) {
+        if (rect.width <= 0 || rect.height <= 0) continue;
+        if (!lineTops.some((top) => Math.abs(top - rect.top) < 1)) lineTops.push(rect.top);
+      }
+      return lineTops.length;
+    };
     const appendHtml = (html: string, height = measureHtml(html)) => {
       nextPages[nextPages.length - 1].blocks.push(html);
       currentHeight += height;
@@ -2373,6 +2393,30 @@ function Editor(props: {
               bestEnd = Math.min(start + 1, text.length);
             }
             bestEnd = preferredTextBreak(text, start, bestEnd);
+            const widowControlEnabled = splitChild.dataset.widowControl !== "false";
+            if (widowControlEnabled && bestEnd < text.length) {
+              let safeEnd = start;
+              let safeLow = start + 1;
+              let safeHigh = bestEnd;
+              // 中文注解：寻找仍能让下一页至少保留两行的最晚断点，避免段落末行单独落到下一页。
+              while (safeLow <= safeHigh) {
+                const middle = Math.floor((safeLow + safeHigh) / 2);
+                const remainingHtml = textBlockFragmentHtml(splitChild, middle, text.length, true, true);
+                if (measureTextLineCount(remainingHtml) >= 2) {
+                  safeEnd = middle;
+                  safeLow = middle + 1;
+                } else {
+                  safeHigh = middle - 1;
+                }
+              }
+              if (safeEnd > start && safeEnd < bestEnd) bestEnd = preferredTextBreak(text, start, safeEnd);
+              const currentFragmentHtml = textBlockFragmentHtml(splitChild, start, bestEnd, start > 0, false);
+              if (measureTextLineCount(currentFragmentHtml) < 2 && currentHeight > 0) {
+                // 中文注解：页尾空间只能容纳一行时，把整个段落片段移到下一页，避免孤立首行。
+                openNextPage();
+                continue;
+              }
+            }
             const fragmentHtml = textBlockFragmentHtml(splitChild, start, bestEnd, start > 0, bestEnd === text.length);
             appendHtml(fragmentHtml);
             start = bestEnd;
@@ -2758,6 +2802,7 @@ function Editor(props: {
             <button className={editor?.getAttributes("paragraph").keepNext || editor?.getAttributes("heading").keepNext ? "active-format" : ""} onClick={() => toggleParagraphPagination("keepNext", "与下段同页")} title="保持当前段落与下一段在同一页">与下段同页</button>
             <button className={editor?.getAttributes("paragraph").keepLines || editor?.getAttributes("heading").keepLines ? "active-format" : ""} onClick={() => toggleParagraphPagination("keepLines", "段中不分页")} title="避免当前段落被拆到两页">段中不分页</button>
             <button className={editor?.getAttributes("paragraph").pageBreakBefore || editor?.getAttributes("heading").pageBreakBefore ? "active-format" : ""} onClick={() => toggleParagraphPagination("pageBreakBefore", "段前分页")} title="让当前段落从新页开始">段前分页</button>
+            <button className={(editor?.getAttributes("paragraph").widowControl ?? editor?.getAttributes("heading").widowControl) !== false ? "active-format" : ""} onClick={() => toggleParagraphPagination("widowControl", "孤行控制")} title="避免段落首行或末行单独出现在一页">孤行控制</button>
             <span className="format-divider" />
             <button onClick={() => editor?.chain().focus().decreaseIndent().run()} title="减少首行缩进"><IndentDecrease size={16} />减少首行</button>
             <button onClick={() => editor?.chain().focus().increaseIndent().run()} title="增加首行缩进"><IndentIncrease size={16} />首行缩进</button>

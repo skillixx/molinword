@@ -30,7 +30,8 @@ const content = `
   <p style="line-height:1.5;margin-top:6pt;margin-bottom:12pt">Spacing paragraph</p>
   <p style="line-height:18pt;--word-line-rule:exact">Exact spacing paragraph</p>
   <p style="margin-top:0pt;margin-bottom:0pt">Zero spacing paragraph</p>
-  <p data-keep-next="true" data-keep-lines="true" data-page-break-before="true">Pagination controlled paragraph</p>
+  <p data-keep-next="true" data-keep-lines="true" data-page-break-before="true" data-widow-control="true">Pagination controlled paragraph</p>
+  <p data-widow-control="false">Widow control disabled paragraph</p>
   <ol>
     <li>Ordered item 1<ol><li>Nested ordered item</li></ol></li>
     <li>Ordered item 2</li>
@@ -203,6 +204,9 @@ const paginationControlledParagraphXml = paragraphXmlForText("Pagination control
 assert.match(paginationControlledParagraphXml, /<w:keepNext\/>/);
 assert.match(paginationControlledParagraphXml, /<w:keepLines\/>/);
 assert.match(paginationControlledParagraphXml, /<w:pageBreakBefore\/>/);
+assert.match(paginationControlledParagraphXml, /<w:widowControl\/>/);
+const widowDisabledParagraphXml = paragraphXmlForText("Widow control disabled paragraph");
+assert.match(widowDisabledParagraphXml, /<w:widowControl w:val="false"\/>/);
 
 // 中文注解：编号列表、嵌套层级和项目符号必须保留各自语义，不能统一退化为一级圆点。
 assert.match(documentXml, /<w:numPr><w:ilvl w:val="0"\/><w:numId w:val="\d+"\/><\/w:numPr>/);

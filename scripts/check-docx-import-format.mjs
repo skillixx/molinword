@@ -125,7 +125,8 @@ async function buildFormattedDocxFixture() {
     </w:p>
     <w:p><w:pPr><w:pStyle w:val="BodyBased"/></w:pPr><w:r><w:t>Inherited spacing</w:t></w:r></w:p>
     <w:p><w:pPr><w:spacing w:line="360" w:lineRule="atLeast"/></w:pPr><w:r><w:t>At least spacing</w:t></w:r></w:p>
-    <w:p><w:pPr><w:keepNext/><w:keepLines/><w:pageBreakBefore/></w:pPr><w:r><w:t>Pagination controlled paragraph</w:t></w:r></w:p>
+    <w:p><w:pPr><w:keepNext/><w:keepLines/><w:pageBreakBefore/><w:widowControl/></w:pPr><w:r><w:t>Pagination controlled paragraph</w:t></w:r></w:p>
+    <w:p><w:pPr><w:widowControl w:val="false"/></w:pPr><w:r><w:t>Widow control disabled paragraph</w:t></w:r></w:p>
     <w:tbl>
       <w:tr>
         <w:tc><w:p><w:r><w:t>Header A</w:t></w:r></w:p></w:tc>
@@ -380,7 +381,8 @@ assert.match(imported.content, /<s><em><u>斜体下划线删除线文本<\/u><\/
 assert.match(imported.content, /<mark data-highlight="yellow" style="background-color:\s*#FFFF00">Highlighted text<\/mark>/);
 assert.match(imported.content, /<sup>Superscript text<\/sup>/);
 assert.match(imported.content, /<sub>Subscript text<\/sub>/);
-assert.match(imported.content, /<p[^>]+data-keep-next="true"[^>]+data-keep-lines="true"[^>]+data-page-break-before="true"[^>]*>Pagination controlled paragraph<\/p>/);
+assert.match(imported.content, /<p[^>]+data-keep-next="true"[^>]+data-keep-lines="true"[^>]+data-page-break-before="true"[^>]+data-widow-control="true"[^>]*>Pagination controlled paragraph<\/p>/);
+assert.match(imported.content, /<p[^>]+data-widow-control="false"[^>]*>Widow control disabled paragraph<\/p>/);
 assert.match(imported.content, /<table>/);
 assert.match(imported.content, /<th>/);
 assert.match(imported.content, /<td>/);
@@ -447,6 +449,9 @@ const paginationControlledRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[
 assert.match(paginationControlledRoundTripXml, /<w:keepNext\/>/);
 assert.match(paginationControlledRoundTripXml, /<w:keepLines\/>/);
 assert.match(paginationControlledRoundTripXml, /<w:pageBreakBefore\/>/);
+assert.match(paginationControlledRoundTripXml, /<w:widowControl\/>/);
+const widowDisabledRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Widow control disabled paragraph")) || "";
+assert.match(widowDisabledRoundTripXml, /<w:widowControl w:val="false"\/>/);
 const roundTripImported = await parseImportedDocument({
   originalname: "round-trip-format.docx",
   buffer: roundTripBuffer,
@@ -458,7 +463,8 @@ assert.match(roundTripImported.content, /<s><em><u>斜体下划线删除线文�
 assert.match(roundTripImported.content, /<mark data-highlight="yellow"[^>]*>Highlighted text<\/mark>/);
 assert.match(roundTripImported.content, /<sup>Superscript text<\/sup>/);
 assert.match(roundTripImported.content, /<sub>Subscript text<\/sub>/);
-assert.match(roundTripImported.content, /<p[^>]+data-keep-next="true"[^>]+data-keep-lines="true"[^>]+data-page-break-before="true"[^>]*>[\s\S]*?Pagination controlled paragraph[\s\S]*?<\/p>/);
+assert.match(roundTripImported.content, /<p[^>]+data-keep-next="true"[^>]+data-keep-lines="true"[^>]+data-page-break-before="true"[^>]+data-widow-control="true"[^>]*>[\s\S]*?Pagination controlled paragraph[\s\S]*?<\/p>/);
+assert.match(roundTripImported.content, /<p[^>]+data-widow-control="false"[^>]*>[\s\S]*?Widow control disabled paragraph[\s\S]*?<\/p>/);
 assert.deepEqual(roundTripImported.pageLayout, imported.pageLayout);
 const atLeastRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || [])
   .find((paragraph) => paragraph.includes(">At least spacing</w:t>")) || "";
