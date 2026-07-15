@@ -23,19 +23,39 @@ const docxPage = {
   marginTwip: 1440
 };
 const orderedListReference = "online-ordered-list";
-const defaultPageLayout = Object.freeze({ headerText: "", footerText: "", pageNumberEnabled: false });
+const defaultPageVariant = Object.freeze({ headerText: "", footerText: "", pageNumberEnabled: false });
+const defaultPageLayout = Object.freeze({
+  ...defaultPageVariant,
+  firstPageDifferent: false,
+  firstPage: defaultPageVariant,
+  oddEvenDifferent: false,
+  evenPage: defaultPageVariant
+});
 
 function normalizePageText(value) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, 500);
 }
 
-function normalizePageLayout(value, fallback = defaultPageLayout) {
+function normalizePageVariant(value, fallback = defaultPageVariant) {
   const source = value && typeof value === "object" ? value : {};
-  const base = fallback && typeof fallback === "object" ? fallback : defaultPageLayout;
+  const base = fallback && typeof fallback === "object" ? fallback : defaultPageVariant;
   return {
     headerText: normalizePageText(source.headerText ?? base.headerText),
     footerText: normalizePageText(source.footerText ?? base.footerText),
     pageNumberEnabled: source.pageNumberEnabled === undefined ? Boolean(base.pageNumberEnabled) : Boolean(source.pageNumberEnabled)
+  };
+}
+
+function normalizePageLayout(value, fallback = defaultPageLayout) {
+  const source = value && typeof value === "object" ? value : {};
+  const base = fallback && typeof fallback === "object" ? fallback : defaultPageLayout;
+  const normalizedDefault = normalizePageVariant(source, base);
+  return {
+    ...normalizedDefault,
+    firstPageDifferent: source.firstPageDifferent === undefined ? Boolean(base.firstPageDifferent) : Boolean(source.firstPageDifferent),
+    firstPage: normalizePageVariant(source.firstPage, base.firstPage || defaultPageVariant),
+    oddEvenDifferent: source.oddEvenDifferent === undefined ? Boolean(base.oddEvenDifferent) : Boolean(source.oddEvenDifferent),
+    evenPage: normalizePageVariant(source.evenPage, base.evenPage || defaultPageVariant)
   };
 }
 
@@ -703,6 +723,20 @@ function docxPartPlainText(xml = "") {
     .join(" ");
 }
 
+function wordOnOffEnabled(node) {
+  if (!node) return false;
+  const value = String(firstValue(node.attribs, ["w:val", "val"]) || "true").toLowerCase();
+  return !["0", "false", "off", "no"].includes(value);
+}
+
+function parseDocxPageVariant(headerXml = "", footerXml = "") {
+  const pageNumberEnabled = /(?:<w:instrText[^>]*>[^<]*(?:PAGE|NUMPAGES)|<w:fldSimple[^>]+w:instr="[^"]*(?:PAGE|NUMPAGES))/i.test(footerXml);
+  const footerText = docxPartPlainText(footerXml)
+    .replace(/(?:\s*[·|]\s*)?第\s*页\s*\/\s*共\s*页/gu, "")
+    .trim();
+  return normalizePageVariant({ headerText: docxPartPlainText(headerXml), footerText, pageNumberEnabled });
+}
+
 async function parseDocxPageLayout(buffer) {
   const zip = await JSZip.loadAsync(buffer);
   const documentXml = await zip.file("word/document.xml")?.async("string");
@@ -710,12 +744,13 @@ async function parseDocxPageLayout(buffer) {
   if (!documentXml || !relationshipsXml) return { pageLayout: { ...defaultPageLayout }, warnings: [] };
   const relationships = parseDocxRelationships(relationshipsXml);
   const document = parseDocument(documentXml, { xmlMode: true });
-  const section = xmlDescendants(document, "w:sectPr")[0];
+  const sections = xmlDescendants(document, "w:sectPr");
+  const section = sections[0];
 
   // 中文注解：页眉页脚通过节属性中的关系 ID 指向独立 XML 部件，不能假设文件名固定为 header1/footer1。
-  const readReferencedPart = async (referenceName) => {
-    const references = xmlDescendants(section, referenceName);
-    const reference = references.find((item) => firstValue(item.attribs, ["w:type", "type"]) === "default") || references[0];
+  const readReferencedPart = async (referenceName, referenceType) => {
+    const references = xmlChildren(section, referenceName);
+    const reference = references.find((item) => (firstValue(item.attribs, ["w:type", "type"]) || "default") === referenceType);
     const relationshipId = firstValue(reference?.attribs, ["r:id", "id"]);
     const target = relationships.get(relationshipId);
     if (!target) return "";
@@ -723,23 +758,36 @@ async function parseDocxPageLayout(buffer) {
     return zip.file(path)?.async("string") || "";
   };
 
-  const headerXml = await readReferencedPart("w:headerReference");
-  const footerXml = await readReferencedPart("w:footerReference");
-  const sectionCount = xmlDescendants(document, "w:sectPr").length;
-  const references = [...xmlDescendants(document, "w:headerReference"), ...xmlDescendants(document, "w:footerReference")];
-  const hasVariantReference = references.some((item) => !["", "default"].includes(firstValue(item.attribs, ["w:type", "type"]) || ""));
+  const [defaultHeaderXml, defaultFooterXml, firstHeaderXml, firstFooterXml, evenHeaderXml, evenFooterXml, settingsXml] = await Promise.all([
+    readReferencedPart("w:headerReference", "default"),
+    readReferencedPart("w:footerReference", "default"),
+    readReferencedPart("w:headerReference", "first"),
+    readReferencedPart("w:footerReference", "first"),
+    readReferencedPart("w:headerReference", "even"),
+    readReferencedPart("w:footerReference", "even"),
+    zip.file("word/settings.xml")?.async("string") || ""
+  ]);
+  const pageParts = [defaultHeaderXml, defaultFooterXml, firstHeaderXml, firstFooterXml, evenHeaderXml, evenFooterXml];
+  const settings = settingsXml ? parseDocument(settingsXml, { xmlMode: true }) : null;
+  const firstPageDifferent = wordOnOffEnabled(xmlChild(section, "w:titlePg"));
+  const oddEvenDifferent = Boolean(evenHeaderXml || evenFooterXml) || wordOnOffEnabled(settings ? xmlDescendants(settings, "w:evenAndOddHeaders")[0] : null);
   // 中文注解：当前页面模型只保存纯文本；只要发现字体、字号、颜色、对齐或其他富格式，就明确提示用户可能丢失样式。
-  const hasRichHeaderFooter = /<w:(?:drawing|pict|tbl|shd|tabs|rFonts|color|sz|jc|b|i|u|strike)\b/i.test(`${headerXml}${footerXml}`);
-  const hasMultipleParagraphs = [headerXml, footerXml].some((xml) => (xml.match(/<w:p(?:\s|>)/g) || []).length > 1);
-  const warnings = sectionCount > 1 || hasVariantReference || hasRichHeaderFooter || hasMultipleParagraphs
-    ? ["该 DOCX 包含多节或复杂页眉页脚；当前已导入默认节纯文本，图片、格式或奇偶页差异暂未恢复。"]
-    : [];
-  const pageNumberEnabled = /(?:<w:instrText[^>]*>[^<]*(?:PAGE|NUMPAGES)|<w:fldSimple[^>]+w:instr="[^"]*(?:PAGE|NUMPAGES))/i.test(footerXml);
-  const footerText = docxPartPlainText(footerXml)
-    .replace(/(?:\s*[·|]\s*)?第\s*页\s*\/\s*共\s*页/gu, "")
-    .trim();
-  // 中文注解：页码字段与页脚正文分开保存，在线预览才能按真实页数重新渲染。
-  return { pageLayout: normalizePageLayout({ headerText: docxPartPlainText(headerXml), footerText, pageNumberEnabled }), warnings };
+  const hasRichHeaderFooter = /<w:(?:drawing|pict|tbl|shd|tabs|rFonts|color|sz|jc|b|i|u|strike)\b/i.test(pageParts.join(""));
+  const hasMultipleParagraphs = pageParts.some((xml) => (xml.match(/<w:p(?:\s|>)/g) || []).length > 1);
+  const warnings = [];
+  if (sections.length > 1) warnings.push("该 DOCX 包含多个分节；当前已导入第一节的页面设置，后续分节的页眉页脚差异暂未恢复。");
+  if (hasRichHeaderFooter || hasMultipleParagraphs) warnings.push("页眉页脚中的图片、多段落或富文本格式暂未恢复，已保留各页面类型的纯文本和页码。");
+  // 中文注解：首页、默认奇数页和偶数页分别保存，在线预览才能按实际页码选择与 Word 相同的部件。
+  return {
+    pageLayout: normalizePageLayout({
+      ...parseDocxPageVariant(defaultHeaderXml, defaultFooterXml),
+      firstPageDifferent,
+      firstPage: parseDocxPageVariant(firstHeaderXml, firstFooterXml),
+      oddEvenDifferent,
+      evenPage: parseDocxPageVariant(evenHeaderXml, evenFooterXml)
+    }),
+    warnings
+  };
 }
 
 function extractImportedOutline(html = "") {
@@ -1281,23 +1329,42 @@ function createDocxStyles(templateStyle = {}) {
 function createDocxHeaderFooter(pageLayout, templateStyle = {}) {
   const layout = normalizePageLayout(pageLayout);
   const runStyle = { font: templateStyle.fontFamily || "Microsoft YaHei", size: 18, color: "6B7280" };
-  // 中文注解：仅在用户启用内容时创建部件，避免空页眉页脚改变 Word 的节结构和版心表现。
-  const headers = layout.headerText
-    ? { default: new Header({ children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: layout.headerText, ...runStyle })] })] }) }
-    : undefined;
-  const footerChildren = [];
-  if (layout.footerText) footerChildren.push(layout.footerText);
-  if (layout.footerText && layout.pageNumberEnabled) footerChildren.push(" · ");
-  if (layout.pageNumberEnabled) footerChildren.push("第 ", PageNumber.CURRENT, " 页 / 共 ", PageNumber.TOTAL_PAGES, " 页");
-  const footers = footerChildren.length
-    ? { default: new Footer({ children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ children: footerChildren, ...runStyle })] })] }) }
-    : undefined;
-  return { headers, footers };
+  const createHeader = (variant, force = false) => {
+    if (!force && !variant.headerText) return undefined;
+    return new Header({ children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: variant.headerText, ...runStyle })] })] });
+  };
+  const createFooter = (variant, force = false) => {
+    const footerChildren = [];
+    if (variant.footerText) footerChildren.push(variant.footerText);
+    if (variant.footerText && variant.pageNumberEnabled) footerChildren.push(" · ");
+    if (variant.pageNumberEnabled) footerChildren.push("第 ", PageNumber.CURRENT, " 页 / 共 ", PageNumber.TOTAL_PAGES, " 页");
+    if (!force && !footerChildren.length) return undefined;
+    return new Footer({ children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ children: footerChildren, ...runStyle })] })] });
+  };
+
+  const headers = {
+    default: createHeader(layout),
+    first: layout.firstPageDifferent ? createHeader(layout.firstPage, true) : undefined,
+    even: layout.oddEvenDifferent ? createHeader(layout.evenPage, true) : undefined
+  };
+  const footers = {
+    default: createFooter(layout),
+    first: layout.firstPageDifferent ? createFooter(layout.firstPage, true) : undefined,
+    even: layout.oddEvenDifferent ? createFooter(layout.evenPage, true) : undefined
+  };
+  // 中文注解：显式创建空的首页或偶数页部件，避免 Word 回退到默认页眉页脚而与在线预览不一致。
+  return {
+    headers: Object.values(headers).some(Boolean) ? headers : undefined,
+    footers: Object.values(footers).some(Boolean) ? footers : undefined,
+    titlePage: layout.firstPageDifferent,
+    evenAndOdd: layout.oddEvenDifferent
+  };
 }
 
 async function createDocxBuffer({ title, content, templateStyle = null, pageLayout = null }) {
   const headerFooter = createDocxHeaderFooter(pageLayout, templateStyle || {});
   const document = new Document({
+    evenAndOddHeaderAndFooters: headerFooter.evenAndOdd,
     styles: createDocxStyles(templateStyle || {}),
     numbering: {
       config: [
@@ -1319,6 +1386,7 @@ async function createDocxBuffer({ title, content, templateStyle = null, pageLayo
         ...(headerFooter.headers ? { headers: headerFooter.headers } : {}),
         ...(headerFooter.footers ? { footers: headerFooter.footers } : {}),
         properties: {
+          titlePage: headerFooter.titlePage,
           page: {
             size: { width: docxPage.widthTwip, height: docxPage.heightTwip },
             margin: {

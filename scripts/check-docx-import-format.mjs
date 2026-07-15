@@ -3,6 +3,7 @@ import JSZip from "jszip";
 import { createDocxBuffer, parseImportedDocument } from "../server/index.js";
 
 const tinyPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lT3g6wAAAABJRU5ErkJggg==";
+const emptyPageVariant = { headerText: "", footerText: "", pageNumberEnabled: false };
 
 async function buildFormattedDocxFixture() {
   const zip = new JSZip();
@@ -184,7 +185,7 @@ const complexLayoutImported = await parseImportedDocument({
   size: complexLayoutBuffer.length
 });
 // 中文注解：当前模型无法完整承载多节和富格式页眉时必须明确提示，不能静默宣称完全恢复。
-assert.match(complexLayoutImported.warnings.join(" "), /复杂页眉页脚/);
+assert.match(complexLayoutImported.warnings.join(" "), /富文本格式/);
 
 // 中文注解：这个检查覆盖用户反馈的核心症状，导入后段落、字体、表格和图片不能被洗掉。
 assert.match(imported.content, /text-align:\s*center/);
@@ -211,7 +212,15 @@ assert.match(imported.content, /<ol><li>Ordered item 1<ol><li>Nested ordered ite
 assert.match(imported.content, /<ul><li>Bullet item<\/li><\/ul>/);
 assert.match(imported.content, /<ol><li>Override ordered item<\/li><\/ol><ol><li>Restart ordered item<\/li><\/ol>/);
 assert.match(imported.content, /<td><p[^>]*>Import Cell 1<\/p><ol><li>Table ordered item<\/li><\/ol><\/td>/);
-assert.deepEqual(imported.pageLayout, { headerText: "导入页眉", footerText: "导入页脚", pageNumberEnabled: true });
+assert.deepEqual(imported.pageLayout, {
+  headerText: "导入页眉",
+  footerText: "导入页脚",
+  pageNumberEnabled: true,
+  firstPageDifferent: false,
+  firstPage: emptyPageVariant,
+  oddEvenDifferent: false,
+  evenPage: emptyPageVariant
+});
 
 const inheritedParagraph = imported.content.match(/<p[^>]*>Inherited spacing<\/p>/)?.[0] || "";
 assert.match(inheritedParagraph, /line-height:\s*1\.15/);
@@ -243,5 +252,24 @@ const atLeastRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p
 // 中文注解：最小行距往返后仍必须是 atLeast，避免大字号文字被固定行高裁切并改变分页。
 assert.match(atLeastRoundTripXml, /<w:spacing[^>]+w:line="360"/);
 assert.match(atLeastRoundTripXml, /<w:spacing[^>]+w:lineRule="atLeast"/);
+
+const variantPageLayout = {
+  headerText: "奇数页页眉",
+  footerText: "奇数页页脚",
+  pageNumberEnabled: true,
+  firstPageDifferent: true,
+  firstPage: { headerText: "首页页眉", footerText: "首页页脚", pageNumberEnabled: false },
+  oddEvenDifferent: true,
+  evenPage: { headerText: "偶数页页眉", footerText: "偶数页页脚", pageNumberEnabled: true }
+};
+const variantRoundTripBuffer = await createDocxBuffer({ title: "页面类型往返", content: "<p>正文</p>", pageLayout: variantPageLayout });
+const variantRoundTripImported = await parseImportedDocument({
+  originalname: "variant-page-layout.docx",
+  buffer: variantRoundTripBuffer,
+  mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  size: variantRoundTripBuffer.length
+});
+// 中文注解：Word 的 first/default/even 三套部件必须往返保留，不能再次折叠成一组全局页眉页脚。
+assert.deepEqual(variantRoundTripImported.pageLayout, variantPageLayout);
 
 console.log("DOCX import format check passed");

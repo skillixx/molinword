@@ -18,6 +18,7 @@ const fixtureDocument = {
   templateId: 3,
   outline: ["超长结构分页"],
   content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table>`,
+  // 中文注解：模拟升级前数据库里的旧页面设置，确保真实历史文档开启高级页眉时不会崩溃。
   pageLayout: { headerText: "", footerText: "", pageNumberEnabled: false },
   status: "draft",
   wordCount: listText.length + cellA.length + cellB.length,
@@ -192,9 +193,16 @@ try {
   assert.match(await editor.innerHTML(), /<h2[^>]*>.*保留小号红字.*<\/h2>/);
 
   await page.getByText("页面设置", { exact: true }).click();
-  await page.getByLabel("页眉文字", { exact: true }).fill("西部教育资源云平台项目");
-  await page.getByLabel("页脚文字", { exact: true }).fill("内部办公文档");
-  await page.getByLabel("显示页码", { exact: true }).check();
+  await page.getByLabel("默认页眉文字", { exact: true }).fill("奇数页项目页眉");
+  await page.getByLabel("默认页脚文字", { exact: true }).fill("奇数页办公文档");
+  await page.getByLabel("显示页码", { exact: true }).first().check();
+  await page.getByText("首页不同", { exact: true }).click();
+  await page.getByLabel("首页页眉文字", { exact: true }).fill("首页项目封面");
+  await page.getByLabel("首页页脚文字", { exact: true }).fill("首页保密标识");
+  await page.getByText("奇偶页不同", { exact: true }).click();
+  await page.getByLabel("偶数页页眉文字", { exact: true }).fill("偶数页项目页眉");
+  await page.getByLabel("偶数页页脚文字", { exact: true }).fill("偶数页办公文档");
+  await page.getByLabel("显示页码", { exact: true }).last().check();
   await page.getByText("页面设置", { exact: true }).click();
 
   const manualSaveCountBeforeShortcut = manualSaveRequestCount;
@@ -206,7 +214,15 @@ try {
   assert.match(storedDocument.content, /<h2[^>]*>.*保留小号红字.*<\/h2>/);
   assert.match(storedDocument.content, /font-family:\s*SimSun/);
   assert.match(storedDocument.content, /font-size:\s*12pt/);
-  assert.deepEqual(storedDocument.pageLayout, { headerText: "西部教育资源云平台项目", footerText: "内部办公文档", pageNumberEnabled: true });
+  assert.deepEqual(storedDocument.pageLayout, {
+    headerText: "奇数页项目页眉",
+    footerText: "奇数页办公文档",
+    pageNumberEnabled: true,
+    firstPageDifferent: true,
+    firstPage: { headerText: "首页项目封面", footerText: "首页保密标识", pageNumberEnabled: false },
+    oddEvenDifferent: true,
+    evenPage: { headerText: "偶数页项目页眉", footerText: "偶数页办公文档", pageNumberEnabled: true }
+  });
 
   await page.reload({ waitUntil: "networkidle" });
   await page.getByText(storedDocument.title, { exact: true }).click();
@@ -228,14 +244,19 @@ try {
   const downloadedBuffer = await readFile(downloadedPath);
   const archive = await JSZip.loadAsync(downloadedBuffer);
   const documentXml = await archive.file("word/document.xml")?.async("string");
-  const headerXml = await archive.file("word/header1.xml")?.async("string");
-  const footerXml = await archive.file("word/footer1.xml")?.async("string");
+  const settingsXml = await archive.file("word/settings.xml")?.async("string");
+  const headerXmlParts = await Promise.all(archive.file(/^word\/header\d+\.xml$/).map((file) => file.async("string")));
+  const footerXmlParts = await Promise.all(archive.file(/^word\/footer\d+\.xml$/).map((file) => file.async("string")));
   assert.ok(documentXml, "导出的 DOCX 应包含 document.xml");
-  assert.ok(headerXml && footerXml, "导出的 DOCX 应包含页眉和页脚部件");
-  assert.match(headerXml, /西部教育资源云平台项目/);
-  assert.match(footerXml, /内部办公文档/);
-  assert.match(footerXml, /<w:instrText[^>]*>PAGE<\/w:instrText>/);
-  assert.match(footerXml, /<w:instrText[^>]*>NUMPAGES<\/w:instrText>/);
+  assert.equal(headerXmlParts.length, 3, "导出的 DOCX 应包含首页、奇数页和偶数页页眉");
+  assert.equal(footerXmlParts.length, 3, "导出的 DOCX 应包含首页、奇数页和偶数页页脚");
+  assert.match(documentXml, /<w:titlePg\/>/);
+  assert.match(settingsXml, /<w:evenAndOddHeaders\/>/);
+  assert.ok(headerXmlParts.some((xml) => xml.includes("首页项目封面")));
+  assert.ok(headerXmlParts.some((xml) => xml.includes("奇数页项目页眉")));
+  assert.ok(headerXmlParts.some((xml) => xml.includes("偶数页项目页眉")));
+  assert.ok(footerXmlParts.some((xml) => xml.includes("首页保密标识")));
+  assert.equal(footerXmlParts.filter((xml) => /<w:instrText[^>]*>PAGE<\/w:instrText>/.test(xml)).length, 2);
   // 中文注解：检查在线编辑后的具体文字，证明保存、重开和导出使用的是同一份格式数据。
   const paragraphs = documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || [];
   const headingParagraph = paragraphs.find((paragraph) => paragraph.includes(">保留小号红字</w:t>"));
@@ -313,9 +334,15 @@ try {
   assert.equal(result.fontVariable, '"SimSun"');
   assert.equal(result.lineVariable, "1.5833");
   assert.equal(result.headerTexts.length, result.pageCount);
-  assert.ok(result.headerTexts.every((text) => text === "西部教育资源云平台项目"));
+  assert.equal(result.headerTexts[0], "首页项目封面");
+  assert.ok(result.headerTexts.slice(1).every((text, index) => (index + 2) % 2 === 0 ? text === "偶数页项目页眉" : text === "奇数页项目页眉"));
   assert.equal(result.footerTexts.length, result.pageCount);
-  assert.ok(result.footerTexts.every((text, index) => text.includes("内部办公文档") && text.includes(`第 ${index + 1} 页 / 共 ${result.pageCount} 页`)));
+  assert.equal(result.footerTexts[0], "首页保密标识");
+  assert.ok(result.footerTexts.slice(1).every((text, index) => {
+    const pageNumber = index + 2;
+    const expectedLabel = pageNumber % 2 === 0 ? "偶数页办公文档" : "奇数页办公文档";
+    return text.includes(expectedLabel) && text.includes(`第 ${pageNumber} 页 / 共 ${result.pageCount} 页`);
+  }));
   assert.equal(maxConcurrentSaveRequestCount, 1);
 
   const desktopNavigation = await page.evaluate(() => {

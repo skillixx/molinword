@@ -823,13 +823,44 @@ textarea {
   transform: translateX(-50%);
   z-index: 10;
   display: grid;
-  width: 280px;
+  width: 304px;
+  max-height: min(620px, calc(100vh - 150px));
+  overflow-y: auto;
   gap: 10px;
   padding: 12px;
   border: 1px solid #cfd8e1;
   border-radius: 6px;
   background: #ffffff;
   box-shadow: 0 10px 24px rgba(23, 33, 43, 0.16);
+}
+
+.page-layout-section {
+  display: grid;
+  gap: 8px;
+}
+
+.page-layout-section + .page-layout-switch,
+.page-layout-switch + .page-layout-section {
+  margin-top: 2px;
+}
+
+.page-layout-section strong {
+  color: #24313c;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.page-layout-variant {
+  padding: 10px;
+  border-left: 2px solid #8ab8ae;
+  background: #f6f9f8;
+}
+
+.page-layout-switch {
+  min-height: 28px;
+  padding-top: 7px;
+  border-top: 1px solid #e2e7eb;
+  font-weight: 600;
 }
 
 .page-layout-popover label:not(.page-number-toggle) {
@@ -1500,7 +1531,15 @@ textarea {
   }
 
   .format-bar {
-    overflow-x: auto;
+    overflow: visible;
+  }
+
+  /* 移动端工具栏靠近屏幕底部，页面设置向上展开才能始终保持可操作。 */
+  .page-layout-popover {
+    top: auto;
+    bottom: calc(100% + 6px);
+    width: min(304px, calc(100vw - 32px));
+    max-height: calc(100dvh - 160px);
   }
 
   .editor-source {

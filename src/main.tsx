@@ -60,8 +60,45 @@ type EditorViewMode = "edit" | "page";
 type ParagraphSpacingProperty = "line-height" | "margin-top" | "margin-bottom" | "--word-line-rule";
 type ParagraphSpacingStyles = Partial<Record<ParagraphSpacingProperty, string>>;
 type FormatSelectOption = { label: string; value: string };
-type DocumentPageLayout = { headerText: string; footerText: string; pageNumberEnabled: boolean };
-const defaultDocumentPageLayout: DocumentPageLayout = { headerText: "", footerText: "", pageNumberEnabled: false };
+type DocumentPageVariant = { headerText: string; footerText: string; pageNumberEnabled: boolean };
+type DocumentPageLayout = DocumentPageVariant & {
+  firstPageDifferent: boolean;
+  firstPage: DocumentPageVariant;
+  oddEvenDifferent: boolean;
+  evenPage: DocumentPageVariant;
+};
+const defaultDocumentPageVariant: DocumentPageVariant = { headerText: "", footerText: "", pageNumberEnabled: false };
+const defaultDocumentPageLayout: DocumentPageLayout = {
+  ...defaultDocumentPageVariant,
+  firstPageDifferent: false,
+  firstPage: { ...defaultDocumentPageVariant },
+  oddEvenDifferent: false,
+  evenPage: { ...defaultDocumentPageVariant }
+};
+
+function normalizeDocumentPageVariant(value: Partial<DocumentPageVariant> | null | undefined): DocumentPageVariant {
+  return {
+    headerText: String(value?.headerText || ""),
+    footerText: String(value?.footerText || ""),
+    pageNumberEnabled: Boolean(value?.pageNumberEnabled)
+  };
+}
+
+function normalizeDocumentPageLayout(value: Partial<DocumentPageLayout> | null | undefined): DocumentPageLayout {
+  return {
+    ...normalizeDocumentPageVariant(value),
+    firstPageDifferent: Boolean(value?.firstPageDifferent),
+    firstPage: normalizeDocumentPageVariant(value?.firstPage),
+    oddEvenDifferent: Boolean(value?.oddEvenDifferent),
+    evenPage: normalizeDocumentPageVariant(value?.evenPage)
+  };
+}
+
+function pageVariantForPage(layout: DocumentPageLayout, pageIndex: number): DocumentPageVariant {
+  if (pageIndex === 0 && layout.firstPageDifferent) return layout.firstPage || defaultDocumentPageVariant;
+  if ((pageIndex + 1) % 2 === 0 && layout.oddEvenDifferent) return layout.evenPage || defaultDocumentPageVariant;
+  return layout;
+}
 
 type RecentDocument = {
   id: number;
@@ -934,7 +971,7 @@ function App() {
       setCurrentDocumentId(created.id);
       setCurrentTitle(created.title);
       setContent(created.content || plainTextToHtml(defaultContent));
-      setPageLayout(created.pageLayout || { ...defaultDocumentPageLayout });
+      setPageLayout(normalizeDocumentPageLayout(created.pageLayout));
       setSaveStatus("已创建");
       await loadRecentDocuments();
     }
@@ -1065,7 +1102,8 @@ function App() {
       setTone(document.tone);
       setOutline(toOutlineItems(document.outline || []));
       setContent(document.content || "<p></p>");
-      setPageLayout(document.pageLayout || { ...defaultDocumentPageLayout });
+      // 中文注解：历史文档只有默认页三项字段，打开时补齐首页和偶数页对象，避免启用高级页面设置时崩溃。
+      setPageLayout(normalizeDocumentPageLayout(document.pageLayout));
       setSelectedTemplate(documentTemplate);
       setActivePanel("editor");
       setSaveStatus("已打开");
@@ -1951,9 +1989,26 @@ function Editor(props: {
             <details className="page-layout-menu">
               <summary title="设置页眉、页脚和页码"><FileText size={16} />页面设置</summary>
               <div className="page-layout-popover">
-                <label>页眉<input type="text" aria-label="页眉文字" maxLength={500} value={props.pageLayout.headerText} onChange={(event) => props.setPageLayout((current) => ({ ...current, headerText: event.target.value }))} /></label>
-                <label>页脚<input type="text" aria-label="页脚文字" maxLength={500} value={props.pageLayout.footerText} onChange={(event) => props.setPageLayout((current) => ({ ...current, footerText: event.target.value }))} /></label>
-                <label className="page-number-toggle"><input type="checkbox" checked={props.pageLayout.pageNumberEnabled} onChange={(event) => props.setPageLayout((current) => ({ ...current, pageNumberEnabled: event.target.checked }))} />显示页码</label>
+                <div className="page-layout-section">
+                  <strong>默认页</strong>
+                  <label>页眉<input type="text" aria-label="默认页眉文字" maxLength={500} value={props.pageLayout.headerText} onChange={(event) => props.setPageLayout((current) => ({ ...current, headerText: event.target.value }))} /></label>
+                  <label>页脚<input type="text" aria-label="默认页脚文字" maxLength={500} value={props.pageLayout.footerText} onChange={(event) => props.setPageLayout((current) => ({ ...current, footerText: event.target.value }))} /></label>
+                  <label className="page-number-toggle"><input type="checkbox" checked={props.pageLayout.pageNumberEnabled} onChange={(event) => props.setPageLayout((current) => ({ ...current, pageNumberEnabled: event.target.checked }))} />显示页码</label>
+                </div>
+                <label className="page-number-toggle page-layout-switch"><input type="checkbox" checked={props.pageLayout.firstPageDifferent} onChange={(event) => props.setPageLayout((current) => ({ ...current, firstPageDifferent: event.target.checked }))} />首页不同</label>
+                {props.pageLayout.firstPageDifferent ? <div className="page-layout-section page-layout-variant">
+                  <strong>首页</strong>
+                  <label>页眉<input type="text" aria-label="首页页眉文字" maxLength={500} value={props.pageLayout.firstPage?.headerText || ""} onChange={(event) => props.setPageLayout((current) => ({ ...current, firstPage: { ...(current.firstPage || defaultDocumentPageVariant), headerText: event.target.value } }))} /></label>
+                  <label>页脚<input type="text" aria-label="首页页脚文字" maxLength={500} value={props.pageLayout.firstPage?.footerText || ""} onChange={(event) => props.setPageLayout((current) => ({ ...current, firstPage: { ...(current.firstPage || defaultDocumentPageVariant), footerText: event.target.value } }))} /></label>
+                  <label className="page-number-toggle"><input type="checkbox" checked={Boolean(props.pageLayout.firstPage?.pageNumberEnabled)} onChange={(event) => props.setPageLayout((current) => ({ ...current, firstPage: { ...(current.firstPage || defaultDocumentPageVariant), pageNumberEnabled: event.target.checked } }))} />显示页码</label>
+                </div> : null}
+                <label className="page-number-toggle page-layout-switch"><input type="checkbox" checked={props.pageLayout.oddEvenDifferent} onChange={(event) => props.setPageLayout((current) => ({ ...current, oddEvenDifferent: event.target.checked }))} />奇偶页不同</label>
+                {props.pageLayout.oddEvenDifferent ? <div className="page-layout-section page-layout-variant">
+                  <strong>偶数页</strong>
+                  <label>页眉<input type="text" aria-label="偶数页页眉文字" maxLength={500} value={props.pageLayout.evenPage?.headerText || ""} onChange={(event) => props.setPageLayout((current) => ({ ...current, evenPage: { ...(current.evenPage || defaultDocumentPageVariant), headerText: event.target.value } }))} /></label>
+                  <label>页脚<input type="text" aria-label="偶数页页脚文字" maxLength={500} value={props.pageLayout.evenPage?.footerText || ""} onChange={(event) => props.setPageLayout((current) => ({ ...current, evenPage: { ...(current.evenPage || defaultDocumentPageVariant), footerText: event.target.value } }))} /></label>
+                  <label className="page-number-toggle"><input type="checkbox" checked={Boolean(props.pageLayout.evenPage?.pageNumberEnabled)} onChange={(event) => props.setPageLayout((current) => ({ ...current, evenPage: { ...(current.evenPage || defaultDocumentPageVariant), pageNumberEnabled: event.target.checked } }))} />显示页码</label>
+                </div> : null}
               </div>
             </details>
             {viewMode === "edit" ? <>
@@ -2027,19 +2082,20 @@ function Editor(props: {
             </div>
             {viewMode === "page" ? (
               <div className="paged-preview" aria-label="分页预览">
-                {previewPages.map((page, index) => (
-                  <article className="page-sheet" key={index}>
-                    {props.pageLayout.headerText ? <div className="page-header">{props.pageLayout.headerText}</div> : null}
+                {previewPages.map((page, index) => {
+                  const pageVariant = pageVariantForPage(props.pageLayout, index);
+                  return <article className="page-sheet" key={index}>
+                    {pageVariant.headerText ? <div className="page-header">{pageVariant.headerText}</div> : null}
                     <div className="page-body">
                       {page.map((html, blockIndex) => <div className="page-block" key={`${index}-${blockIndex}`} dangerouslySetInnerHTML={{ __html: html }} />)}
                     </div>
-                    {props.pageLayout.footerText || props.pageLayout.pageNumberEnabled ? <div className="page-footer">
-                      {props.pageLayout.footerText ? <span>{props.pageLayout.footerText}</span> : null}
-                      {props.pageLayout.footerText && props.pageLayout.pageNumberEnabled ? <span aria-hidden="true">·</span> : null}
-                      {props.pageLayout.pageNumberEnabled ? <span>第 {index + 1} 页 / 共 {previewPages.length} 页</span> : null}
+                    {pageVariant.footerText || pageVariant.pageNumberEnabled ? <div className="page-footer">
+                      {pageVariant.footerText ? <span>{pageVariant.footerText}</span> : null}
+                      {pageVariant.footerText && pageVariant.pageNumberEnabled ? <span aria-hidden="true">·</span> : null}
+                      {pageVariant.pageNumberEnabled ? <span>第 {index + 1} 页 / 共 {previewPages.length} 页</span> : null}
                     </div> : null}
-                  </article>
-                ))}
+                  </article>;
+                })}
               </div>
             ) : null}
             <div className="pagination-measurer" ref={paginationMeasureRef} aria-hidden="true" />
