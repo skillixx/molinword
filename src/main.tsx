@@ -511,6 +511,13 @@ const tableCellShadingOptions = [
   { label: "浅绿", value: "#E8F3F0" },
   { label: "浅黄", value: "#FFF2CC" }
 ];
+const tableCellBorderOptions = [
+  { label: "默认边框", value: "default" },
+  { label: "无边框", value: "none" },
+  { label: "细实线", value: "thin" },
+  { label: "粗实线", value: "thick" },
+  { label: "虚线", value: "dashed" }
+];
 const tableRowHeightOptions = [
   { label: "自动行高", value: "0" },
   { label: "0.8 cm", value: "454" },
@@ -781,11 +788,43 @@ function normalizeTableCellStyle(value: unknown) {
     if (/^padding-(?:top|right|bottom|left)$/.test(name) && /^\d+(?:\.\d+)?px$/.test(styleValue)) styles.push(`${name}: ${styleValue}`);
     if (name === "vertical-align" && /^(?:top|middle|bottom)$/.test(styleValue)) styles.push(`${name}: ${styleValue}`);
     if (name === "background-color" && /^#[0-9a-f]{6}$/i.test(styleValue)) styles.push(`${name}: ${styleValue.toUpperCase()}`);
+    if (/^border-(?:top|right|bottom|left)$/.test(name) && /^(?:none|\d+(?:\.\d+)?px (?:solid|dashed|dotted|double) #[0-9a-f]{6})$/i.test(styleValue)) styles.push(`${name}: ${styleValue}`);
   }
   return styles.length ? styles.join("; ") : null;
 }
 
-function tableCellStyle(cellMargins: string | null, verticalAlign: string, shading: string) {
+function normalizeTableBorders(value: unknown, includeInside = false) {
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    const result: Record<string, { style: string; size: number; color: string }> = {};
+    const sides = includeInside ? ["top", "right", "bottom", "left", "insideHorizontal", "insideVertical"] : ["top", "right", "bottom", "left"];
+    const styles = new Set(["single", "dashed", "dashSmallGap", "dotted", "dotDash", "dotDotDash", "double", "thick", "none", "nil"]);
+    for (const side of sides) {
+      const border = parsed?.[side];
+      if (!border || !styles.has(String(border.style))) continue;
+      const size = Math.max(0, Math.min(96, Math.round(Number(border.size) || 0)));
+      const color = /^#[0-9a-f]{6}$/i.test(String(border.color || "")) ? String(border.color).toUpperCase() : "#000000";
+      result[side] = { style: String(border.style), size, color };
+    }
+    return Object.keys(result).length ? JSON.stringify(result) : null;
+  } catch {
+    return null;
+  }
+}
+
+function tableBorderPreset(value: string) {
+  if (value === "default") return null;
+  const border = value === "none"
+    ? { style: "nil", size: 0, color: "#000000" }
+    : value === "thick"
+      ? { style: "single", size: 12, color: "#000000" }
+      : value === "dashed"
+        ? { style: "dashed", size: 6, color: "#6B7280" }
+        : { style: "single", size: 4, color: "#000000" };
+  return normalizeTableBorders(Object.fromEntries(["top", "right", "bottom", "left"].map((side) => [side, border])));
+}
+
+function tableCellStyle(cellMargins: string | null, verticalAlign: string, shading: string, cellBorders: string | null = null) {
   const styles: string[] = [];
   try {
     const margins = JSON.parse(cellMargins || "{}");
@@ -797,6 +836,20 @@ function tableCellStyle(cellMargins: string | null, verticalAlign: string, shadi
   }
   if (["top", "center", "bottom"].includes(verticalAlign)) styles.push(`vertical-align: ${verticalAlign === "center" ? "middle" : verticalAlign}`);
   if (/^#[0-9a-f]{6}$/i.test(shading)) styles.push(`background-color: ${shading.toUpperCase()}`);
+  try {
+    const borders = JSON.parse(cellBorders || "{}");
+    for (const side of ["top", "right", "bottom", "left"]) {
+      const border = borders[side];
+      if (!border) continue;
+      if (["none", "nil"].includes(border.style) || border.size <= 0) styles.push(`border-${side}: none`);
+      else {
+        const cssStyle = border.style === "double" ? "double" : border.style === "dotted" ? "dotted" : border.style.includes("dash") || border.style.startsWith("dot") ? "dashed" : "solid";
+        styles.push(`border-${side}: ${Math.round(Number(border.size) / 6 * 100) / 100}px ${cssStyle} ${border.color}`);
+      }
+    }
+  } catch {
+    // 中文注解：历史边框数据损坏时保留默认网格，不阻断文档编辑。
+  }
   return styles.length ? styles.join("; ") : null;
 }
 
@@ -966,6 +1019,14 @@ const DocumentTable = Table.extend({
         default: "autofit",
         parseHTML: (element) => element.getAttribute("data-table-layout") === "fixed" ? "fixed" : "autofit",
         renderHTML: (attributes) => ({ "data-table-layout": attributes.tableLayout === "fixed" ? "fixed" : "autofit" })
+      },
+      tableBorders: {
+        default: null,
+        parseHTML: (element) => normalizeTableBorders(element.getAttribute("data-table-borders"), true),
+        renderHTML: (attributes) => {
+          const borders = normalizeTableBorders(attributes.tableBorders, true);
+          return borders ? { "data-table-borders": borders } : {};
+        }
       }
     };
   }
@@ -996,6 +1057,14 @@ function documentTableCellAttributes() {
       parseHTML: (element: HTMLElement) => /^#[0-9a-f]{6}$/i.test(element.getAttribute("data-cell-shading") || "") ? element.getAttribute("data-cell-shading")?.toUpperCase() : null,
       renderHTML: (attributes: Record<string, unknown>) => /^#[0-9a-f]{6}$/i.test(String(attributes.cellShading || "")) ? { "data-cell-shading": String(attributes.cellShading).toUpperCase() } : {}
     },
+    cellBorders: {
+      default: null,
+      parseHTML: (element: HTMLElement) => normalizeTableBorders(element.getAttribute("data-cell-borders")),
+      renderHTML: (attributes: Record<string, unknown>) => {
+        const borders = normalizeTableBorders(attributes.cellBorders);
+        return borders ? { "data-cell-borders": borders } : {};
+      }
+    },
     style: {
       default: null,
       parseHTML: (element: HTMLElement) => normalizeTableCellStyle(element.getAttribute("style")),
@@ -1003,7 +1072,8 @@ function documentTableCellAttributes() {
         const semanticStyle = tableCellStyle(
           normalizeTableCellMargins(attributes.cellMargins),
           String(attributes.cellVerticalAlign || ""),
-          String(attributes.cellShading || "")
+          String(attributes.cellShading || ""),
+          normalizeTableBorders(attributes.cellBorders)
         );
         // 中文注解：合并、拆分单元格后 Tiptap 可能重建通用 style，优先由 Word 语义属性还原完整视觉格式。
         const style = semanticStyle || normalizeTableCellStyle(attributes.style);
@@ -2905,7 +2975,7 @@ function Editor(props: {
     setSelectionHint(applied ? `已切换${label}。` : "请把光标放到段落或标题中，再设置分页控制。");
   };
 
-  const updateCurrentTableCell = (patch: { margin?: number; verticalAlign?: string | null; shading?: string | null }, label: string) => {
+  const updateCurrentTableCell = (patch: { margin?: number; verticalAlign?: string | null; shading?: string | null; borderPreset?: string }, label: string) => {
     if (!editor || !editor.isActive("table")) {
       setSelectionHint("请先把光标放到需要设置的表格单元格中。");
       return;
@@ -2917,11 +2987,13 @@ function Editor(props: {
       : normalizeTableCellMargins({ top: patch.margin, right: patch.margin, bottom: patch.margin, left: patch.margin });
     const verticalAlign = patch.verticalAlign === undefined ? String(current.cellVerticalAlign || "") : String(patch.verticalAlign || "");
     const shading = patch.shading === undefined ? String(current.cellShading || "") : String(patch.shading || "");
-    const style = tableCellStyle(margins, verticalAlign, shading);
+    const borders = patch.borderPreset === undefined ? normalizeTableBorders(current.cellBorders) : tableBorderPreset(patch.borderPreset);
+    const style = tableCellStyle(margins, verticalAlign, shading, borders);
     const applied = editor.chain().focus()
       .setCellAttribute("cellMargins", margins)
       .setCellAttribute("cellVerticalAlign", verticalAlign || null)
       .setCellAttribute("cellShading", shading || null)
+      .setCellAttribute("cellBorders", borders)
       .setCellAttribute("style", style)
       .run();
     // 中文注解：语义属性用于 Word 导出，style 用于编辑器和分页预览，两者必须在同一事务中更新。
@@ -3236,6 +3308,7 @@ function Editor(props: {
             <FormatSelect title="设置当前单元格垂直对齐" placeholder="单元格对齐" options={tableCellVerticalAlignOptions} onSelect={(value, label) => updateCurrentTableCell({ verticalAlign: value }, `单元格${label}对齐`)} />
             <FormatSelect title="设置当前单元格内边距" placeholder="单元格边距" options={tableCellPaddingOptions} onSelect={(value, label) => updateCurrentTableCell({ margin: Number(value) }, `${label}单元格边距`)} />
             <FormatSelect title="设置当前单元格底色" placeholder="单元格底色" options={tableCellShadingOptions} onSelect={(value, label) => updateCurrentTableCell({ shading: value === "none" ? null : value }, `单元格${label}`)} />
+            <FormatSelect title="设置当前单元格边框" placeholder="单元格边框" options={tableCellBorderOptions} onSelect={(value, label) => updateCurrentTableCell({ borderPreset: value }, `单元格${label}`)} />
             <button onClick={() => imageInputRef.current?.click()} title="插入图片"><ImageIcon size={16} />图片</button>
             <input ref={imageInputRef} className="hidden-file-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={(event) => { insertImageFile(event.target.files?.[0] || null); event.currentTarget.value = ""; }} />
             <span className="format-divider" />

@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import express from "express";
-import { AlignmentType, Document, Footer, Header, HeadingLevel, HeightRule, ImageRun, LevelFormat, LineRuleType, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, Tab, Table, TableCell, TableLayoutType, TableRow, TextRun, VerticalAlignTable, WidthType } from "docx";
+import { AlignmentType, BorderStyle, Document, Footer, Header, HeadingLevel, HeightRule, ImageRun, LevelFormat, LineRuleType, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, Tab, Table, TableCell, TableLayoutType, TableRow, TextRun, VerticalAlignTable, WidthType } from "docx";
 import { imageSize } from "image-size";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
@@ -347,10 +347,10 @@ function sanitizeImportedHtml(value = "") {
       li: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops"],
       span: ["style", "class", "data-docx-tab", "data-tab-position", "data-tab-alignment"],
       mark: ["data-highlight", "style"],
-      table: ["style", "data-table-width-type", "data-table-width-value", "data-table-grid-width", "data-table-layout"],
+      table: ["style", "data-table-width-type", "data-table-width-value", "data-table-grid-width", "data-table-layout", "data-table-borders"],
       tr: ["style", "data-row-height", "data-row-height-rule", "data-row-cant-split", "data-row-repeat-header"],
-      th: ["style", "colspan", "rowspan", "colwidth", "data-docx-cell", "data-cell-margins", "data-cell-vertical-align", "data-cell-shading"],
-      td: ["style", "colspan", "rowspan", "colwidth", "data-docx-cell", "data-cell-margins", "data-cell-vertical-align", "data-cell-shading"],
+      th: ["style", "colspan", "rowspan", "colwidth", "data-docx-cell", "data-cell-margins", "data-cell-vertical-align", "data-cell-shading", "data-cell-borders"],
+      td: ["style", "colspan", "rowspan", "colwidth", "data-docx-cell", "data-cell-margins", "data-cell-vertical-align", "data-cell-shading", "data-cell-borders"],
       img: ["src", "alt", "style"],
       div: ["data-page-break", "data-section-break", "data-section-layout", "class"]
     },
@@ -391,7 +391,11 @@ function sanitizeImportedHtml(value = "") {
         "padding-bottom": [/^\d+(?:\.\d+)?px$/],
         "padding-left": [/^\d+(?:\.\d+)?px$/],
         "vertical-align": [/^(?:top|middle|bottom)$/],
-        "background-color": [/^#[0-9a-f]{6}$/i]
+        "background-color": [/^#[0-9a-f]{6}$/i],
+        "border-top": [/^(?:none|\d+(?:\.\d+)?px (?:solid|dashed|dotted|double) #[0-9a-f]{6})$/i],
+        "border-right": [/^(?:none|\d+(?:\.\d+)?px (?:solid|dashed|dotted|double) #[0-9a-f]{6})$/i],
+        "border-bottom": [/^(?:none|\d+(?:\.\d+)?px (?:solid|dashed|dotted|double) #[0-9a-f]{6})$/i],
+        "border-left": [/^(?:none|\d+(?:\.\d+)?px (?:solid|dashed|dotted|double) #[0-9a-f]{6})$/i]
       },
       td: {
         "padding-top": [/^\d+(?:\.\d+)?px$/],
@@ -399,7 +403,11 @@ function sanitizeImportedHtml(value = "") {
         "padding-bottom": [/^\d+(?:\.\d+)?px$/],
         "padding-left": [/^\d+(?:\.\d+)?px$/],
         "vertical-align": [/^(?:top|middle|bottom)$/],
-        "background-color": [/^#[0-9a-f]{6}$/i]
+        "background-color": [/^#[0-9a-f]{6}$/i],
+        "border-top": [/^(?:none|\d+(?:\.\d+)?px (?:solid|dashed|dotted|double) #[0-9a-f]{6})$/i],
+        "border-right": [/^(?:none|\d+(?:\.\d+)?px (?:solid|dashed|dotted|double) #[0-9a-f]{6})$/i],
+        "border-bottom": [/^(?:none|\d+(?:\.\d+)?px (?:solid|dashed|dotted|double) #[0-9a-f]{6})$/i],
+        "border-left": [/^(?:none|\d+(?:\.\d+)?px (?:solid|dashed|dotted|double) #[0-9a-f]{6})$/i]
       }
     }
   });
@@ -1077,12 +1085,13 @@ async function parseStyledDocxTableCell(cellNode, context, tagName) {
   const rawVerticalAlign = xmlVal(xmlChild(tcPr, "w:vAlign"));
   const verticalAlign = ["top", "center", "bottom"].includes(rawVerticalAlign) ? rawVerticalAlign : "";
   const shading = docxShadingColor(xmlChild(tcPr, "w:shd"), context.themeColors || {});
+  const cellBorders = parseDocxBorders(xmlChild(tcPr, "w:tcBorders"), context.themeColors || {}, false);
 
   const parsedParagraphs = await Promise.all(xmlChildren(cellNode, "w:p")
     .map((paragraph) => parseStyledDocxParagraph(paragraph, context)));
   // 中文注解：单元格内同样可能包含连续编号段落，必须在表格结构内恢复 ol/ul，不能退化为普通 p。
   const paragraphs = renderDocxParagraphs(parsedParagraphs) || "<p><br></p>";
-  return { tagName, paragraphs, columnSpan, rowSpan: 1, verticalMerge, cellWidth, columnWidths: [], cellMargins, verticalAlign, shading };
+  return { tagName, paragraphs, columnSpan, rowSpan: 1, verticalMerge, cellWidth, columnWidths: [], cellMargins, verticalAlign, shading, cellBorders, columnIndex: 0 };
 }
 
 function parseDocxCellMargins(container) {
@@ -1110,6 +1119,36 @@ function docxShadingColor(shadingNode, themeColors = {}) {
   );
 }
 
+const supportedDocxBorderStyles = new Set(["single", "dashed", "dashSmallGap", "dotted", "dotDash", "dotDotDash", "double", "thick", "none", "nil"]);
+
+function parseDocxBorders(container, themeColors = {}, includeInside = true) {
+  const borders = {};
+  const names = {
+    top: ["w:top"], right: ["w:right", "w:end"], bottom: ["w:bottom"], left: ["w:left", "w:start"],
+    insideHorizontal: ["w:insideH"], insideVertical: ["w:insideV"]
+  };
+  for (const [side, elementNames] of Object.entries(names)) {
+    if (!includeInside && side.startsWith("inside")) continue;
+    const element = elementNames.map((name) => xmlChild(container, name)).find(Boolean);
+    if (!element) continue;
+    const rawStyle = firstValue(element.attribs, ["w:val", "val"]);
+    const style = supportedDocxBorderStyles.has(rawStyle) ? rawStyle : "single";
+    const rawColor = firstValue(element.attribs, ["w:color", "color"]);
+    const themeColor = themeColors[firstValue(element.attribs, ["w:themeColor", "themeColor"])];
+    const color = /^[0-9a-f]{6}$/i.test(rawColor) ? `#${rawColor.toUpperCase()}` : (themeColor ? transformDocxThemeColor(themeColor, firstValue(element.attribs, ["w:themeTint", "themeTint"]), firstValue(element.attribs, ["w:themeShade", "themeShade"])) : "#000000");
+    const rawSize = Number(firstValue(element.attribs, ["w:sz", "sz"]));
+    const size = ["none", "nil"].includes(style) ? 0 : Math.max(1, Math.min(96, Number.isFinite(rawSize) && rawSize > 0 ? Math.round(rawSize) : 4));
+    borders[side] = { style, size, color };
+  }
+  return borders;
+}
+
+function docxBorderCss(border) {
+  if (!border || ["none", "nil"].includes(border.style) || border.size <= 0) return "none";
+  const cssStyle = border.style === "double" ? "double" : border.style === "dotted" ? "dotted" : border.style.includes("dash") || border.style.startsWith("dot") ? "dashed" : "solid";
+  return `${Math.round(border.size / 6 * 100) / 100}px ${cssStyle} ${border.color}`;
+}
+
 async function parseStyledDocxTable(tableNode, context) {
   const tableProperties = xmlChild(tableNode, "w:tblPr");
   const tableWidthNode = xmlChild(tableProperties, "w:tblW");
@@ -1118,6 +1157,7 @@ async function parseStyledDocxTable(tableNode, context) {
   const tableWidthValue = Math.max(0, Math.round(Number(firstValue(tableWidthNode?.attribs, ["w:w", "w"])) || 0));
   const tableLayout = firstValue(xmlChild(tableProperties, "w:tblLayout")?.attribs, ["w:type", "type"]) === "fixed" ? "fixed" : "autofit";
   const tableCellMargins = parseDocxCellMargins(xmlChild(tableProperties, "w:tblCellMar"));
+  const tableBorders = parseDocxBorders(xmlChild(tableProperties, "w:tblBorders"), context.themeColors || {});
   const gridWidths = xmlChildren(xmlChild(tableNode, "w:tblGrid"), "w:gridCol")
     .map((column) => Math.max(0, Math.round(Number(firstValue(column.attribs, ["w:w", "w"])) || 0)))
     .filter((width) => width > 0)
@@ -1147,12 +1187,14 @@ async function parseStyledDocxTable(tableNode, context) {
         const origin = activeVerticalMerges.get(columnIndex);
         if (origin) {
           origin.rowSpan += 1;
+          if (cell.cellBorders.bottom) origin.cellBorders.bottom = cell.cellBorders.bottom;
           for (let offset = 0; offset < cell.columnSpan; offset += 1) nextVerticalMerges.set(columnIndex + offset, origin);
         } else {
           // 中文注解：损坏或裁剪过的 DOCX 可能只有 continue 没有 restart，此时保留为普通单元格，避免内容消失。
           visibleCells.push({ ...cell, verticalMerge: "" });
         }
       } else {
+        cell.columnIndex = columnIndex;
         visibleCells.push(cell);
         if (cell.verticalMerge === "restart") {
           for (let offset = 0; offset < cell.columnSpan; offset += 1) nextVerticalMerges.set(columnIndex + offset, cell);
@@ -1163,7 +1205,8 @@ async function parseStyledDocxTable(tableNode, context) {
     rows.push({ cells: visibleCells, rowHeight, rowHeightRule, cantSplit, repeatHeader });
     activeVerticalMerges = nextVerticalMerges;
   }
-  const renderedRows = rows.map((row) => {
+  const totalColumns = gridWidths.length || Math.max(0, ...rows.map((row) => row.cells.reduce((total, cell) => total + cell.columnSpan, 0)));
+  const renderedRows = rows.map((row, rowIndex) => {
     const cells = row.cells;
     const html = cells.map((cell) => {
       const attrs = [];
@@ -1174,12 +1217,22 @@ async function parseStyledDocxTable(tableNode, context) {
       if (Object.keys(cell.cellMargins).length) attrs.push(`data-cell-margins="${escapeHtml(JSON.stringify(cell.cellMargins))}"`);
       if (cell.verticalAlign) attrs.push(`data-cell-vertical-align="${cell.verticalAlign}"`);
       if (cell.shading) attrs.push(`data-cell-shading="${cell.shading}"`);
+      const effectiveBorders = {
+        top: cell.cellBorders.top || tableBorders[rowIndex === 0 ? "top" : "insideHorizontal"],
+        right: cell.cellBorders.right || tableBorders[cell.columnIndex + cell.columnSpan >= totalColumns ? "right" : "insideVertical"],
+        bottom: cell.cellBorders.bottom || tableBorders[rowIndex + cell.rowSpan >= rows.length ? "bottom" : "insideHorizontal"],
+        left: cell.cellBorders.left || tableBorders[cell.columnIndex === 0 ? "left" : "insideVertical"]
+      };
+      if (Object.values(effectiveBorders).some(Boolean)) attrs.push(`data-cell-borders="${escapeHtml(JSON.stringify(effectiveBorders))}"`);
       const styles = [];
       for (const side of ["top", "right", "bottom", "left"]) {
         if (cell.cellMargins[side] !== undefined) styles.push(`padding-${side}: ${Math.round(cell.cellMargins[side] * 96 / 1440 * 100) / 100}px`);
       }
       if (cell.verticalAlign) styles.push(`vertical-align: ${cell.verticalAlign === "center" ? "middle" : cell.verticalAlign}`);
       if (cell.shading) styles.push(`background-color: ${cell.shading}`);
+      for (const side of ["top", "right", "bottom", "left"]) {
+        if (effectiveBorders[side]) styles.push(`border-${side}: ${docxBorderCss(effectiveBorders[side])}`);
+      }
       if (styles.length) attrs.push(`style="${styles.join("; ")}"`);
       return `<${cell.tagName}${attrs.length ? ` ${attrs.join(" ")}` : ""}>${cell.paragraphs}</${cell.tagName}>`;
     }).join("");
@@ -1204,6 +1257,7 @@ async function parseStyledDocxTable(tableNode, context) {
     `data-table-width-value="${tableWidthValue}"`,
     `data-table-grid-width="${gridWidth}"`,
     `data-table-layout="${tableLayout}"`,
+    ...(Object.keys(tableBorders).length ? [`data-table-borders="${escapeHtml(JSON.stringify(tableBorders))}"`] : []),
     `style="${widthStyle}; table-layout: ${tableLayout === "fixed" ? "fixed" : "auto"}"`
   ];
   // 中文注解：tblGrid 是 Word 实际分页使用的列几何，转换为 colwidth 后由编辑器、分页器和再次导出共同使用。
@@ -2048,6 +2102,7 @@ function tableFromNode(tableNode, listState) {
           rowSpan: rowSpan > 1 ? rowSpan : undefined,
           width: columnWidths.length ? { size: columnWidths.reduce((total, width) => total + width, 0), type: WidthType.DXA } : undefined,
           margins: docxCellMarginsFromNode(cellNode),
+          borders: docxBordersFromNode(cellNode, "data-cell-borders", false),
           verticalAlign: ({ top: VerticalAlignTable.TOP, center: VerticalAlignTable.CENTER, bottom: VerticalAlignTable.BOTTOM })[cellNode.attribs?.["data-cell-vertical-align"]],
           shading: docxCellShadingFromNode(cellNode) || (cellNode.name === "th" && cellNode.attribs?.["data-docx-cell"] !== "true" ? { fill: "F3F6F8" } : undefined)
         });
@@ -2074,8 +2129,32 @@ function tableFromNode(tableNode, listState) {
     width,
     columnWidths: resolvedColumnWidths.length ? resolvedColumnWidths : undefined,
     layout: tableNode.attribs?.["data-table-layout"] === "fixed" ? TableLayoutType.FIXED : TableLayoutType.AUTOFIT,
+    borders: docxBordersFromNode(tableNode, "data-table-borders", true),
     rows
   });
+}
+
+function docxBordersFromNode(node, attributeName, includeInside) {
+  try {
+    const source = JSON.parse(String(node.attribs?.[attributeName] || ""));
+    const names = includeInside ? ["top", "right", "bottom", "left", "insideHorizontal", "insideVertical"] : ["top", "right", "bottom", "left"];
+    const borders = {};
+    const styleMap = {
+      single: BorderStyle.SINGLE, dashed: BorderStyle.DASHED, dashSmallGap: BorderStyle.DASH_SMALL_GAP,
+      dotted: BorderStyle.DOTTED, dotDash: BorderStyle.DOT_DASH, dotDotDash: BorderStyle.DOT_DOT_DASH,
+      double: BorderStyle.DOUBLE, thick: BorderStyle.THICK, none: BorderStyle.NONE, nil: BorderStyle.NIL
+    };
+    for (const side of names) {
+      const border = source?.[side];
+      if (!border || !styleMap[border.style]) continue;
+      const size = Math.max(0, Math.min(96, Math.round(Number(border.size) || 0)));
+      const color = /^#[0-9a-f]{6}$/i.test(String(border.color || "")) ? String(border.color).slice(1).toUpperCase() : "000000";
+      borders[side] = { style: styleMap[border.style], size, color };
+    }
+    return Object.keys(borders).length ? borders : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function docxCellMarginsFromNode(cellNode) {

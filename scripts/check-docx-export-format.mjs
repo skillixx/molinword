@@ -33,7 +33,7 @@ const content = `
   <p data-keep-next="true" data-keep-lines="true" data-page-break-before="true" data-widow-control="true">Pagination controlled paragraph</p>
   <p data-widow-control="false">Widow control disabled paragraph</p>
   <p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab project<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Tab amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p>
-  <table data-table-width-type="dxa" data-table-width-value="6000" data-table-grid-width="6000" data-table-layout="fixed" style="width:400px;table-layout:fixed"><tbody><tr data-row-height="720" data-row-height-rule="exact" data-row-cant-split="true" data-row-repeat-header="true" style="height:48px"><th colwidth="120" data-docx-cell="true" data-cell-margins='{"top":100,"right":600,"bottom":300,"left":400}' data-cell-vertical-align="center" data-cell-shading="#D9EAD3" style="padding-top:6.67px;padding-right:40px;padding-bottom:20px;padding-left:26.67px;vertical-align:middle;background-color:#D9EAD3"><p>Geometry A</p></th><th colwidth="280" data-docx-cell="true"><p>Geometry B</p></th></tr><tr><td colwidth="120"><p>Short</p></td><td colwidth="280"><p>Wide content</p></td></tr></tbody></table>
+  <table data-table-width-type="dxa" data-table-width-value="6000" data-table-grid-width="6000" data-table-layout="fixed" data-table-borders='{"top":{"style":"single","size":8,"color":"#FF0000"},"right":{"style":"dashed","size":6,"color":"#00AA00"},"bottom":{"style":"double","size":12,"color":"#0000FF"},"left":{"style":"nil","size":0,"color":"#000000"},"insideHorizontal":{"style":"dotted","size":4,"color":"#888888"},"insideVertical":{"style":"single","size":4,"color":"#000000"}}' style="width:400px;table-layout:fixed"><tbody><tr data-row-height="720" data-row-height-rule="exact" data-row-cant-split="true" data-row-repeat-header="true" style="height:48px"><th colwidth="120" data-docx-cell="true" data-cell-margins='{"top":100,"right":600,"bottom":300,"left":400}' data-cell-vertical-align="center" data-cell-shading="#D9EAD3" data-cell-borders='{"top":{"style":"single","size":8,"color":"#FF0000"},"right":{"style":"double","size":16,"color":"#800080"},"bottom":{"style":"dotted","size":4,"color":"#888888"},"left":{"style":"nil","size":0,"color":"#000000"}}' style="padding-top:6.67px;padding-right:40px;padding-bottom:20px;padding-left:26.67px;vertical-align:middle;background-color:#D9EAD3;border-top:1.33px solid #FF0000;border-right:2.67px double #800080;border-bottom:0.67px dotted #888888;border-left:none"><p>Geometry A</p></th><th colwidth="280" data-docx-cell="true"><p>Geometry B</p></th></tr><tr><td colwidth="120"><p>Short</p></td><td colwidth="280"><p>Wide content</p></td></tr></tbody></table>
   <ol>
     <li>Ordered item 1<ol><li>Nested ordered item</li></ol></li>
     <li>Ordered item 2</li>
@@ -215,6 +215,9 @@ assert.equal((tabParagraphXml.match(/<w:tab\/>/g) || []).length, 2);
 const geometryTableXml = (documentXml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/g) || []).find((table) => table.includes("Geometry A")) || "";
 assert.match(geometryTableXml, /<w:tblW w:type="dxa" w:w="6000"\/>/);
 assert.match(geometryTableXml, /<w:tblLayout w:type="fixed"\/>/);
+const geometryTableBordersXml = geometryTableXml.match(/<w:tblBorders>[\s\S]*?<\/w:tblBorders>/)?.[0] || "";
+assert.match(geometryTableBordersXml, /<w:top w:val="single" w:color="FF0000" w:sz="8"\/>/);
+assert.match(geometryTableBordersXml, /<w:insideH w:val="dotted" w:color="888888" w:sz="4"\/>/);
 assert.match(geometryTableXml, /<w:tblGrid><w:gridCol w:w="1800"\/><w:gridCol w:w="4200"\/><\/w:tblGrid>/);
 assert.match(geometryTableXml, /<w:tcW w:type="dxa" w:w="1800"\/>/);
 assert.match(geometryTableXml, /<w:tcW w:type="dxa" w:w="4200"\/>/);
@@ -226,6 +229,9 @@ const geometryCellXml = (geometryTableXml.match(/<w:tc>[\s\S]*?<\/w:tc>/g) || []
 for (const [side, width] of [["top", 100], ["right", 600], ["bottom", 300], ["left", 400]]) assert.match(geometryCellXml, new RegExp(`<w:${side} w:type="dxa" w:w="${width}"\\/>`));
 assert.match(geometryCellXml, /<w:shd w:fill="D9EAD3"\/>/);
 assert.match(geometryCellXml, /<w:vAlign w:val="center"\/>/);
+const geometryCellBordersXml = geometryCellXml.match(/<w:tcBorders>[\s\S]*?<\/w:tcBorders>/)?.[0] || "";
+assert.match(geometryCellBordersXml, /<w:right w:val="double" w:color="800080" w:sz="16"\/>/);
+assert.match(geometryCellBordersXml, /<w:left w:val="nil" w:color="000000" w:sz="0"\/>/);
 
 // 中文注解：编号列表、嵌套层级和项目符号必须保留各自语义，不能统一退化为一级圆点。
 assert.match(documentXml, /<w:numPr><w:ilvl w:val="0"\/><w:numId w:val="\d+"\/><\/w:numPr>/);

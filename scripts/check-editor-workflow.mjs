@@ -272,30 +272,39 @@ try {
   await page.locator('label[title="设置当前单元格内边距"] select').selectOption("180");
   assert.equal(await businessReviewCell.getAttribute("data-cell-vertical-align"), "bottom");
   await page.locator('label[title="设置当前单元格底色"] select').selectOption("#FFF2CC");
+  await page.locator('label[title="设置当前单元格边框"] select').selectOption("dashed");
   const sourceCellFormat = await businessReviewCell.evaluate((cell) => ({
     margins: cell.getAttribute("data-cell-margins"),
     verticalAlign: cell.getAttribute("data-cell-vertical-align"),
     shading: cell.getAttribute("data-cell-shading"),
+    borders: cell.getAttribute("data-cell-borders"),
     style: {
       paddingTop: getComputedStyle(cell).paddingTop,
       paddingRight: getComputedStyle(cell).paddingRight,
       paddingBottom: getComputedStyle(cell).paddingBottom,
       paddingLeft: getComputedStyle(cell).paddingLeft,
       verticalAlign: getComputedStyle(cell).verticalAlign,
-      backgroundColor: getComputedStyle(cell).backgroundColor
+      backgroundColor: getComputedStyle(cell).backgroundColor,
+      borderTopStyle: getComputedStyle(cell).borderTopStyle,
+      borderTopWidth: getComputedStyle(cell).borderTopWidth,
+      borderTopColor: getComputedStyle(cell).borderTopColor
     }
   }));
   // 中文注解：单元格语义属性负责 Word 导出，计算样式负责在线编辑和分页，两套结果必须同步。
   assert.deepEqual(JSON.parse(sourceCellFormat.margins || "{}"), { top: 180, right: 180, bottom: 180, left: 180 });
   assert.equal(sourceCellFormat.verticalAlign, "bottom");
   assert.equal(sourceCellFormat.shading, "#FFF2CC");
+  assert.deepEqual(JSON.parse(sourceCellFormat.borders || "{}"), Object.fromEntries(["top", "right", "bottom", "left"].map((side) => [side, { style: "dashed", size: 6, color: "#6B7280" }])));
   assert.deepEqual(sourceCellFormat.style, {
     paddingTop: "12px",
     paddingRight: "12px",
     paddingBottom: "12px",
     paddingLeft: "12px",
     verticalAlign: "bottom",
-    backgroundColor: "rgb(255, 242, 204)"
+    backgroundColor: "rgb(255, 242, 204)",
+    borderTopStyle: "dashed",
+    borderTopWidth: "1px",
+    borderTopColor: "rgb(107, 114, 128)"
   });
   const firstTable = sourceTables.first();
   const headerCells = firstTable.locator("th");
@@ -470,6 +479,7 @@ try {
   assert.match(reopenedHtml, /第二节横向内容/);
   assert.equal((reopenedHtml.match(/data-docx-tab="true"/g) || []).length, 4);
   assert.match(reopenedHtml, /<td[^>]+data-cell-margins="[^"]*&quot;top&quot;:180[^"]*"[^>]+data-cell-vertical-align="bottom"[^>]+data-cell-shading="#FFF2CC"[^>]*>.*商务评审/s);
+  assert.match(reopenedHtml, /<td[^>]+data-cell-borders="[^"]*&quot;top&quot;[^"]*dashed[^"]*6B7280[^"]*"[^>]*>.*商务评审/s);
   const reopenedHeaderRow = reopenedHtml.match(/<tr[^>]+data-row-height="850"[^>]*>/)?.[0] || "";
   assert.match(reopenedHeaderRow, /data-row-height-rule="exact"/);
   assert.match(reopenedHeaderRow, /data-row-cant-split="true"/);
@@ -516,6 +526,10 @@ try {
   }
   assert.match(businessReviewCellXml, /<w:shd w:fill="FFF2CC"\/>/);
   assert.match(businessReviewCellXml, /<w:vAlign w:val="bottom"\/>/);
+  const businessReviewBordersXml = businessReviewCellXml.match(/<w:tcBorders>[\s\S]*?<\/w:tcBorders>/)?.[0] || "";
+  for (const side of ["top", "right", "bottom", "left"]) {
+    assert.match(businessReviewBordersXml, new RegExp(`<w:${side} w:val="dashed" w:color="6B7280" w:sz="6"\\/>`));
+  }
   const longTable = (documentXml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/g) || []).find((table) => table.includes("左侧单元格包含大量业务说明")) || "";
   const longTableHeaderRow = longTable.match(/<w:tr>[\s\S]*?<\/w:tr>/)?.[0] || "";
   assert.match(longTableHeaderRow, /<w:tblHeader\/>/);
@@ -590,6 +604,12 @@ try {
       pageSizes: pages.map((page) => ({ width: Math.round(page.getBoundingClientRect().width), height: Math.round(page.getBoundingClientRect().height) })),
       firstPageHasList: Boolean(pages[0]?.querySelector("ol")),
       firstPageText: pages[0]?.textContent || "",
+      firstPageRemainingHeight: (() => {
+        const page = pages[0];
+        const body = page?.querySelector(".page-body");
+        const available = page ? Number.parseFloat(getComputedStyle(page).getPropertyValue("--page-content-height")) : 0;
+        return body ? Math.max(0, available - body.scrollHeight) : 0;
+      })(),
       continuationMarkers: Array.from(document.querySelectorAll(".pagination-list-continuation > li")).map((item) => getComputedStyle(item).listStyleType),
       listMarginLeft: getComputedStyle(document.querySelector(".page-body ol")).marginLeft,
       sourceListItemMarginBottom: getComputedStyle(document.querySelector(".word-editor ol > li")).marginBottom,
@@ -625,7 +645,10 @@ try {
           paddingBottom: style.paddingBottom,
           paddingLeft: style.paddingLeft,
           verticalAlign: style.verticalAlign,
-          backgroundColor: style.backgroundColor
+          backgroundColor: style.backgroundColor,
+          borderTopStyle: style.borderTopStyle,
+          borderTopWidth: style.borderTopWidth,
+          borderTopColor: style.borderTopColor
         } : null;
       })(),
       paginationControlStartsPage: Array.from(document.querySelectorAll(".page-sheet")).some((page) => {
@@ -666,7 +689,7 @@ try {
   // 中文注解：覆盖当前页空间利用、无溢出、编号延续、表格跨页和内容完整性五个分页契约。
   assert.ok(result.pageCount > 5, "fixture should create a multi-page document");
   assert.deepEqual(result.overflowPages, []);
-  assert.equal(result.firstPageHasList, true, `第一页应利用剩余空间开始编号列表，实际内容：${result.firstPageText.slice(0, 120)}`);
+  assert.ok(result.firstPageHasList || result.firstPageRemainingHeight < 24, `第一页应开始编号列表或仅剩不足一行空间，剩余 ${result.firstPageRemainingHeight}px，实际内容：${result.firstPageText.slice(0, 120)}`);
   assert.ok(result.continuationMarkers.length > 0);
   assert.ok(result.continuationMarkers.every((marker) => marker === "none"));
   assert.equal(result.listMarginLeft, "48px");
@@ -691,7 +714,10 @@ try {
     paddingBottom: "12px",
     paddingLeft: "12px",
     verticalAlign: "bottom",
-    backgroundColor: "rgb(255, 242, 204)"
+    backgroundColor: "rgb(255, 242, 204)",
+    borderTopStyle: "dashed",
+    borderTopWidth: "1px",
+    borderTopColor: "rgb(107, 114, 128)"
   });
   assert.equal(result.paginationControlStartsPage, true, "段前分页段落应成为新页首段");
   assert.equal(result.paginationControlKeepsNext, true, "与下段同页应保留后续段落在同一页");

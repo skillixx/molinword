@@ -132,9 +132,9 @@ async function buildFormattedDocxFixture() {
       <w:r><w:t>Tab project</w:t><w:tab/><w:t>Tab amount</w:t><w:tab/><w:t>100.00</w:t></w:r>
     </w:p>
     <w:tbl>
-      <w:tblPr><w:tblW w:type="dxa" w:w="6000"/><w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="100" w:type="dxa"/><w:right w:w="200" w:type="dxa"/><w:bottom w:w="300" w:type="dxa"/><w:left w:w="400" w:type="dxa"/></w:tblCellMar></w:tblPr>
+      <w:tblPr><w:tblW w:type="dxa" w:w="6000"/><w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="100" w:type="dxa"/><w:right w:w="200" w:type="dxa"/><w:bottom w:w="300" w:type="dxa"/><w:left w:w="400" w:type="dxa"/></w:tblCellMar><w:tblBorders><w:top w:val="single" w:sz="8" w:color="FF0000"/><w:right w:val="dashed" w:sz="6" w:color="00AA00"/><w:bottom w:val="double" w:sz="12" w:color="0000FF"/><w:left w:val="nil" w:sz="0" w:color="auto"/><w:insideH w:val="dotted" w:sz="4" w:color="888888"/><w:insideV w:val="single" w:sz="4" w:color="000000"/></w:tblBorders></w:tblPr>
       <w:tblGrid><w:gridCol w:w="1800"/><w:gridCol w:w="4200"/></w:tblGrid>
-      <w:tr><w:trPr><w:tblHeader/><w:cantSplit/><w:trHeight w:val="720" w:hRule="exact"/></w:trPr><w:tc><w:tcPr><w:tcW w:type="dxa" w:w="1800"/><w:tcMar><w:right w:w="600" w:type="dxa"/></w:tcMar><w:vAlign w:val="center"/><w:shd w:val="clear" w:fill="D9EAD3"/></w:tcPr><w:p><w:r><w:t>Geometry A</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:tcW w:type="dxa" w:w="4200"/></w:tcPr><w:p><w:r><w:t>Geometry B</w:t></w:r></w:p></w:tc></w:tr>
+      <w:tr><w:trPr><w:tblHeader/><w:cantSplit/><w:trHeight w:val="720" w:hRule="exact"/></w:trPr><w:tc><w:tcPr><w:tcW w:type="dxa" w:w="1800"/><w:tcMar><w:right w:w="600" w:type="dxa"/></w:tcMar><w:vAlign w:val="center"/><w:shd w:val="clear" w:fill="D9EAD3"/><w:tcBorders><w:right w:val="double" w:sz="16" w:color="800080"/></w:tcBorders></w:tcPr><w:p><w:r><w:t>Geometry A</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:tcW w:type="dxa" w:w="4200"/></w:tcPr><w:p><w:r><w:t>Geometry B</w:t></w:r></w:p></w:tc></w:tr>
     </w:tbl>
     <w:tbl>
       <w:tr>
@@ -403,6 +403,7 @@ assert.match(importedGeometryTable, /data-table-width-type="dxa"/);
 assert.match(importedGeometryTable, /data-table-width-value="6000"/);
 assert.match(importedGeometryTable, /data-table-grid-width="6000"/);
 assert.match(importedGeometryTable, /data-table-layout="fixed"/);
+assert.match(importedGeometryTable, /data-table-borders="[^"]*&quot;top&quot;[^"]*FF0000[^"]*insideVertical[^"]*"/);
 assert.match(importedGeometryTable, /style="width:\s*400px;\s*table-layout:\s*fixed"/);
 assert.match(importedGeometryTable, /colwidth="120"/);
 assert.match(importedGeometryTable, /colwidth="280"/);
@@ -417,12 +418,17 @@ assert.match(importedGeometryCell, /data-docx-cell="true"/);
 assert.match(importedGeometryCell, /data-cell-margins="[^\"]*100[^\"]*600[^\"]*300[^\"]*400[^\"]*"/);
 assert.match(importedGeometryCell, /data-cell-vertical-align="center"/);
 assert.match(importedGeometryCell, /data-cell-shading="#D9EAD3"/);
+assert.match(importedGeometryCell, /data-cell-borders="[^"]*&quot;top&quot;[^"]*FF0000[^"]*&quot;right&quot;[^"]*800080[^"]*&quot;bottom&quot;[^"]*0000FF[^"]*&quot;left&quot;[^"]*nil[^"]*"/);
 assert.match(importedGeometryCell, /padding-top:\s*6\.67px/);
 assert.match(importedGeometryCell, /padding-right:\s*40px/);
 assert.match(importedGeometryCell, /padding-bottom:\s*20px/);
 assert.match(importedGeometryCell, /padding-left:\s*26\.67px/);
 assert.match(importedGeometryCell, /vertical-align:\s*middle/);
 assert.match(importedGeometryCell, /background-color:\s*#D9EAD3/);
+assert.match(importedGeometryCell, /border-top:\s*1\.33px solid #FF0000/);
+assert.match(importedGeometryCell, /border-right:\s*2\.67px double #800080/);
+assert.match(importedGeometryCell, /border-bottom:\s*2px double #0000FF/);
+assert.match(importedGeometryCell, /border-left:\s*none/);
 assert.match(imported.content, /<table(?:\s|>)/);
 assert.match(imported.content, /<th(?:\s|>)/);
 assert.match(imported.content, /<td(?:\s|>)/);
@@ -498,6 +504,11 @@ assert.equal((tabRoundTripXml.match(/<w:tab\/>/g) || []).length, 2);
 const geometryRoundTripXml = (roundTripXml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/g) || []).find((table) => table.includes("Geometry A")) || "";
 assert.match(geometryRoundTripXml, /<w:tblW w:type="dxa" w:w="6000"\/>/);
 assert.match(geometryRoundTripXml, /<w:tblLayout w:type="fixed"\/>/);
+const geometryTableBordersRoundTripXml = geometryRoundTripXml.match(/<w:tblBorders>[\s\S]*?<\/w:tblBorders>/)?.[0] || "";
+assert.match(geometryTableBordersRoundTripXml, /<w:top w:val="single" w:color="FF0000" w:sz="8"\/>/);
+assert.match(geometryTableBordersRoundTripXml, /<w:right w:val="dashed" w:color="00AA00" w:sz="6"\/>/);
+assert.match(geometryTableBordersRoundTripXml, /<w:bottom w:val="double" w:color="0000FF" w:sz="12"\/>/);
+assert.match(geometryTableBordersRoundTripXml, /<w:left w:val="nil" w:color="000000" w:sz="0"\/>/);
 assert.match(geometryRoundTripXml, /<w:tblGrid><w:gridCol w:w="1800"\/><w:gridCol w:w="4200"\/><\/w:tblGrid>/);
 assert.match(geometryRoundTripXml, /<w:tcW w:type="dxa" w:w="1800"\/>/);
 assert.match(geometryRoundTripXml, /<w:tcW w:type="dxa" w:w="4200"\/>/);
@@ -510,6 +521,11 @@ assert.match(geometryCellRoundTripXml, /<w:tcMar>/);
 for (const [side, width] of [["top", 100], ["right", 600], ["bottom", 300], ["left", 400]]) assert.match(geometryCellRoundTripXml, new RegExp(`<w:${side} w:type="dxa" w:w="${width}"\\/>`));
 assert.match(geometryCellRoundTripXml, /<w:shd w:fill="D9EAD3"\/>/);
 assert.match(geometryCellRoundTripXml, /<w:vAlign w:val="center"\/>/);
+const geometryCellBordersRoundTripXml = geometryCellRoundTripXml.match(/<w:tcBorders>[\s\S]*?<\/w:tcBorders>/)?.[0] || "";
+assert.match(geometryCellBordersRoundTripXml, /<w:top w:val="single" w:color="FF0000" w:sz="8"\/>/);
+assert.match(geometryCellBordersRoundTripXml, /<w:right w:val="double" w:color="800080" w:sz="16"\/>/);
+assert.match(geometryCellBordersRoundTripXml, /<w:bottom w:val="double" w:color="0000FF" w:sz="12"\/>/);
+assert.match(geometryCellBordersRoundTripXml, /<w:left w:val="nil" w:color="000000" w:sz="0"\/>/);
 const roundTripImported = await parseImportedDocument({
   originalname: "round-trip-format.docx",
   buffer: roundTripBuffer,
@@ -539,6 +555,9 @@ assert.match(roundTripImportedGeometryTable, /data-row-height="720"/);
 assert.match(roundTripImportedGeometryTable, /data-row-height-rule="exact"/);
 assert.match(roundTripImportedGeometryTable, /data-row-cant-split="true"/);
 assert.match(roundTripImportedGeometryTable, /data-row-repeat-header="true"/);
+assert.match(roundTripImportedGeometryTable, /data-table-borders=/);
+assert.match(roundTripImportedGeometryTable, /data-cell-borders=/);
+assert.match(roundTripImportedGeometryTable, /border-right:\s*2\.67px double #800080/);
 assert.deepEqual(roundTripImported.pageLayout, imported.pageLayout);
 const atLeastRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || [])
   .find((paragraph) => paragraph.includes(">At least spacing</w:t>")) || "";
