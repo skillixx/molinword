@@ -760,6 +760,7 @@ function App() {
   const [pointsRefreshing, setPointsRefreshing] = React.useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = React.useState(false);
   const [isOutlineCollapsed, setIsOutlineCollapsed] = React.useState(false);
+  const saveQueueRef = React.useRef<Promise<unknown>>(Promise.resolve());
 
   const loadSession = React.useCallback(async () => {
     const response = await fetch("/api/session");
@@ -936,33 +937,40 @@ function App() {
   };
 
   const saveDocument = React.useCallback(
-    async (options: { content?: string; title?: string; saveVersion?: boolean; versionNote?: string } = {}) => {
-      if (!currentDocumentId) return null;
-      try {
-        setSaveStatus("保存中");
-        const response = await fetch(`/api/documents/${currentDocumentId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            title: options.title ?? currentTitle,
-            documentType: selectedType,
-            tone,
-            templateId: selectedTemplate?.id ?? null,
-            outline: outline.map((item) => item.title),
-            content: options.content ?? content,
-            saveVersion: options.saveVersion ?? false,
-            versionNote: options.versionNote
-          })
-        });
-        const result = await readApiJson(response);
-        setSaveStatus("已保存");
-        await loadRecentDocuments();
-        return result.document as ApiDocument;
-      } catch (error) {
-        setSaveStatus("保存失败");
-        setAiError(error instanceof Error ? error.message : "保存文档失败");
-        return null;
-      }
+    (options: { content?: string; title?: string; saveVersion?: boolean; versionNote?: string } = {}) => {
+      const documentId = currentDocumentId;
+      if (!documentId) return Promise.resolve(null);
+      const performSave = async () => {
+        try {
+          setSaveStatus("保存中");
+          const response = await fetch(`/api/documents/${documentId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              title: options.title ?? currentTitle,
+              documentType: selectedType,
+              tone,
+              templateId: selectedTemplate?.id ?? null,
+              outline: outline.map((item) => item.title),
+              content: options.content ?? content,
+              saveVersion: options.saveVersion ?? false,
+              versionNote: options.versionNote
+            })
+          });
+          const result = await readApiJson(response);
+          setSaveStatus("已保存");
+          await loadRecentDocuments();
+          return result.document as ApiDocument;
+        } catch (error) {
+          setSaveStatus("保存失败");
+          setAiError(error instanceof Error ? error.message : "保存文档失败");
+          return null;
+        }
+      };
+      // 中文注解：所有自动、手动及导出前保存按顺序执行，防止旧请求晚返回后覆盖较新的正文。
+      const request = saveQueueRef.current.then(performSave, performSave);
+      saveQueueRef.current = request.then(() => undefined, () => undefined);
+      return request;
     },
     [content, currentDocumentId, currentTitle, loadRecentDocuments, outline, selectedTemplate, selectedType, tone]
   );
@@ -1435,7 +1443,7 @@ function Editor(props: {
   setOutline: (value: OutlineItem[]) => void;
   generateBody: () => void;
   editContent: (action: AiAction, source: string) => Promise<string>;
-  saveDocument: (latestContent?: string) => void;
+  saveDocument: (latestContent?: string) => Promise<ApiDocument | null>;
   exportWord: (latestContent?: string) => void;
   currentTitle: string;
   saveStatus: string;
@@ -1452,11 +1460,13 @@ function Editor(props: {
   const [aiResult, setAiResult] = React.useState<AiEditResult | null>(null);
   const [selectionHint, setSelectionHint] = React.useState("请先选中文本，再使用局部 AI 操作。");
   const [hasSelection, setHasSelection] = React.useState(false);
+  const [manualSavePending, setManualSavePending] = React.useState(false);
   const [viewMode, setViewMode] = React.useState<EditorViewMode>("edit");
   const [previewPages, setPreviewPages] = React.useState<string[][]>([[buildExportPreviewHtml(props.currentTitle, props.content)]]);
   const [paginationAssetVersion, setPaginationAssetVersion] = React.useState(0);
   const paginationMeasureRef = React.useRef<HTMLDivElement | null>(null);
   const imageInputRef = React.useRef<HTMLInputElement | null>(null);
+  const manualSavePromiseRef = React.useRef<Promise<ApiDocument | null> | null>(null);
 
   const updateOutlineFromEditor = React.useCallback((editor: TiptapEditor) => {
     const nextOutline: OutlineItem[] = [];
@@ -1869,11 +1879,30 @@ function Editor(props: {
     if (aiResult) await navigator.clipboard.writeText(aiResult.content);
   };
 
-  const saveEditorDocument = () => {
+  const saveEditorDocument = React.useCallback(() => {
+    if (manualSavePromiseRef.current) return manualSavePromiseRef.current;
     const latestContent = editor?.getHTML() ?? props.content;
     props.setContent(latestContent);
-    props.saveDocument(latestContent);
-  };
+    setManualSavePending(true);
+    const request = props.saveDocument(latestContent).finally(() => {
+      if (manualSavePromiseRef.current === request) manualSavePromiseRef.current = null;
+      setManualSavePending(false);
+    });
+    // 中文注解：同步记录手动保存 Promise，连续点击或快捷键不会在 React 重渲染前重复创建版本。
+    manualSavePromiseRef.current = request;
+    return request;
+  }, [editor, props.content, props.saveDocument, props.setContent]);
+
+  React.useEffect(() => {
+    const handleSaveShortcut = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "s") return;
+      // 中文注解：接管浏览器保存快捷键，确保用户保存的是当前在线文档而不是网页文件。
+      event.preventDefault();
+      void saveEditorDocument();
+    };
+    window.addEventListener("keydown", handleSaveShortcut);
+    return () => window.removeEventListener("keydown", handleSaveShortcut);
+  }, [saveEditorDocument]);
 
   const exportEditorWord = () => {
     const latestContent = editor?.getHTML() ?? props.content;
@@ -1886,11 +1915,13 @@ function Editor(props: {
     editor.chain().focus().setTextSelection(item.position + 1).scrollIntoView().run();
   };
 
+  const isSaving = manualSavePending || props.saveStatus === "保存中";
+
   return (
     <section className="editor-page">
       <header className="editor-toolbar">
         <div><p>正在编辑</p><h1>{props.currentTitle}</h1><span className="save-status">{props.saveStatus}</span>{props.exportStatus ? <span className="export-status">{props.exportStatus}</span> : null}{props.selectedTemplate ? <span className="export-status">模板样式：{props.selectedTemplate.name}{props.selectedTemplate.hasStyle ? "" : "（无样式文件）"}</span> : null}</div>
-        <div className="toolbar-actions"><button onClick={saveEditorDocument}><Save size={17} />保存</button><button onClick={props.generateBody} disabled={Boolean(props.aiLoading)}>{props.aiLoading === "正在生成正文" ? <LoaderCircle className="spin-icon" size={17} /> : <Sparkles size={17} />}{props.aiLoading === "正在生成正文" ? "生成中" : "生成正文"}</button><button onClick={exportEditorWord} disabled={props.exportStatus === "导出中"}>{props.exportStatus === "导出中" ? <LoaderCircle className="spin-icon" size={17} /> : <Download size={17} />}{props.exportStatus === "导出中" ? "导出中" : "导出 Word"}</button></div>
+        <div className="toolbar-actions"><button onClick={() => void saveEditorDocument()} disabled={isSaving} title="保存文档">{isSaving ? <LoaderCircle className="spin-icon" size={17} /> : <Save size={17} />}{isSaving ? "保存中" : "保存"}</button><button onClick={props.generateBody} disabled={Boolean(props.aiLoading)}>{props.aiLoading === "正在生成正文" ? <LoaderCircle className="spin-icon" size={17} /> : <Sparkles size={17} />}{props.aiLoading === "正在生成正文" ? "生成中" : "生成正文"}</button><button onClick={exportEditorWord} disabled={props.exportStatus === "导出中"}>{props.exportStatus === "导出中" ? <LoaderCircle className="spin-icon" size={17} /> : <Download size={17} />}{props.exportStatus === "导出中" ? "导出中" : "导出 Word"}</button></div>
       </header>
       <div className={`editor-layout${props.isOutlineCollapsed ? " outline-collapsed" : ""}`}>
         <aside className="outline-panel"><div className="section-title"><ListTree size={18} /><h2>文档大纲</h2><button className="panel-collapse-button" onClick={() => props.setIsOutlineCollapsed(!props.isOutlineCollapsed)} title={props.isOutlineCollapsed ? "展开文档大纲" : "收起文档大纲"} aria-label={props.isOutlineCollapsed ? "展开文档大纲" : "收起文档大纲"}>{props.isOutlineCollapsed ? <ChevronsRight size={17} /> : <ChevronsLeft size={17} />}</button></div><div className="outline-content">{props.outline.length === 0 ? <div className="empty-state">暂无大纲，请先生成或在正文中添加标题。</div> : props.outline.map((item) => <button key={item.id} className={item.level === 3 ? "outline-child" : ""} onMouseDown={(event) => event.preventDefault()} onClick={() => jumpToOutline(item)}>{item.title}</button>)}</div></aside>

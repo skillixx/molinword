@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
+import JSZip from "jszip";
 import { chromium } from "playwright";
+import { createDocxBuffer } from "../server/index.js";
 
 const listText = "这是一个需要跨页显示的超长编号列表项，必须保持同一个编号并在续页继续排版。".repeat(180);
 const cellA = "左侧单元格包含大量业务说明，用于验证超高表格行可以跨页展示。".repeat(145);
@@ -32,6 +34,12 @@ const fixtureTemplate = {
   hasStyle: true,
   assets: [{ id: 1, purpose: "template_style", fileName: "style.json", fileType: "json", fileSize: 100, url: "/api/templates/3/assets/1/download" }]
 };
+const fixtureWordStyle = { fontFamily: "SimSun", titleSize: 38, headingSize: 28, bodySize: 22, lineSpacing: 380, titleColor: "1F4E79", headingColor: "245F55" };
+let storedDocument = structuredClone(fixtureDocument);
+let exportedDocxBuffer = null;
+let manualSaveRequestCount = 0;
+let activeSaveRequestCount = 0;
+let maxConcurrentSaveRequestCount = 0;
 const distRoot = resolve("dist");
 
 function sendJson(response, value, status = 200) {
@@ -39,23 +47,52 @@ function sendJson(response, value, status = 200) {
   response.end(JSON.stringify(value));
 }
 
-function apiResponse(request, response) {
+async function readJsonBody(request) {
+  const chunks = [];
+  for await (const chunk of request) chunks.push(chunk);
+  const text = Buffer.concat(chunks).toString("utf8");
+  return text ? JSON.parse(text) : {};
+}
+
+async function apiResponse(request, response) {
   const url = new URL(request.url || "/", "http://127.0.0.1");
   if (request.method === "GET" && url.pathname === "/api/session") {
     sendJson(response, { user: { userId: "pagination-test", appId: "test", productId: "test", isMolingUser: false, expiresAt: null }, points: { enabled: false, entitlements: [], remaining: null } });
     return true;
   }
   if (request.method === "GET" && url.pathname === "/api/documents") {
-    sendJson(response, { documents: [fixtureDocument] });
+    sendJson(response, { documents: [storedDocument] });
     return true;
   }
   if (request.method === "GET" && url.pathname === `/api/documents/${fixtureDocument.id}`) {
-    sendJson(response, { document: fixtureDocument });
+    sendJson(response, { document: storedDocument });
     return true;
   }
   if (request.method === "PATCH" && url.pathname === `/api/documents/${fixtureDocument.id}`) {
-    request.resume();
-    sendJson(response, { document: fixtureDocument });
+    const update = await readJsonBody(request);
+    if (update.saveVersion) manualSaveRequestCount += 1;
+    activeSaveRequestCount += 1;
+    maxConcurrentSaveRequestCount = Math.max(maxConcurrentSaveRequestCount, activeSaveRequestCount);
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 80));
+    // 中文注解：测试服务真实保存编辑器提交的 HTML，才能验证刷新重开后的格式没有丢失。
+    storedDocument = { ...storedDocument, ...update, updatedAt: new Date().toISOString() };
+    activeSaveRequestCount -= 1;
+    sendJson(response, { document: storedDocument });
+    return true;
+  }
+  if (request.method === "POST" && url.pathname === `/api/documents/${fixtureDocument.id}/export-docx`) {
+    const body = await readJsonBody(request);
+    const content = typeof body.content === "string" ? body.content : storedDocument.content;
+    exportedDocxBuffer = await createDocxBuffer({ title: storedDocument.title, content, templateStyle: fixtureWordStyle });
+    sendJson(response, { file: { id: 1, documentId: storedDocument.id, fileName: "editor-parity.docx", fileType: "docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", fileSize: exportedDocxBuffer.length, downloadUrl: "/api/files/1/download" } }, 201);
+    return true;
+  }
+  if (request.method === "GET" && url.pathname === "/api/files/1/download" && exportedDocxBuffer) {
+    response.writeHead(200, {
+      "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "Content-Disposition": 'attachment; filename="editor-parity.docx"'
+    });
+    response.end(exportedDocxBuffer);
     return true;
   }
   if (request.method === "GET" && url.pathname === "/api/templates") {
@@ -67,7 +104,7 @@ function apiResponse(request, response) {
     return true;
   }
   if (request.method === "GET" && url.pathname === "/api/templates/3/assets/1/download") {
-    sendJson(response, { fontFamily: "SimSun", titleSize: 38, headingSize: 28, bodySize: 22, lineSpacing: 380, titleColor: "1F4E79", headingColor: "245F55" });
+    sendJson(response, fixtureWordStyle);
     return true;
   }
   return false;
@@ -83,7 +120,7 @@ const mimeTypes = {
 
 const server = createServer(async (request, response) => {
   try {
-    if (apiResponse(request, response)) return;
+    if (await apiResponse(request, response)) return;
     const url = new URL(request.url || "/", "http://127.0.0.1");
     const requestedPath = url.pathname === "/" ? "index.html" : url.pathname.replace(/^\/+/, "");
     let filePath = resolve(distRoot, requestedPath);
@@ -153,6 +190,55 @@ try {
   await page.locator('label[title="设置当前段落样式"] select').selectOption("heading-2");
   assert.match(await editor.innerHTML(), /<h2[^>]*>.*保留小号红字.*<\/h2>/);
 
+  const manualSaveCountBeforeShortcut = manualSaveRequestCount;
+  await page.keyboard.press("Control+S");
+  await page.keyboard.press("Control+S");
+  await page.waitForFunction(() => document.querySelector(".toolbar-actions button")?.hasAttribute("disabled") === true);
+  await page.waitForFunction(() => document.querySelector(".save-status")?.textContent?.includes("已保存"));
+  assert.equal(manualSaveRequestCount - manualSaveCountBeforeShortcut, 1);
+  assert.match(storedDocument.content, /<h2[^>]*>.*保留小号红字.*<\/h2>/);
+  assert.match(storedDocument.content, /font-family:\s*SimSun/);
+  assert.match(storedDocument.content, /font-size:\s*12pt/);
+
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByText(storedDocument.title, { exact: true }).click();
+  await editor.waitFor();
+  const reopenedHtml = await editor.innerHTML();
+  assert.match(reopenedHtml, /<h2[^>]*>.*保留小号红字.*<\/h2>/);
+  assert.match(reopenedHtml, /font-family:\s*SimSun/);
+  assert.match(reopenedHtml, /font-size:\s*12pt/);
+  assert.match(reopenedHtml, /font-size:\s*18pt/);
+  assert.match(reopenedHtml, /<em>/);
+  assert.match(reopenedHtml, /<s>/);
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "导出 Word", exact: true }).click();
+  const download = await downloadPromise;
+  await page.waitForFunction(() => document.body.textContent?.includes("Word 已生成"));
+  const downloadedPath = await download.path();
+  assert.ok(downloadedPath, "导出的 DOCX 应可下载");
+  const downloadedBuffer = await readFile(downloadedPath);
+  const archive = await JSZip.loadAsync(downloadedBuffer);
+  const documentXml = await archive.file("word/document.xml")?.async("string");
+  assert.ok(documentXml, "导出的 DOCX 应包含 document.xml");
+  // 中文注解：检查在线编辑后的具体文字，证明保存、重开和导出使用的是同一份格式数据。
+  const paragraphs = documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || [];
+  const headingParagraph = paragraphs.find((paragraph) => paragraph.includes(">保留小号红字</w:t>"));
+  assert.ok(headingParagraph, "导出的 DOCX 应包含在线设置的二级标题");
+  assert.match(headingParagraph, /<w:pStyle w:val="Heading2"\/>/);
+  const runs = headingParagraph.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || [];
+  const smallRun = runs.find((run) => run.includes(">保留小号红字</w:t>"));
+  const largeRun = runs.find((run) => run.includes(">保留大号蓝字</w:t>"));
+  assert.ok(smallRun && largeRun, "标题中的两段混合格式文字应分别导出");
+  assert.match(smallRun, /<w:rFonts[^>]+SimSun/);
+  assert.match(smallRun, /<w:sz w:val="24"\/>/);
+  assert.match(smallRun, /<w:color w:val="FF0000"\/>/);
+  assert.match(smallRun, /<w:i\/>/);
+  assert.match(smallRun, /<w:strike\/>/);
+  assert.match(largeRun, /<w:rFonts[^>]+SimSun/);
+  assert.match(largeRun, /<w:sz w:val="36"\/>/);
+  assert.match(largeRun, /<w:color w:val="0000FF"\/>/);
+
   await page.getByRole("button", { name: "分页", exact: true }).click();
   await page.locator(".page-sheet").first().waitFor();
 
@@ -209,6 +295,7 @@ try {
   assert.equal(result.templateLabelVisible, true);
   assert.equal(result.fontVariable, '"SimSun"');
   assert.equal(result.lineVariable, "1.5833");
+  assert.equal(maxConcurrentSaveRequestCount, 1);
 
   const desktopNavigation = await page.evaluate(() => {
     const scroll = document.querySelector(".editor-scroll");
@@ -242,7 +329,7 @@ try {
   assert.ok(mobile.scrollWidth > mobile.scrollClientWidth);
   assert.deepEqual(browserErrors, []);
 
-  console.log("Editor pagination browser check passed");
+  console.log("Editor workflow browser check passed");
 } finally {
   await browser.close();
   await new Promise((resolveClose) => server.close(resolveClose));

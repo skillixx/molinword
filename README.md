@@ -138,9 +138,9 @@ documents/{documentId}/exports/{fileName}.docx
 
 ```bash
 npm run build
-npm run check:editor-pagination
+npm run check:editor-workflow
 npm run check:docx-export-format
 npm run check:docx-import-format
 ```
 
-`check:editor-pagination` 会启动自包含的浏览器测试，验证 A4 分页、超长列表项、超高表格行、图片单元格、模板样式恢复、移动端宽度以及长文档滚动时三侧菜单保持可见。
+`check:editor-workflow` 会启动自包含的浏览器测试，验证常用格式编辑、快捷键保存、防并发保存、刷新重开、DOCX 下载与格式一致性，以及 A4 分页、超长结构、模板样式、移动端宽度和长文档固定菜单。原 `check:editor-pagination` 命令保留为兼容别名。
