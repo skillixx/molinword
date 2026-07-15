@@ -1,6 +1,6 @@
 ﻿import React from "react";
 import { createRoot } from "react-dom/client";
-import { Extension, Mark, Node as TiptapNode, type CommandProps } from "@tiptap/core";
+import { Extension, Mark, Node as TiptapNode, mergeAttributes, type CommandProps } from "@tiptap/core";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import type { EditorView } from "@tiptap/pm/view";
 import { EditorContent, useEditor, type Editor as TiptapEditor } from "@tiptap/react";
@@ -72,6 +72,85 @@ type EditorViewMode = "edit" | "page";
 type ParagraphSpacingProperty = "line-height" | "margin-top" | "margin-bottom" | "--word-line-rule";
 type ParagraphSpacingStyles = Partial<Record<ParagraphSpacingProperty, string>>;
 type ParagraphPaginationAttribute = "keepNext" | "keepLines" | "pageBreakBefore" | "widowControl";
+
+function imagePixelAttribute(element: HTMLElement, property: "width" | "height") {
+  const styleValue = element.style[property];
+  const value = Number.parseFloat(styleValue.endsWith("px") ? styleValue : element.getAttribute(property) || "");
+  return Number.isFinite(value) && value > 0 ? Math.round(value * 100) / 100 : null;
+}
+
+function clientDocxFloatingValue(value: unknown) {
+  try {
+    const floating = typeof value === "string" ? JSON.parse(value) : value;
+    return floating && typeof floating === "object" ? floating as Record<string, any> : null;
+  } catch {
+    return null;
+  }
+}
+
+function clientFloatingImagePresentation(value: unknown) {
+  try {
+    const source = clientDocxFloatingValue(value);
+    if (!source) return null;
+    const wrap = ["none", "square", "tight", "topAndBottom"].includes(source.wrap?.type) ? source.wrap.type : "none";
+    const align = ["left", "right", "center", "inside", "outside"].includes(source.horizontal?.align) ? source.horizontal.align : "offset";
+    const margin = (side: string) => Math.max(0, Math.min(Number(source.margins?.[side]) || 0, 9144000)) / 9525;
+    const styles = [
+      `margin-top: ${margin("top")}px`,
+      `margin-right: ${margin("right")}px`,
+      `margin-bottom: ${margin("bottom")}px`,
+      `margin-left: ${margin("left")}px`
+    ];
+    if (["square", "tight"].includes(wrap) && ["left", "right"].includes(align)) styles.push(`float: ${align}`);
+    if (wrap === "topAndBottom") styles.push("clear: both");
+    return { wrap, align, styles };
+  } catch {
+    return null;
+  }
+}
+
+const DocumentImage = ImageExtension.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      widthPx: {
+        default: null,
+        parseHTML: (element) => imagePixelAttribute(element, "width"),
+        renderHTML: () => ({})
+      },
+      heightPx: {
+        default: null,
+        parseHTML: (element) => imagePixelAttribute(element, "height"),
+        renderHTML: () => ({})
+      },
+      docxFloating: {
+        default: null,
+        parseHTML: (element) => element.getAttribute("data-docx-floating"),
+        renderHTML: () => ({})
+      }
+    };
+  },
+  renderHTML({ node, HTMLAttributes }) {
+    const width = Number(node.attrs.widthPx) > 0 ? Number(node.attrs.widthPx) : null;
+    const height = Number(node.attrs.heightPx) > 0 ? Number(node.attrs.heightPx) : null;
+    const floating = clientFloatingImagePresentation(node.attrs.docxFloating);
+    const styles = [
+      width ? `width: ${width}px` : "",
+      height ? `height: ${height}px` : "",
+      ...(floating?.styles || []),
+      "max-width: 100%"
+    ].filter(Boolean).join("; ");
+    // 中文注解：图片尺寸和浮动语义由同一节点渲染，编辑、保存与分页预览不会各自推断一套布局。
+    return ["img", mergeAttributes(this.options.HTMLAttributes, HTMLAttributes, {
+      width: width || undefined,
+      height: height || undefined,
+      style: styles,
+      "data-docx-floating": node.attrs.docxFloating || undefined,
+      "data-docx-wrap": floating?.wrap,
+      "data-docx-float-align": floating?.align
+    })];
+  }
+});
 
 function normalizeSafeHyperlink(value: string) {
   const href = value.trim().slice(0, 2048);
@@ -2507,6 +2586,7 @@ function Editor(props: {
   const [paginationPending, setPaginationPending] = React.useState(false);
   const [linkEditorOpen, setLinkEditorOpen] = React.useState(false);
   const [linkUrl, setLinkUrl] = React.useState("https://");
+  const [imageAspectLocked, setImageAspectLocked] = React.useState(true);
   const paginationMeasureRef = React.useRef<HTMLDivElement | null>(null);
   const imageInputRef = React.useRef<HTMLInputElement | null>(null);
   const manualSavePromiseRef = React.useRef<Promise<ApiDocument | null> | null>(null);
@@ -2544,7 +2624,7 @@ function Editor(props: {
   }, [props.pageLayout]);
 
   const editor = useEditor({
-    extensions: [StarterKit.configure({ link: { openOnClick: false, autolink: false, linkOnPaste: true, HTMLAttributes: { target: "_blank", rel: "noopener noreferrer" } } }), ImageExtension.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DocxTab, ParagraphIndent, PageBreak, SectionBreak, DocumentTable, DocumentTableRow, DocumentTableHeader, DocumentTableCell],
+    extensions: [StarterKit.configure({ link: { openOnClick: false, autolink: false, linkOnPaste: true, HTMLAttributes: { target: "_blank", rel: "noopener noreferrer" } } }), DocumentImage.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DocxTab, ParagraphIndent, PageBreak, SectionBreak, DocumentTable, DocumentTableRow, DocumentTableHeader, DocumentTableCell],
     content: props.content,
     editorProps: { attributes: { class: "word-editor" } },
     onCreate({ editor }) { updateOutlineFromEditor(editor); syncActiveSectionFromEditor(editor); },
@@ -3061,9 +3141,17 @@ function Editor(props: {
         setSelectionHint("图片读取失败，请重新选择。");
         return;
       }
-      // 中文注解：图片以内嵌 data URL 进入文档，分页预览和 DOCX 导出共享同一份内容。
-      editor.chain().focus().setImage({ src, alt: file.name }).run();
-      setSelectionHint("已插入图片。");
+      const image = new window.Image();
+      image.onload = () => {
+        const width = Math.max(1, image.naturalWidth || 420);
+        const height = Math.max(1, image.naturalHeight || Math.round(width * 0.62));
+        const scale = Math.min(1, 602 / width, 911 / height);
+        // 中文注解：插入时即记录等比缩放后的真实尺寸，在线分页、尺寸控件和 DOCX 导出共享同一几何数据。
+        editor.chain().focus().insertContent({ type: "image", attrs: { src, alt: file.name, widthPx: Math.round(width * scale), heightPx: Math.round(height * scale) } }).run();
+        setSelectionHint("已插入图片。");
+      };
+      image.onerror = () => setSelectionHint("图片解码失败，请重新选择。");
+      image.src = src;
     };
     reader.readAsDataURL(file);
   };
@@ -3231,12 +3319,54 @@ function Editor(props: {
     setSelectionHint("已取消超链接。");
   };
 
+  const updateSelectedImageLayout = (mode: "inline" | "wrapLeft" | "wrapRight" | "topAndBottom") => {
+    if (!editor?.isActive("image")) return;
+    if (mode === "inline") {
+      editor.chain().focus().updateAttributes("image", { docxFloating: null }).run();
+      setSelectionHint("图片已设为嵌入型。");
+      return;
+    }
+    const current = clientDocxFloatingValue(editor.getAttributes("image").docxFloating) || {};
+    const align = mode === "wrapLeft" ? "left" : mode === "wrapRight" ? "right" : "center";
+    const floating = {
+      ...current,
+      horizontal: { relative: "column", align, offset: null },
+      vertical: current.vertical || { relative: "paragraph", align: null, offset: 0 },
+      wrap: { type: mode === "topAndBottom" ? "topAndBottom" : "square", side: "bothSides" },
+      margins: current.margins || { top: 0, right: 95250, bottom: 95250, left: 95250 },
+      allowOverlap: current.allowOverlap !== false,
+      behindDocument: false,
+      lockAnchor: current.lockAnchor === true,
+      layoutInCell: current.layoutInCell !== false,
+      zIndex: Number(current.zIndex) || 1
+    };
+    editor.chain().focus().updateAttributes("image", { docxFloating: JSON.stringify(floating) }).run();
+    setSelectionHint(`图片已设为${mode === "wrapLeft" ? "左侧环绕" : mode === "wrapRight" ? "右侧环绕" : "上下型环绕"}。`);
+  };
+
+  const updateSelectedImageSize = (property: "widthPx" | "heightPx", rawValue: string) => {
+    if (!editor?.isActive("image")) return;
+    const value = Math.max(1, Math.min(Number(rawValue) || 1, property === "widthPx" ? 602 : 911));
+    const attributes = editor.getAttributes("image");
+    const currentWidth = Math.max(1, Number(attributes.widthPx) || value);
+    const currentHeight = Math.max(1, Number(attributes.heightPx) || value);
+    const patch: Record<string, number> = { [property]: Math.round(value * 100) / 100 };
+    if (imageAspectLocked) {
+      if (property === "widthPx") patch.heightPx = Math.round(value * currentHeight / currentWidth * 100) / 100;
+      else patch.widthPx = Math.round(value * currentWidth / currentHeight * 100) / 100;
+    }
+    editor.chain().focus().updateAttributes("image", patch).run();
+    setSelectionHint("已调整图片尺寸。");
+  };
+
   const jumpToOutline = (item: OutlineItem) => {
     if (!editor || typeof item.position !== "number") return;
     editor.chain().focus().setTextSelection(item.position + 1).scrollIntoView().run();
   };
 
   const isSaving = manualSavePending || props.saveStatus === "保存中";
+  const selectedImageAttributes = editor?.isActive("image") ? editor.getAttributes("image") : null;
+  const selectedImagePresentation = clientFloatingImagePresentation(selectedImageAttributes?.docxFloating);
   let currentDisplayPageNumber = 0;
   let previousDisplaySection = -1;
   const previewDisplayPageNumbers = previewPages.map((page) => {
@@ -3363,6 +3493,17 @@ function Editor(props: {
             <FormatSelect title="设置当前单元格底色" placeholder="单元格底色" options={tableCellShadingOptions} onSelect={(value, label) => updateCurrentTableCell({ shading: value === "none" ? null : value }, `单元格${label}`)} />
             <FormatSelect title="设置当前单元格边框" placeholder="单元格边框" options={tableCellBorderOptions} onSelect={(value, label) => updateCurrentTableCell({ borderPreset: value }, `单元格${label}`)} />
             <button onClick={() => imageInputRef.current?.click()} title="插入图片"><ImageIcon size={16} />图片</button>
+            {selectedImageAttributes ? <div className="image-format-control">
+              <div className="image-layout-segments" aria-label="图片文字环绕方式">
+                <button className={!selectedImagePresentation ? "active-format" : ""} onClick={() => updateSelectedImageLayout("inline")} title="图片作为字符参与正文排版">嵌入</button>
+                <button className={selectedImagePresentation?.wrap === "square" && selectedImagePresentation.align === "left" ? "active-format" : ""} onClick={() => updateSelectedImageLayout("wrapLeft")} title="文字环绕在图片右侧">左环绕</button>
+                <button className={selectedImagePresentation?.wrap === "square" && selectedImagePresentation.align === "right" ? "active-format" : ""} onClick={() => updateSelectedImageLayout("wrapRight")} title="文字环绕在图片左侧">右环绕</button>
+                <button className={selectedImagePresentation?.wrap === "topAndBottom" ? "active-format" : ""} onClick={() => updateSelectedImageLayout("topAndBottom")} title="文字仅显示在图片上下方">上下型</button>
+              </div>
+              <label>宽<input aria-label="选中图片宽度" type="number" min="1" max="602" value={Math.round(Number(selectedImageAttributes.widthPx) || 1)} onChange={(event) => updateSelectedImageSize("widthPx", event.target.value)} /></label>
+              <label>高<input aria-label="选中图片高度" type="number" min="1" max="911" value={Math.round(Number(selectedImageAttributes.heightPx) || 1)} onChange={(event) => updateSelectedImageSize("heightPx", event.target.value)} /></label>
+              <label className="image-aspect-lock"><input aria-label="锁定图片纵横比" type="checkbox" checked={imageAspectLocked} onChange={(event) => setImageAspectLocked(event.target.checked)} />锁定比例</label>
+            </div> : null}
             <input ref={imageInputRef} className="hidden-file-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={(event) => { insertImageFile(event.target.files?.[0] || null); event.currentTarget.value = ""; }} />
             <span className="format-divider" />
             <button onClick={() => applyParagraphAlignment("left", "左对齐")} title="左对齐"><AlignLeft size={16} /></button>

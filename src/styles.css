@@ -236,6 +236,46 @@ button:disabled {
   padding: 0;
 }
 
+.image-format-control,
+.image-layout-segments {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.image-format-control {
+  min-height: 34px;
+  padding-left: 4px;
+  border-left: 1px solid #dfe5eb;
+}
+
+.image-format-control > label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 34px;
+  color: #465565;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.image-format-control input[type="number"] {
+  width: 58px;
+  height: 30px;
+  border: 1px solid #dfe5eb;
+  border-radius: 6px;
+  padding: 0 6px;
+}
+
+.image-format-control .image-aspect-lock {
+  padding: 0 5px;
+}
+
+.image-format-control .image-aspect-lock input {
+  width: 14px;
+  height: 14px;
+}
+
 .sidebar-collapsed .side-nav button {
   justify-content: center;
   padding: 0;

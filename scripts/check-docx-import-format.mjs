@@ -185,7 +185,7 @@ async function buildFormattedDocxFixture() {
         </w:drawing>
       </w:r>
     </w:p>
-    <w:p><w:r><w:t>图片前文字</w:t></w:r><w:r><w:drawing><wp:extent cx="952500" cy="952500"/><wp:docPr id="2" name="混排图标" descr="混排图标"/><a:graphic><a:graphicData><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:blipFill><a:blip r:embed="rIdImage1"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></w:drawing></w:r><w:r><w:t>图片后文字</w:t></w:r></w:p>
+    <w:p><w:r><w:t>图片前文字</w:t></w:r><w:r><w:drawing><wp:anchor distT="95250" distR="190500" distB="285750" distL="381000" relativeHeight="7" behindDoc="0" locked="1" layoutInCell="1" allowOverlap="0"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:align>right</wp:align></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>190500</wp:posOffset></wp:positionV><wp:extent cx="952500" cy="952500"/><wp:wrapSquare wrapText="bothSides"/><wp:docPr id="2" name="混排图标" descr="混排图标"/><a:graphic><a:graphicData><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:blipFill><a:blip r:embed="rIdImage1"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r><w:r><w:t>图片后文字</w:t></w:r></w:p>
     <w:sectPr><w:headerReference w:type="default" r:id="rIdHeader1"/><w:footerReference w:type="default" r:id="rIdFooter1"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="360" w:footer="900"/></w:sectPr>
   </w:body>
 </w:document>`
@@ -408,12 +408,17 @@ assert.ok((hyperlinkRoundTripXml.match(/<w:drawing>/g) || []).length >= 2, "纯�
 const roundTripMixedImageParagraph = (hyperlinkRoundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("图片前文字")) || "";
 assert.ok(roundTripMixedImageParagraph.indexOf("图片前文字") < roundTripMixedImageParagraph.indexOf("<w:drawing>"));
 assert.ok(roundTripMixedImageParagraph.indexOf("<w:drawing>") < roundTripMixedImageParagraph.indexOf("图片后文字"));
+assert.match(roundTripMixedImageParagraph, /<wp:anchor[^>]+distT="95250"[^>]+distB="285750"[^>]+distL="381000"[^>]+distR="190500"[^>]+allowOverlap="0"[^>]+behindDoc="0"[^>]+locked="1"/);
+assert.match(roundTripMixedImageParagraph, /<wp:positionH relativeFrom="column"><wp:align>right<\/wp:align><\/wp:positionH>/);
+assert.match(roundTripMixedImageParagraph, /<wp:positionV relativeFrom="paragraph"><wp:posOffset>190500<\/wp:posOffset><\/wp:positionV>/);
+assert.match(roundTripMixedImageParagraph, /<wp:wrapSquare wrapText="bothSides"/);
 const hyperlinkReimported = await parseImportedDocument({ originalname: "hyperlink-round-trip.docx", buffer: hyperlinkRoundTripBuffer, mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: hyperlinkRoundTripBuffer.length });
 assert.match(hyperlinkReimported.content, /<a href="https:\/\/platform\.openai\.com\/docs"[^>]*>[\s\S]*OpenAI documentation[\s\S]*<\/a>/);
 const roundTripBodyImage = hyperlinkReimported.content.match(/<img[^>]+src="data:image\/png;base64,[^>]*>/)?.[0] || "";
 assert.ok(roundTripBodyImage, "正文图片再次导入后必须恢复为可编辑图片");
 assert.match(roundTripBodyImage, /alt="正文流程图"/);
 assert.match(hyperlinkReimported.content, /图片前文字[\s\S]*<img[^>]+alt="混排图标"[\s\S]*图片后文字/);
+assert.match(hyperlinkReimported.content, /<img[^>]+data-docx-wrap="square"[^>]+data-docx-float-align="right"/);
 assert.match(imported.content, /<p[^>]+data-keep-next="true"[^>]+data-keep-lines="true"[^>]+data-page-break-before="true"[^>]+data-widow-control="true"[^>]*>Pagination controlled paragraph<\/p>/);
 assert.match(imported.content, /<p[^>]+data-widow-control="false"[^>]*>Widow control disabled paragraph<\/p>/);
 const importedTabParagraph = (imported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || [])
@@ -461,6 +466,7 @@ assert.match(imported.content, /data-page-break="true"/);
 assert.match(imported.content, /<img[^>]+src="data:image\/png;base64,/);
 assert.match(imported.content, /<img[^>]+alt="正文流程图"/);
 assert.match(imported.content, /图片前文字[\s\S]*<img[^>]+alt="混排图标"[\s\S]*图片后文字/);
+assert.match(imported.content, /<img[^>]+data-docx-wrap="square"[^>]+data-docx-float-align="right"[^>]+style="[^"]*float:\s*right/);
 // 中文注解：超出 A4 内容区的大图在导入时即等比缩放，避免浏览器与导出端分别限制宽高后产生占位差。
 assert.match(imported.content, /<img[^>]+style="[^"]*width:\s*602px;\s*height:\s*401\.33px;/);
 // 中文注解：读取 numbering.xml 后应恢复编号类型和嵌套层级，供 Tiptap 继续编辑。

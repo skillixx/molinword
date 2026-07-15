@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import express from "express";
-import { AlignmentType, BorderStyle, Document, ExternalHyperlink, Footer, Header, HeadingLevel, HeightRule, ImageRun, LevelFormat, LineRuleType, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, Tab, Table, TableCell, TableLayoutType, TableRow, TextRun, VerticalAlignTable, WidthType } from "docx";
+import { AlignmentType, BorderStyle, Document, ExternalHyperlink, Footer, Header, HeadingLevel, HeightRule, ImageRun, LevelFormat, LineRuleType, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, Tab, Table, TableCell, TableLayoutType, TableRow, TextRun, TextWrappingSide, TextWrappingType, VerticalAlignTable, WidthType } from "docx";
 import { imageSize } from "image-size";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
@@ -352,7 +352,7 @@ function sanitizeImportedHtml(value = "") {
       tr: ["style", "data-row-height", "data-row-height-rule", "data-row-cant-split", "data-row-repeat-header"],
       th: ["style", "colspan", "rowspan", "colwidth", "data-docx-cell", "data-cell-margins", "data-cell-vertical-align", "data-cell-shading", "data-cell-borders"],
       td: ["style", "colspan", "rowspan", "colwidth", "data-docx-cell", "data-cell-margins", "data-cell-vertical-align", "data-cell-shading", "data-cell-borders"],
-      img: ["src", "alt", "style"],
+      img: ["src", "alt", "style", "width", "height", "data-docx-floating", "data-docx-wrap", "data-docx-float-align"],
       div: ["data-page-break", "data-section-break", "data-section-layout", "class"]
     },
     allowedSchemes: ["data", "http", "https", "mailto"],
@@ -377,7 +377,13 @@ function sanitizeImportedHtml(value = "") {
         height: [/^auto$/, /^\d+(?:\.\d+)?px$/],
         "max-width": [/^100%$/],
         display: [/^block$/],
-        margin: [/^0 auto$/]
+        margin: [/^0 auto$/],
+        "margin-top": [/^\d+(?:\.\d+)?px$/],
+        "margin-right": [/^\d+(?:\.\d+)?px$/],
+        "margin-bottom": [/^\d+(?:\.\d+)?px$/],
+        "margin-left": [/^\d+(?:\.\d+)?px$/],
+        float: [/^(?:left|right)$/],
+        clear: [/^(?:left|right|both)$/]
       },
       table: {
         width: [/^\d+(?:\.\d+)?(?:px|%)$/],
@@ -882,6 +888,105 @@ async function readDocxImageDataUrl(zip, relationships, embedId) {
   return `data:${imageMimeFromPath(normalizedPath)};base64,${data}`;
 }
 
+const docxHorizontalPositionRelativeValues = new Set(["character", "column", "insideMargin", "leftMargin", "margin", "outsideMargin", "page", "rightMargin"]);
+const docxVerticalPositionRelativeValues = new Set(["bottomMargin", "insideMargin", "line", "margin", "outsideMargin", "page", "paragraph", "topMargin"]);
+const docxHorizontalAlignValues = new Set(["center", "inside", "left", "outside", "right"]);
+const docxVerticalAlignValues = new Set(["bottom", "center", "inside", "outside", "top"]);
+const docxWrapTypes = new Set(["none", "square", "tight", "topAndBottom"]);
+const docxWrapSides = new Set(["bothSides", "left", "right", "largest"]);
+
+function boundedDocxNumber(value, minimum, maximum, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(minimum, Math.min(Math.round(number), maximum)) : fallback;
+}
+
+function normalizeDocxFloating(value) {
+  let source = value;
+  if (typeof source === "string") {
+    try { source = JSON.parse(source); } catch { return null; }
+  }
+  if (!source || typeof source !== "object") return null;
+  const normalizePosition = (position, relativeValues, alignValues, fallbackRelative) => {
+    const relative = relativeValues.has(position?.relative) ? position.relative : fallbackRelative;
+    const align = alignValues.has(position?.align) ? position.align : null;
+    const hasOffset = Number.isFinite(Number(position?.offset));
+    return align
+      ? { relative, align, offset: null }
+      : { relative, align: null, offset: hasOffset ? boundedDocxNumber(position.offset, -2147483648, 2147483647) : 0 };
+  };
+  const wrapType = docxWrapTypes.has(source.wrap?.type) ? source.wrap.type : "none";
+  return {
+    horizontal: normalizePosition(source.horizontal, docxHorizontalPositionRelativeValues, docxHorizontalAlignValues, "column"),
+    vertical: normalizePosition(source.vertical, docxVerticalPositionRelativeValues, docxVerticalAlignValues, "paragraph"),
+    wrap: {
+      type: wrapType,
+      side: docxWrapSides.has(source.wrap?.side) ? source.wrap.side : "bothSides"
+    },
+    margins: {
+      top: boundedDocxNumber(source.margins?.top, 0, 9144000),
+      right: boundedDocxNumber(source.margins?.right, 0, 9144000),
+      bottom: boundedDocxNumber(source.margins?.bottom, 0, 9144000),
+      left: boundedDocxNumber(source.margins?.left, 0, 9144000)
+    },
+    allowOverlap: source.allowOverlap !== false,
+    behindDocument: source.behindDocument === true,
+    lockAnchor: source.lockAnchor === true,
+    layoutInCell: source.layoutInCell !== false,
+    zIndex: boundedDocxNumber(source.zIndex, 0, 4294967295, 1)
+  };
+}
+
+function docxPositionFromAnchor(anchor, name, relativeValues, alignValues, fallbackRelative) {
+  const position = xmlDescendants(anchor, name)[0];
+  const relative = firstValue(position?.attribs, ["relativeFrom"]);
+  const alignText = collectText(xmlChild(position, "wp:align")).trim();
+  const offsetText = collectText(xmlChild(position, "wp:posOffset")).trim();
+  return {
+    relative: relativeValues.has(relative) ? relative : fallbackRelative,
+    align: alignValues.has(alignText) ? alignText : null,
+    offset: alignValues.has(alignText) ? null : boundedDocxNumber(offsetText, -2147483648, 2147483647, 0)
+  };
+}
+
+function docxFloatingFromDrawing(container) {
+  const anchor = xmlDescendants(container, "wp:anchor")[0];
+  if (!anchor) return null;
+  const wrapNode = ["wp:wrapSquare", "wp:wrapTight", "wp:wrapTopAndBottom", "wp:wrapNone"]
+    .map((name) => xmlDescendants(anchor, name)[0])
+    .find(Boolean);
+  const wrapTypeByName = { "wp:wrapSquare": "square", "wp:wrapTight": "tight", "wp:wrapTopAndBottom": "topAndBottom", "wp:wrapNone": "none" };
+  return normalizeDocxFloating({
+    horizontal: docxPositionFromAnchor(anchor, "wp:positionH", docxHorizontalPositionRelativeValues, docxHorizontalAlignValues, "column"),
+    vertical: docxPositionFromAnchor(anchor, "wp:positionV", docxVerticalPositionRelativeValues, docxVerticalAlignValues, "paragraph"),
+    wrap: { type: wrapTypeByName[wrapNode?.name] || "none", side: firstValue(wrapNode?.attribs, ["wrapText"]) || "bothSides" },
+    margins: {
+      top: firstValue(anchor.attribs, ["distT"]),
+      right: firstValue(anchor.attribs, ["distR"]),
+      bottom: firstValue(anchor.attribs, ["distB"]),
+      left: firstValue(anchor.attribs, ["distL"])
+    },
+    allowOverlap: firstValue(anchor.attribs, ["allowOverlap"]) !== "0",
+    behindDocument: firstValue(anchor.attribs, ["behindDoc"]) === "1",
+    lockAnchor: firstValue(anchor.attribs, ["locked"]) === "1",
+    layoutInCell: firstValue(anchor.attribs, ["layoutInCell"]) !== "0",
+    zIndex: firstValue(anchor.attribs, ["relativeHeight"])
+  });
+}
+
+function docxFloatingHtmlAttributes(floating) {
+  if (!floating) return { attributes: "", style: "" };
+  const horizontalAlign = floating.horizontal.align || "offset";
+  const marginPx = Object.fromEntries(Object.entries(floating.margins).map(([side, value]) => [side, Math.round(Number(value) / 9525 * 100) / 100]));
+  const styles = [];
+  if (["square", "tight"].includes(floating.wrap.type) && ["left", "right"].includes(horizontalAlign)) styles.push(`float: ${horizontalAlign}`);
+  if (floating.wrap.type === "topAndBottom") styles.push("clear: both");
+  styles.push(`margin-top: ${marginPx.top}px`, `margin-right: ${marginPx.right}px`, `margin-bottom: ${marginPx.bottom}px`, `margin-left: ${marginPx.left}px`);
+  return {
+    attributes: ` data-docx-floating="${escapeHtml(JSON.stringify(floating))}" data-docx-wrap="${floating.wrap.type}" data-docx-float-align="${horizontalAlign}"`,
+    style: styles.join("; ") + "; "
+  };
+}
+
 function docxPartRelationshipsPath(partPath = "") {
   const normalized = String(partPath).replace(/\\/g, "/");
   const slash = normalized.lastIndexOf("/");
@@ -971,8 +1076,9 @@ async function docxImagesFromRun(runNode, zip, relationships) {
       : "";
     const properties = xmlDescendants(container, "wp:docPr")[0];
     const alt = firstValue(properties?.attribs, ["descr", "title", "name"]) || "导入图片";
+    const floatingHtml = docxFloatingHtmlAttributes(docxFloatingFromDrawing(container));
     // 中文注解：Word 图片尺寸使用 EMU，导入时换算为 CSS 像素，在线分页才能按原图占位测量。
-    if (dataUrl) images.push(`<img src="${dataUrl}" alt="${escapeHtml(alt)}" style="${sizeStyle}max-width: 100%;" />`);
+    if (dataUrl) images.push(`<img src="${dataUrl}" alt="${escapeHtml(alt)}"${floatingHtml.attributes} style="${sizeStyle}${floatingHtml.style}max-width: 100%;" />`);
   }
   return images;
 }
@@ -2253,6 +2359,38 @@ function imageSizeFromNode(node, data) {
   return { width, height };
 }
 
+function docxFloatingOptionsFromNode(node) {
+  const floating = normalizeDocxFloating(node?.attribs?.["data-docx-floating"]);
+  if (!floating) return undefined;
+  const wrapTypeMap = {
+    none: TextWrappingType.NONE,
+    square: TextWrappingType.SQUARE,
+    tight: TextWrappingType.TIGHT,
+    topAndBottom: TextWrappingType.TOP_AND_BOTTOM
+  };
+  const wrapSideMap = {
+    bothSides: TextWrappingSide.BOTH_SIDES,
+    left: TextWrappingSide.LEFT,
+    right: TextWrappingSide.RIGHT,
+    largest: TextWrappingSide.LARGEST
+  };
+  const positionOptions = (position) => position.align
+    ? { relative: position.relative, align: position.align }
+    : { relative: position.relative, offset: position.offset };
+  // 中文注解：浮动参数直接映射回 wp:anchor；在线模型保存的是 OOXML 原始 EMU，避免多次往返累积单位误差。
+  return {
+    horizontalPosition: positionOptions(floating.horizontal),
+    verticalPosition: positionOptions(floating.vertical),
+    allowOverlap: floating.allowOverlap,
+    behindDocument: floating.behindDocument,
+    lockAnchor: floating.lockAnchor,
+    layoutInCell: floating.layoutInCell,
+    margins: floating.margins,
+    wrap: { type: wrapTypeMap[floating.wrap.type], side: wrapSideMap[floating.wrap.side] },
+    zIndex: floating.zIndex
+  };
+}
+
 function imageRunFromNode(node) {
   const image = dataUrlToImage(node?.attribs?.src);
   if (!image) return null;
@@ -2261,7 +2399,8 @@ function imageRunFromNode(node) {
     data: image.data,
     type: image.extension,
     transformation: imageSizeFromNode(node, image.data),
-    altText: { name: alt, description: alt, title: alt }
+    altText: { name: alt, description: alt, title: alt },
+    floating: docxFloatingOptionsFromNode(node)
   });
 }
 
