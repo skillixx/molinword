@@ -20,7 +20,7 @@ const fixtureDocument = {
   tone: "正式",
   templateId: 3,
   outline: ["超长结构分页"],
-  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table><tbody><tr><th>审批阶段</th><th>状态</th></tr><tr><td>商务评审</td><td>通过</td></tr><tr><td>归档确认</td><td>完成</td></tr></tbody></table>`,
+  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table><tbody><tr><th>审批阶段</th><th>状态</th></tr><tr><td>商务评审</td><td>通过</td></tr><tr><td>归档确认</td><td>完成</td></tr></tbody></table><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p>`,
   // 中文注解：模拟升级前数据库里的旧页面设置，确保真实历史文档开启高级页眉时不会崩溃。
   pageLayout: { headerText: "", footerText: "", pageNumberEnabled: false },
   status: "draft",
@@ -224,6 +224,13 @@ try {
   assert.match(advancedFormatHtml, /<mark[^>]+data-highlight="yellow"[^>]*>突出显示工具<\/mark>/);
   assert.match(advancedFormatHtml, /<sup>上标工具<\/sup>/);
   assert.match(advancedFormatHtml, /<sub>下标工具<\/sub>/);
+  const paginationParagraphLocator = editor.locator("p").filter({ hasText: "分页控制段落" }).filter({ hasNotText: "前置" });
+  await paginationParagraphLocator.click();
+  await page.getByRole("button", { name: "与下段同页", exact: true }).click();
+  await page.getByRole("button", { name: "段中不分页", exact: true }).click();
+  await page.getByRole("button", { name: "段前分页", exact: true }).click();
+  const paginationControlHtml = await editor.innerHTML();
+  assert.match(paginationControlHtml, /<p[^>]+data-keep-next="true"[^>]+data-keep-lines="true"[^>]+data-page-break-before="true"[^>]*>[\s\S]*?分页控制段落[\s\S]*?<\/p>/);
 
   const sourceTables = editor.locator("table");
   assert.equal(await sourceTables.count(), 2);
@@ -415,6 +422,10 @@ try {
   assert.match(documentXml, /<w:highlight w:val="yellow"\/>/);
   assert.match(documentXml, /<w:vertAlign w:val="superscript"\/>/);
   assert.match(documentXml, /<w:vertAlign w:val="subscript"\/>/);
+  const paginationParagraph = (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("分页控制段落")) || "";
+  assert.match(paginationParagraph, /<w:keepNext\/>/);
+  assert.match(paginationParagraph, /<w:keepLines\/>/);
+  assert.match(paginationParagraph, /<w:pageBreakBefore\/>/);
   assert.ok(headerXmlParts.some((xml) => xml.includes("首页项目封面")));
   assert.ok(headerXmlParts.some((xml) => xml.includes("奇数页项目页眉")));
   assert.ok(headerXmlParts.some((xml) => xml.includes("奇数页项目页眉") && /<w:jc w:val="left"\/>/.test(xml) && /<w:rFonts[^>]+SimSun/.test(xml) && /<w:sz w:val="24"\/>/.test(xml) && /<w:color w:val="C00000"\/>/.test(xml) && /<w:b\/>/.test(xml)));
@@ -484,6 +495,11 @@ try {
       sourceTableImageCount: document.querySelectorAll(".word-editor table img").length,
       previewTableImageCount: document.querySelectorAll(".page-body table img").length,
       previewRowSpanCount: document.querySelectorAll('.page-body td[rowspan="2"]').length,
+      paginationControlStartsPage: Array.from(document.querySelectorAll(".page-sheet")).some((page) => {
+        const blocks = Array.from(page.querySelectorAll(":scope > .page-body > .page-block"));
+        return blocks[0]?.textContent?.includes("分页控制段落") && !page.textContent?.includes("分页控制前置段落");
+      }),
+      paginationControlKeepsNext: Array.from(document.querySelectorAll(".page-sheet")).some((page) => page.textContent?.includes("分页控制段落") && page.textContent?.includes("分页控制后续段落")),
       templateLabelVisible: document.body.textContent?.includes("模板样式：商业计划书") || false,
       fontVariable: getComputedStyle(document.querySelector(".editor-scroll")).getPropertyValue("--document-font-family").trim(),
       lineVariable: getComputedStyle(document.querySelector(".editor-scroll")).getPropertyValue("--document-line-height").trim(),
@@ -520,6 +536,8 @@ try {
   assert.equal(result.sourceTableImageCount, 1);
   assert.equal(result.previewTableImageCount, 1);
   assert.ok(result.previewRowSpanCount > 0, "分页预览应保留纵向合并单元格");
+  assert.equal(result.paginationControlStartsPage, true, "段前分页段落应成为新页首段");
+  assert.equal(result.paginationControlKeepsNext, true, "与下段同页应保留后续段落在同一页");
   assert.equal(result.templateLabelVisible, true);
   assert.equal(result.fontVariable, '"SimSun"');
   assert.equal(result.lineVariable, "1.5833");

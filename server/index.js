@@ -340,11 +340,11 @@ function sanitizeImportedHtml(value = "") {
   return sanitizeHtml(String(value), {
     allowedTags: ["h1", "h2", "h3", "p", "span", "strong", "b", "em", "i", "u", "s", "mark", "sup", "sub", "ul", "ol", "li", "blockquote", "br", "table", "tbody", "thead", "tr", "th", "td", "img", "div"],
     allowedAttributes: {
-      h1: ["style", "data-indent"],
-      h2: ["style", "data-indent"],
-      h3: ["style", "data-indent"],
-      p: ["style", "data-indent"],
-      li: ["style", "data-indent"],
+      h1: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before"],
+      h2: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before"],
+      h3: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before"],
+      p: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before"],
+      li: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before"],
       span: ["style"],
       mark: ["data-highlight", "style"],
       th: ["colspan", "rowspan"],
@@ -657,6 +657,15 @@ function parseParagraphProperties(pPr) {
   if (after) styles["margin-bottom"] = after;
   if (lineHeight) styles["line-height"] = lineHeight;
   if (["exact", "atLeast"].includes(lineRule)) styles["--word-line-rule"] = lineRule;
+  const paginationProperties = [
+    ["w:keepNext", "$keepNext"],
+    ["w:keepLines", "$keepLines"],
+    ["w:pageBreakBefore", "$pageBreakBefore"]
+  ];
+  for (const [elementName, styleName] of paginationProperties) {
+    const element = xmlChild(pPr, elementName);
+    if (element) styles[styleName] = wordToggleEnabled(element) ? "1" : "0";
+  }
   // 中文注解：段落间距及行距规则都进入安全样式，后续编辑和再次导出才能保持同一分页语义。
   return styles;
 }
@@ -972,6 +981,9 @@ async function parseStyledDocxParagraph(paragraphNode, context) {
   const styleText = cssText(paragraphStyles);
   if (styleText) attrs.push(`style="${escapeHtml(styleText)}"`);
   if (indentLevel) attrs.push(`data-indent="${indentLevel}"`);
+  if (paragraphStyles.$keepNext === "1") attrs.push('data-keep-next="true"');
+  if (paragraphStyles.$keepLines === "1") attrs.push('data-keep-lines="true"');
+  if (paragraphStyles.$pageBreakBefore === "1") attrs.push('data-page-break-before="true"');
   if (body.includes(pageBreakHtml())) {
     // 中文注解：分页符是块级语义，导入时拆出段落外层，避免保存为非法的 p > div 结构。
     const chunks = body.split(pageBreakHtml());
@@ -1670,6 +1682,10 @@ function paragraphStyleFromNode(node) {
   }
   // 中文注解：只有 HTML 明确携带段落间距时才覆盖模板默认值，避免普通段落丢失既有样式。
   if (Object.keys(spacing).length) paragraphStyle.spacing = spacing;
+  if (node?.attribs?.["data-keep-next"] === "true") paragraphStyle.keepNext = true;
+  if (node?.attribs?.["data-keep-lines"] === "true") paragraphStyle.keepLines = true;
+  if (node?.attribs?.["data-page-break-before"] === "true") paragraphStyle.pageBreakBefore = true;
+  // 中文注解：分页控制写入 Word 原生段落属性，不能用额外空段落或手动分页符模拟。
   return paragraphStyle;
 }
 

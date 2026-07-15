@@ -66,6 +66,7 @@ type TextCaseMode = "upper" | "lower" | "title";
 type EditorViewMode = "edit" | "page";
 type ParagraphSpacingProperty = "line-height" | "margin-top" | "margin-bottom" | "--word-line-rule";
 type ParagraphSpacingStyles = Partial<Record<ParagraphSpacingProperty, string>>;
+type ParagraphPaginationAttribute = "keepNext" | "keepLines" | "pageBreakBefore";
 type FormatSelectOption = { label: string; value: string };
 type DocumentPageTextStyle = {
   alignment: "left" | "center" | "right";
@@ -361,6 +362,7 @@ declare module "@tiptap/core" {
       decreaseIndent: () => ReturnType;
       setFirstLineIndent: (level: number) => ReturnType;
       setParagraphSpacing: (styles: ParagraphSpacingStyles) => ReturnType;
+      toggleParagraphPagination: (attribute: ParagraphPaginationAttribute) => ReturnType;
     };
   }
 }
@@ -806,6 +808,21 @@ const ParagraphIndent = Extension.create({
               const indent = Math.max(0, Math.min(Number(attributes.indent || 0), maxIndentLevel));
               return indent ? { "data-indent": indent, style: `--indent-level: ${indent};` } : {};
             }
+          },
+          keepNext: {
+            default: false,
+            parseHTML: (element) => element.getAttribute("data-keep-next") === "true",
+            renderHTML: (attributes) => attributes.keepNext ? { "data-keep-next": "true" } : {}
+          },
+          keepLines: {
+            default: false,
+            parseHTML: (element) => element.getAttribute("data-keep-lines") === "true",
+            renderHTML: (attributes) => attributes.keepLines ? { "data-keep-lines": "true" } : {}
+          },
+          pageBreakBefore: {
+            default: false,
+            parseHTML: (element) => element.getAttribute("data-page-break-before") === "true",
+            renderHTML: (attributes) => attributes.pageBreakBefore ? { "data-page-break-before": "true" } : {}
           }
         }
       }
@@ -899,7 +916,26 @@ const ParagraphIndent = Extension.create({
           // 中文注解：行距、段前和段后统一保存在段落安全样式中，编辑视图、分页预览和导出共用同一数据源。
           const importedStyle = mergeStyleText(String(node.attrs.importedStyle || ""), styles, importedBlockStyleNames);
           return { importedStyle };
-        })
+        }),
+      toggleParagraphPagination:
+        (attribute) =>
+        ({ state, tr, dispatch }: CommandProps) => {
+          const selectedValues: boolean[] = [];
+          state.doc.nodesBetween(state.selection.from, state.selection.to, (node) => {
+            if (["paragraph", "heading"].includes(node.type.name)) selectedValues.push(Boolean(node.attrs[attribute]));
+          });
+          if (!selectedValues.length && state.selection.empty) {
+            for (let depth = state.selection.$from.depth; depth > 0; depth -= 1) {
+              const node = state.selection.$from.node(depth);
+              if (!["paragraph", "heading"].includes(node.type.name)) continue;
+              selectedValues.push(Boolean(node.attrs[attribute]));
+              break;
+            }
+          }
+          const nextValue = !selectedValues.some(Boolean);
+          // 中文注解：多段选区按 Word 的统一开关处理；只要选区内已有启用项，再次点击就统一关闭。
+          return updateSelectedTextblocks(state, tr, dispatch, () => ({ [attribute]: nextValue }));
+        }
     };
   }
 });
@@ -2219,7 +2255,7 @@ function Editor(props: {
       return true;
     };
 
-    sourceBlocks.forEach((child) => {
+    sourceBlocks.forEach((child, childIndex) => {
       if (child instanceof HTMLElement && child.dataset.sectionBreak) {
         // 中文注解：分节符总从下一页开始，并切换后续内容的纸张方向、页边距及页眉页脚。
         openNextSection(child.dataset.sectionLayout || "", child.dataset.sectionBreak);
@@ -2231,9 +2267,32 @@ function Editor(props: {
         return;
       }
 
+      if (child instanceof HTMLElement && child.dataset.pageBreakBefore === "true" && currentHeight > 0) {
+        // 中文注解：段前分页只在当前页已有内容时换页，避免段落本来就在页首时额外制造空白页。
+        openNextPage();
+      }
+
       const blockHtml = blockOuterHtml(child);
       const blockHeight = measureHtml(blockHtml);
+      if (child instanceof HTMLElement && child.dataset.keepNext === "true" && currentHeight > 0) {
+        const nextBlock = sourceBlocks[childIndex + 1];
+        const canKeepWithNext = nextBlock instanceof HTMLElement
+          && !nextBlock.dataset.pageBreak
+          && !nextBlock.dataset.sectionBreak
+          && nextBlock.dataset.pageBreakBefore !== "true";
+        if (canKeepWithNext) {
+          const nextHeight = measureHtml(blockOuterHtml(nextBlock));
+          const groupHeight = blockHeight + nextHeight;
+          if (groupHeight <= pageContentHeight && currentHeight + groupHeight > pageContentHeight) openNextPage();
+        }
+      }
       if (currentHeight + blockHeight > pageContentHeight) {
+        if (child instanceof HTMLElement && child.dataset.keepLines === "true" && blockHeight <= pageContentHeight) {
+          // 中文注解：段中不分页优先把完整段落移到下一页；只有单段本身超过整页时才允许兜底拆分。
+          openNextPage();
+          appendHtml(blockHtml, blockHeight);
+          return;
+        }
         const itemCount = structuredBlockItemCount(child);
         if (itemCount > 1) {
           let start = 0;
@@ -2408,6 +2467,12 @@ function Editor(props: {
     if (!editor) return;
     const applied = (editor.chain().focus() as unknown as { setParagraphSpacing: (value: ParagraphSpacingStyles) => { run: () => boolean } }).setParagraphSpacing(styles).run();
     setSelectionHint(applied ? `已设置${label}。` : "请把光标放到段落或标题中，再设置段落间距。");
+  };
+
+  const toggleParagraphPagination = (attribute: ParagraphPaginationAttribute, label: string) => {
+    if (!editor) return;
+    const applied = editor.chain().focus().toggleParagraphPagination(attribute).run();
+    setSelectionHint(applied ? `已切换${label}。` : "请把光标放到段落或标题中，再设置分页控制。");
   };
 
   const insertImageFile = (file: File | null) => {
@@ -2690,6 +2755,9 @@ function Editor(props: {
             <FormatSelect title="设置当前段落或选区的行距" placeholder="行距" options={lineSpacingOptions} icon={<Rows3 size={16} />} onSelect={(value, label) => applyParagraphSpacing({ "line-height": value, "--word-line-rule": "auto" }, `${label}行距`)} />
             <FormatSelect title="设置当前段落或选区的段前间距" placeholder="段前" options={paragraphSpacingOptions} onSelect={(value) => applyParagraphSpacing({ "margin-top": value }, `段前 ${value}`)} />
             <FormatSelect title="设置当前段落或选区的段后间距" placeholder="段后" options={paragraphSpacingOptions} onSelect={(value) => applyParagraphSpacing({ "margin-bottom": value }, `段后 ${value}`)} />
+            <button className={editor?.getAttributes("paragraph").keepNext || editor?.getAttributes("heading").keepNext ? "active-format" : ""} onClick={() => toggleParagraphPagination("keepNext", "与下段同页")} title="保持当前段落与下一段在同一页">与下段同页</button>
+            <button className={editor?.getAttributes("paragraph").keepLines || editor?.getAttributes("heading").keepLines ? "active-format" : ""} onClick={() => toggleParagraphPagination("keepLines", "段中不分页")} title="避免当前段落被拆到两页">段中不分页</button>
+            <button className={editor?.getAttributes("paragraph").pageBreakBefore || editor?.getAttributes("heading").pageBreakBefore ? "active-format" : ""} onClick={() => toggleParagraphPagination("pageBreakBefore", "段前分页")} title="让当前段落从新页开始">段前分页</button>
             <span className="format-divider" />
             <button onClick={() => editor?.chain().focus().decreaseIndent().run()} title="减少首行缩进"><IndentDecrease size={16} />减少首行</button>
             <button onClick={() => editor?.chain().focus().increaseIndent().run()} title="增加首行缩进"><IndentIncrease size={16} />首行缩进</button>
