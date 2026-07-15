@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import express from "express";
 import { AlignmentType, Document, HeadingLevel, ImageRun, LevelFormat, LineRuleType, Packer, PageBreak as DocxPageBreak, Paragraph, Table, TableCell, TableRow, TextRun, WidthType } from "docx";
+import { imageSize } from "image-size";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
 import mammoth from "mammoth";
@@ -456,10 +457,21 @@ async function readDocxImageDataUrl(zip, relationships, embedId) {
 
 async function docxImagesFromRun(runNode, zip, relationships) {
   const images = [];
-  for (const blip of xmlDescendants(runNode, "a:blip")) {
+  const drawings = xmlDescendants(runNode, "w:drawing");
+  const imageContainers = drawings.length ? drawings : [runNode];
+  for (const container of imageContainers) {
+    const blip = xmlDescendants(container, "a:blip")[0];
+    if (!blip) continue;
     const embedId = firstValue(blip.attribs, ["r:embed", "embed"]);
     const dataUrl = await readDocxImageDataUrl(zip, relationships, embedId);
-    if (dataUrl) images.push(`<img src="${dataUrl}" alt="导入图片" style="max-width: 100%; height: auto;" />`);
+    const extent = xmlDescendants(container, "wp:extent")[0];
+    const width = Number.parseFloat(firstValue(extent?.attribs, ["cx"]));
+    const height = Number.parseFloat(firstValue(extent?.attribs, ["cy"]));
+    const sizeStyle = width > 0 && height > 0
+      ? `width: ${Math.round(width / 9525 * 100) / 100}px; height: ${Math.round(height / 9525 * 100) / 100}px; `
+      : "";
+    // 中文注解：Word 图片尺寸使用 EMU，导入时换算为 CSS 像素，在线分页才能按原图占位测量。
+    if (dataUrl) images.push(`<img src="${dataUrl}" alt="导入图片" style="${sizeStyle}max-width: 100%;" />`);
   }
   return images;
 }
@@ -923,7 +935,7 @@ function paragraphFromNode(node, listContext = null) {
   const paragraphStyle = mergeParagraphOptions(paragraphStyleFromNode(node), paragraphIndentFromNode(node));
 
   if (tagName === "h1") {
-    return new Paragraph({ children: textRunsFromNode(node), heading: HeadingLevel.HEADING_1, ...mergeParagraphOptions({ spacing: { after: 160 } }, paragraphStyle) });
+    return new Paragraph({ children: textRunsFromNode(node), heading: HeadingLevel.HEADING_1, ...mergeParagraphOptions({ spacing: { after: 120 } }, paragraphStyle) });
   }
 
   if (tagName === "h2") {
@@ -1011,10 +1023,32 @@ function dataUrlToImage(value = "") {
   return { data: Buffer.from(match[2], "base64"), extension };
 }
 
-function imageSizeFromNode(node) {
+function cssLengthToPixel(value = "") {
+  const text = String(value).trim();
+  const px = text.match(/^([\d.]+)px$/i);
+  if (px) return Number(px[1]);
+  const pt = text.match(/^([\d.]+)pt$/i);
+  if (pt) return Number(pt[1]) * 96 / 72;
+  return undefined;
+}
+
+function imageSizeFromNode(node, data) {
   const styles = parseStyleMap(node?.attribs?.style);
-  const width = cssLengthToTwip(styles.width) ? Math.round(cssLengthToTwip(styles.width) / 15) : 420;
-  return { width: Math.max(80, Math.min(width, 560)), height: Math.round(Math.max(80, Math.min(width, 560)) * 0.62) };
+  let intrinsic = {};
+  try {
+    intrinsic = imageSize(data) || {};
+  } catch {
+    intrinsic = {};
+  }
+  const intrinsicWidth = Number(intrinsic.width) || 420;
+  const intrinsicHeight = Number(intrinsic.height) || Math.round(intrinsicWidth * 0.62);
+  let width = cssLengthToPixel(styles.width) || Number(node?.attribs?.width) || intrinsicWidth;
+  let height = cssLengthToPixel(styles.height) || Number(node?.attribs?.height) || width * intrinsicHeight / intrinsicWidth;
+  const scale = Math.min(1, 602 / width, 911 / height);
+  width = Math.max(1, Math.round(width * scale));
+  height = Math.max(1, Math.round(height * scale));
+  // 中文注解：图片按真实宽高比缩放到 A4 内容区，在线预览和 Word 不再使用固定假比例。
+  return { width, height };
 }
 
 function imageParagraphFromNode(node) {
@@ -1026,7 +1060,7 @@ function imageParagraphFromNode(node) {
       new ImageRun({
         data: image.data,
         type: image.extension,
-        transformation: imageSizeFromNode(node)
+        transformation: imageSizeFromNode(node, image.data)
       })
     ],
     spacing: { after: 120 }

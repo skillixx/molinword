@@ -16,6 +16,17 @@ export type TemplateItem = {
   hasCover?: boolean;
   hasStyle?: boolean;
   assets?: TemplateAsset[];
+  wordStyle?: TemplateWordStyle;
+};
+
+export type TemplateWordStyle = {
+  fontFamily?: string;
+  titleColor?: string;
+  headingColor?: string;
+  titleSize?: number;
+  headingSize?: number;
+  bodySize?: number;
+  lineSpacing?: number;
 };
 
 export type TemplateAsset = {

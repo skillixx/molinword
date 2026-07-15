@@ -770,6 +770,37 @@ textarea {
   display: none;
 }
 
+.editor-source {
+  min-width: max-content;
+  padding: 24px;
+  background: #e9edf1;
+}
+
+.editor-paper {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: 794px;
+  min-height: 1123px;
+  margin: 0 auto;
+  padding: 96px;
+  background: #ffffff;
+  box-shadow: 0 12px 30px rgba(23, 33, 43, 0.18);
+}
+
+.editor-paper > div {
+  flex: 1;
+}
+
+.editor-document-title {
+  margin: 0 0 17.33px;
+  color: var(--document-title-color, #17212b);
+  font-family: var(--document-font-family, "Microsoft YaHei"), sans-serif;
+  text-align: center;
+  font-size: var(--document-title-size, 24px);
+  line-height: var(--document-line-height, 1.5);
+}
+
 .paged-preview {
   display: grid;
   justify-content: center;
@@ -791,8 +822,9 @@ textarea {
 .pagination-measurer {
   width: 602px;
   color: #17212b;
-  font-size: 14.67px;
-  line-height: 24px;
+  font-family: var(--document-font-family, "Microsoft YaHei"), sans-serif;
+  font-size: var(--document-body-size, 14.67px);
+  line-height: var(--document-line-height, 1.5);
 }
 
 .page-body {
@@ -813,7 +845,8 @@ textarea {
 }
 
 .page-block {
-  display: contents;
+  /* 中文注解：每个顶层块建立独立格式化上下文，使分页测量与页面渲染都按完整段前、段后间距计算。 */
+  display: flow-root;
 }
 
 .page-block > * {
@@ -828,10 +861,10 @@ textarea {
 .page-body .export-title,
 .pagination-measurer .export-title {
   margin: 0 0 17.33px;
-  color: #17212b;
+  color: var(--document-title-color, #17212b);
   text-align: center;
-  font-size: 24px;
-  line-height: 32px;
+  font-size: var(--document-title-size, 24px);
+  line-height: var(--document-line-height, 1.5);
 }
 
 .page-body p,
@@ -851,27 +884,27 @@ textarea {
 .pagination-measurer h2,
 .pagination-measurer h3 {
   margin: 22px 0 10px;
-  color: #17212b;
+  color: var(--document-heading-color, #245f55);
   letter-spacing: 0;
-  line-height: 24px;
+  line-height: var(--document-line-height, 1.5);
 }
 
 .page-body h1,
 .pagination-measurer h1 {
   margin: 16px 0 8px;
-  font-size: 18.67px;
+  font-size: var(--document-heading-1-size, 18.67px);
 }
 
 .page-body h2,
 .pagination-measurer h2 {
-  margin: 12px 0 6.67px;
-  font-size: 17.33px;
+  margin: 12px 0 8px;
+  font-size: var(--document-heading-2-size, 17.33px);
 }
 
 .page-body h3,
 .pagination-measurer h3 {
   margin: 9.33px 0 6.67px;
-  font-size: 16px;
+  font-size: var(--document-heading-3-size, 16px);
 }
 
 .page-body ul,
@@ -915,8 +948,10 @@ textarea {
 .pagination-measurer img {
   display: block;
   max-width: 100%;
+  max-height: 911px;
   height: auto;
   margin: 8px auto 12px;
+  object-fit: contain;
 }
 
 .word-editor .page-break-marker {
@@ -1005,9 +1040,10 @@ textarea {
   min-height: 100%;
   border: 0;
   border-radius: 0;
-  padding: 30px 42px;
-  font-size: 16px;
-  line-height: 1.9;
+  padding: 0;
+  font-family: var(--document-font-family, "Microsoft YaHei"), sans-serif;
+  font-size: var(--document-body-size, 14.67px);
+  line-height: var(--document-line-height, 1.5);
   outline: none;
   color: #17212b;
 }
@@ -1020,30 +1056,33 @@ textarea {
 .word-editor h2,
 .word-editor h3 {
   margin: 22px 0 10px;
-  color: #17212b;
+  color: var(--document-heading-color, #245f55);
   letter-spacing: 0;
-  line-height: 1.35;
+  line-height: var(--document-line-height, 1.5);
 }
 
 .word-editor h1 {
-  font-size: 28px;
+  margin: 16px 0 8px;
+  font-size: var(--document-heading-1-size, 18.67px);
 }
 
 .word-editor h2 {
-  font-size: 22px;
+  margin: 12px 0 8px;
+  font-size: var(--document-heading-2-size, 17.33px);
 }
 
 .word-editor h3 {
-  font-size: 18px;
+  margin: 9.33px 0 6.67px;
+  font-size: var(--document-heading-3-size, 16px);
 }
 
 .word-editor p {
-  margin: 0 0 14px;
+  margin: 0 0 8px;
 }
 
 .word-editor ul,
 .word-editor ol {
-  margin: 0 0 14px 24px;
+  margin: 0 0 8px 24px;
   padding: 0;
 }
 
@@ -1280,15 +1319,17 @@ textarea {
 
   .outline-panel,
   .ai-panel,
-  .paper-panel,
-  .editor-scroll {
+  .paper-panel {
     max-height: none;
     overflow: visible;
   }
 
-  .word-editor {
-    min-height: 520px;
+  .editor-scroll {
+    max-width: 100%;
+    max-height: none;
+    overflow: auto;
   }
+
 }
 
 @media (max-width: 640px) {
@@ -1328,9 +1369,8 @@ textarea {
     overflow-x: auto;
   }
 
-  .word-editor {
-    min-height: 420px;
-    padding: 20px 18px;
+  .editor-source {
+    padding: 12px;
   }
 
   .paper-loading {

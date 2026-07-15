@@ -5,6 +5,7 @@ import { createDocxBuffer } from "../server/index.js";
 const tinyPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lT3g6wAAAABJRU5ErkJggg==";
 
 const content = `
+  <h1>Heading one parity</h1>
   <h2 style="text-align:center"><span style="font-family:&quot;SimSun&quot;;font-size:18pt;color:#1F4E79">在线标题格式</span></h2>
   <p style="text-align:center;text-indent:24pt">
     <span style="font-family:&quot;Microsoft YaHei&quot;;font-size:14pt;color:#C00000;font-weight:bold">红色加粗字号</span>
@@ -60,11 +61,18 @@ assert.match(documentXml, /<w:tc>/);
 assert.match(documentXml, /表头 A/);
 assert.match(documentXml, /单元格 1/);
 assert.match(documentXml, /<w:br w:type="page"\/>/);
+// 中文注解：在线纸张固定使用 A4 和 1 英寸页边距，导出结构必须保持同一可用内容区域。
+assert.match(documentXml, /<w:pgSz[^>]+w:w="11906"[^>]+w:h="16838"/);
+assert.match(documentXml, /<w:pgMar[^>]+w:top="1440"[^>]+w:right="1440"[^>]+w:bottom="1440"[^>]+w:left="1440"/);
 
 function paragraphXmlForText(text) {
   return (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || [])
     .find((paragraph) => paragraph.includes(`>${text}</w:t>`));
 }
+
+const headingOneXml = paragraphXmlForText("Heading one parity");
+assert.ok(headingOneXml, "heading one should exist");
+assert.match(headingOneXml, /<w:spacing[^>]+w:after="120"/);
 
 const spacingParagraphXml = paragraphXmlForText("Spacing paragraph");
 assert.ok(spacingParagraphXml, "spacing paragraph should exist");
@@ -131,5 +139,7 @@ assert.equal(numberFormatForList(bulletItem), "bullet");
 assert.match(documentXml, /<w:drawing>/);
 assert.match(relationshipsXml, /relationships\/image/);
 assert.ok(mediaFiles.length > 0, "exported DOCX should contain image media");
+// 中文注解：方形图片必须按真实比例写入 DrawingML，不能退化为固定的 0.62 假比例。
+assert.match(documentXml, /<wp:extent cx="1143000" cy="1143000"\/>/);
 
 console.log("DOCX export format check passed");

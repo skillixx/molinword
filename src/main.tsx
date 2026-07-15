@@ -9,7 +9,6 @@ import { TableCell } from "@tiptap/extension-table-cell";
 import { TableHeader } from "@tiptap/extension-table-header";
 import { TableRow } from "@tiptap/extension-table-row";
 import ImageExtension from "@tiptap/extension-image";
-import UnderlineExtension from "@tiptap/extension-underline";
 import {
   AlignCenter,
   AlignJustify,
@@ -48,7 +47,7 @@ import {
   XCircle
 } from "lucide-react";
 import "./styles.css";
-import { documentTemplates as fallbackDocumentTemplates, documentTypes, type DocumentType, type TemplateItem } from "./templates/documentTemplates";
+import { documentTemplates as fallbackDocumentTemplates, documentTypes, type DocumentType, type TemplateItem, type TemplateWordStyle } from "./templates/documentTemplates";
 
 type AiAction = "continue" | "expand" | "shorten" | "correct" | "polish" | "format";
 type AiApplyMode = "replace" | "insert";
@@ -447,6 +446,127 @@ function buildExportPreviewHtml(title: string, content: string) {
 
 function blockOuterHtml(element: Element) {
   return element.outerHTML || `<p>${escapeHtml(element.textContent || "")}</p>`;
+}
+
+function measuredBlockHeight(element: Element | null) {
+  if (!(element instanceof HTMLElement)) return 0;
+  const styles = window.getComputedStyle(element);
+  return element.getBoundingClientRect().height
+    + Number.parseFloat(styles.marginTop || "0")
+    + Number.parseFloat(styles.marginBottom || "0");
+}
+
+function textBoundary(root: Element, targetOffset: number) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let consumed = 0;
+  let current = walker.nextNode();
+  let lastTextNode: Text | null = null;
+  while (current) {
+    const textNode = current as Text;
+    const nextConsumed = consumed + textNode.data.length;
+    if (targetOffset <= nextConsumed) return { node: textNode, offset: Math.max(0, targetOffset - consumed) };
+    consumed = nextConsumed;
+    lastTextNode = textNode;
+    current = walker.nextNode();
+  }
+  return lastTextNode ? { node: lastTextNode, offset: lastTextNode.data.length } : null;
+}
+
+function textBlockFragmentHtml(element: Element, start: number, end: number, isContinuation: boolean, isFinal: boolean) {
+  const startBoundary = textBoundary(element, start);
+  const endBoundary = textBoundary(element, end);
+  if (!startBoundary || !endBoundary) return "";
+  const range = document.createRange();
+  range.setStart(startBoundary.node, startBoundary.offset);
+  range.setEnd(endBoundary.node, endBoundary.offset);
+  const clone = element.cloneNode(false) as HTMLElement;
+  clone.append(range.cloneContents());
+  // 中文注解：同一段跨页时不能重复计算段前、段后间距，否则在线页码会比 Word 更早换页。
+  if (isContinuation) clone.style.marginTop = "0px";
+  if (!isFinal) clone.style.marginBottom = "0px";
+  return clone.outerHTML;
+}
+
+function structuredBlockItemCount(element: Element) {
+  if (element.matches("ol, ul")) return Array.from(element.children).filter((child) => child.matches("li")).length;
+  if (element.matches("table")) return element.querySelectorAll("tr").length;
+  return 0;
+}
+
+function structuredBlockFragmentHtml(element: Element, start: number, end: number, isFinal: boolean) {
+  const clone = element.cloneNode(true) as HTMLElement;
+  const items = clone.matches("ol, ul")
+    ? Array.from(clone.children).filter((child) => child.matches("li"))
+    : Array.from(clone.querySelectorAll("tr"));
+  items.forEach((item, index) => {
+    if (index < start || index >= end) item.remove();
+  });
+  clone.querySelectorAll("thead, tbody, tfoot").forEach((section) => {
+    if (!section.querySelector("tr")) section.remove();
+  });
+  if (clone.matches("ol") && start > 0) {
+    const originalStart = Number(element.getAttribute("start") || 1);
+    clone.setAttribute("start", String(originalStart + start));
+  }
+  if (start > 0) clone.style.marginTop = "0px";
+  if (!isFinal) clone.style.marginBottom = "0px";
+  return clone.outerHTML;
+}
+
+function preferredTextBreak(text: string, start: number, measuredEnd: number) {
+  if (measuredEnd >= text.length) return text.length;
+  const searchStart = Math.max(start + 1, measuredEnd - 24);
+  const candidate = text.slice(searchStart, measuredEnd);
+  const relativeBreak = Math.max(
+    candidate.lastIndexOf(" "),
+    candidate.lastIndexOf("\t"),
+    candidate.lastIndexOf("，"),
+    candidate.lastIndexOf("。"),
+    candidate.lastIndexOf("；"),
+    candidate.lastIndexOf("、")
+  );
+  return relativeBreak >= 0 ? searchStart + relativeBreak + 1 : measuredEnd;
+}
+
+function safeTemplateWordStyle(value: unknown): TemplateWordStyle | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const source = value as Record<string, unknown>;
+  const numeric = (key: string, minimum: number, maximum: number) => {
+    const number = Number(source[key]);
+    return Number.isFinite(number) && number >= minimum && number <= maximum ? number : undefined;
+  };
+  const color = (key: string) => {
+    const text = String(source[key] || "").replace(/^#/, "");
+    return /^[0-9a-f]{6}$/i.test(text) ? `#${text}` : undefined;
+  };
+  const fontFamily = String(source.fontFamily || "").trim().slice(0, 80);
+  return {
+    fontFamily: fontFamily || undefined,
+    titleColor: color("titleColor"),
+    headingColor: color("headingColor"),
+    titleSize: numeric("titleSize", 16, 96),
+    headingSize: numeric("headingSize", 16, 72),
+    bodySize: numeric("bodySize", 12, 48),
+    lineSpacing: numeric("lineSpacing", 200, 720)
+  };
+}
+
+function documentPreviewStyle(template: TemplateItem | null) {
+  const style = template?.wordStyle;
+  const bodyHalfPoints = style?.bodySize || 22;
+  const headingHalfPoints = style?.headingSize || 28;
+  const variables = {
+    "--document-font-family": style?.fontFamily ? `"${style.fontFamily.replace(/["\\]/g, "")}"` : "Microsoft YaHei",
+    "--document-body-size": `${Math.round(bodyHalfPoints * 2 / 3 * 100) / 100}px`,
+    "--document-title-size": `${Math.round((style?.titleSize || 36) * 2 / 3 * 100) / 100}px`,
+    "--document-heading-1-size": `${Math.round(headingHalfPoints * 2 / 3 * 100) / 100}px`,
+    "--document-heading-2-size": `${Math.round(Math.max(headingHalfPoints - 2, bodyHalfPoints) * 2 / 3 * 100) / 100}px`,
+    "--document-heading-3-size": `${Math.round(Math.max(headingHalfPoints - 4, bodyHalfPoints) * 2 / 3 * 100) / 100}px`,
+    "--document-line-height": String(Math.round((style?.lineSpacing || 360) / 240 * 10000) / 10000),
+    "--document-title-color": style?.titleColor || "#17212b",
+    "--document-heading-color": style?.headingColor || "#245f55"
+  };
+  return variables as React.CSSProperties;
 }
 
 function getSelectedText(editor: TiptapEditor | null) {
@@ -890,8 +1010,21 @@ function App() {
     }
   };
 
-  const applyTemplate = (template: TemplateItem) => {
-    setSelectedTemplate(template);
+  const applyTemplate = async (template: TemplateItem) => {
+    let templateWithStyle = template;
+    const styleAsset = template.assets?.find((asset) => asset.purpose === "template_style");
+    if (styleAsset?.url) {
+      try {
+        const response = await fetch(styleAsset.url);
+        const style = safeTemplateWordStyle(await readApiJson(response));
+        if (!style) throw new Error("模板样式内容无效");
+        templateWithStyle = { ...template, wordStyle: style };
+      } catch {
+        // 中文注解：样式读取失败时不再向导出端传模板 ID，保证在线默认版式与 DOCX 一致降级。
+        templateWithStyle = { ...template, id: undefined, wordStyle: undefined };
+      }
+    }
+    setSelectedTemplate(templateWithStyle);
     setSelectedType(template.documentType);
     setTopic(template.topic);
     setTone("正式");
@@ -1178,6 +1311,7 @@ function Editor(props: {
   const [hasSelection, setHasSelection] = React.useState(false);
   const [viewMode, setViewMode] = React.useState<EditorViewMode>("page");
   const [previewPages, setPreviewPages] = React.useState<string[][]>([[buildExportPreviewHtml(props.currentTitle, props.content)]]);
+  const [paginationAssetVersion, setPaginationAssetVersion] = React.useState(0);
   const paginationMeasureRef = React.useRef<HTMLDivElement | null>(null);
   const imageInputRef = React.useRef<HTMLInputElement | null>(null);
 
@@ -1193,7 +1327,7 @@ function Editor(props: {
   }, [props]);
 
   const editor = useEditor({
-    extensions: [StarterKit, UnderlineExtension, ImageExtension.configure({ inline: false, allowBase64: true }), ImportedTextStyle, ParagraphIndent, PageBreak, Table.configure({ resizable: true }), TableRow, TableHeader, TableCell],
+    extensions: [StarterKit, ImageExtension.configure({ inline: false, allowBase64: true }), ImportedTextStyle, ParagraphIndent, PageBreak, Table.configure({ resizable: true }), TableRow, TableHeader, TableCell],
     content: props.content,
     editorProps: { attributes: { class: "word-editor" } },
     onCreate({ editor }) { updateOutlineFromEditor(editor); },
@@ -1217,30 +1351,136 @@ function Editor(props: {
 
     const sourceHtml = buildExportPreviewHtml(props.currentTitle, props.content);
     measureElement.innerHTML = sourceHtml;
+    const pendingImages = Array.from(measureElement.querySelectorAll("img")).filter((image) => !image.complete);
+    if (pendingImages.length) {
+      let requested = false;
+      const requestRemeasure = () => {
+        if (requested) return;
+        requested = true;
+        setPaginationAssetVersion((version) => version + 1);
+      };
+      // 中文注解：图片未解码时浏览器会报告零高度，等待首个资源落定后重新测量，避免页数闪动或图片越界。
+      pendingImages.forEach((image) => {
+        image.addEventListener("load", requestRemeasure, { once: true });
+        image.addEventListener("error", requestRemeasure, { once: true });
+      });
+      return () => pendingImages.forEach((image) => {
+        image.removeEventListener("load", requestRemeasure);
+        image.removeEventListener("error", requestRemeasure);
+      });
+    }
+    const sourceBlocks = Array.from(measureElement.children).map((child) => child.cloneNode(true) as HTMLElement);
     const pageContentHeight = docxPagePreview.heightPx - docxPagePreview.marginPx * 2;
     const nextPages: string[][] = [[]];
     let currentHeight = 0;
 
-    Array.from(measureElement.children).forEach((child) => {
+    const openNextPage = (preserveBlankPage = false) => {
+      if (preserveBlankPage || nextPages[nextPages.length - 1].length) nextPages.push([]);
+      currentHeight = 0;
+    };
+    const measureHtml = (html: string) => {
+      measureElement.innerHTML = html;
+      return measuredBlockHeight(measureElement.firstElementChild);
+    };
+    const appendHtml = (html: string, height = measureHtml(html)) => {
+      nextPages[nextPages.length - 1].push(html);
+      currentHeight += height;
+    };
+
+    sourceBlocks.forEach((child) => {
       if (child instanceof HTMLElement && child.dataset.pageBreak === "true") {
         // 中文注解：手动分页符直接强制开启新页，保证在线分页位置和 DOCX 导出的分页位置一致。
-        if (nextPages[nextPages.length - 1].length) nextPages.push([]);
-        currentHeight = 0;
+        openNextPage(true);
         return;
       }
-      const styles = window.getComputedStyle(child);
-      const blockHeight = child.getBoundingClientRect().height + Number.parseFloat(styles.marginTop || "0") + Number.parseFloat(styles.marginBottom || "0");
-      // 中文注解：分页按块级内容切页，尽量模拟 Word 的自然分页；超长单块保留在当前页，避免截断用户内容。
-      if (currentHeight > 0 && currentHeight + blockHeight > pageContentHeight) {
-        nextPages.push([]);
-        currentHeight = 0;
+
+      const blockHtml = blockOuterHtml(child);
+      const blockHeight = measureHtml(blockHtml);
+      if (currentHeight + blockHeight > pageContentHeight) {
+        const itemCount = structuredBlockItemCount(child);
+        if (itemCount > 1) {
+          let start = 0;
+          while (start < itemCount) {
+            const availableHeight = pageContentHeight - currentHeight;
+            let low = start + 1;
+            let high = itemCount;
+            let bestEnd = start;
+            while (low <= high) {
+              const middle = Math.floor((low + high) / 2);
+              const candidateHtml = structuredBlockFragmentHtml(child, start, middle, middle === itemCount);
+              if (measureHtml(candidateHtml) <= availableHeight) {
+                bestEnd = middle;
+                low = middle + 1;
+              } else {
+                high = middle - 1;
+              }
+            }
+            if (bestEnd === start) {
+              if (currentHeight > 0) {
+                openNextPage();
+                continue;
+              }
+              bestEnd = start + 1;
+            }
+            const fragmentHtml = structuredBlockFragmentHtml(child, start, bestEnd, bestEnd === itemCount);
+            appendHtml(fragmentHtml);
+            start = bestEnd;
+            if (start < itemCount) openNextPage();
+          }
+          return;
+        }
+
+        const splitChild = child.cloneNode(true) as HTMLElement;
+        splitChild.querySelectorAll("br").forEach((breakNode) => breakNode.replaceWith(document.createTextNode("\n")));
+        if (child.querySelector("br")) splitChild.style.whiteSpace = "pre-wrap";
+        const isSplittableTextBlock = splitChild.matches("p") && !splitChild.querySelector("img, table");
+        const text = splitChild.textContent || "";
+        if (isSplittableTextBlock && text.length > 1) {
+          let start = 0;
+          while (start < text.length) {
+            let availableHeight = pageContentHeight - currentHeight;
+            if (availableHeight < 24 && currentHeight > 0) {
+              openNextPage();
+              availableHeight = pageContentHeight;
+            }
+
+            let low = start + 1;
+            let high = text.length;
+            let bestEnd = start;
+            while (low <= high) {
+              const middle = Math.floor((low + high) / 2);
+              const candidateHtml = textBlockFragmentHtml(splitChild, start, middle, start > 0, middle === text.length);
+              const candidateHeight = measureHtml(candidateHtml);
+              if (candidateHeight <= availableHeight) {
+                bestEnd = middle;
+                low = middle + 1;
+              } else {
+                high = middle - 1;
+              }
+            }
+
+            if (bestEnd === start) {
+              if (currentHeight > 0) {
+                openNextPage();
+                continue;
+              }
+              bestEnd = Math.min(start + 1, text.length);
+            }
+            bestEnd = preferredTextBreak(text, start, bestEnd);
+            const fragmentHtml = textBlockFragmentHtml(splitChild, start, bestEnd, start > 0, bestEnd === text.length);
+            appendHtml(fragmentHtml);
+            start = bestEnd;
+            if (start < text.length) openNextPage();
+          }
+          return;
+        }
+        openNextPage();
       }
-      nextPages[nextPages.length - 1].push(blockOuterHtml(child));
-      currentHeight += Math.min(blockHeight || 0, pageContentHeight);
+      appendHtml(blockHtml, blockHeight);
     });
 
-    setPreviewPages(nextPages.filter((page) => page.length));
-  }, [props.content, props.currentTitle]);
+    setPreviewPages(nextPages);
+  }, [paginationAssetVersion, props.content, props.currentTitle, props.selectedTemplate]);
 
   const runSelectionAi = async (action: AiAction) => {
     const selectedText = getSelectedText(editor);
@@ -1449,8 +1689,13 @@ function Editor(props: {
             <button onClick={clearSelectionFormat} title="清除当前选区格式"><Eraser size={16} />清除格式</button>
           </div>
           {props.aiLoading === "正在生成正文" ? <div className="paper-loading"><LoadingProcess label={props.aiLoading} /></div> : null}
-          <div className="editor-scroll">
-            <div className={viewMode === "edit" ? "editor-source" : "editor-source is-hidden"}><EditorContent editor={editor} /></div>
+          <div className="editor-scroll" style={documentPreviewStyle(props.selectedTemplate)}>
+            <div className={viewMode === "edit" ? "editor-source" : "editor-source is-hidden"}>
+              <div className="editor-paper">
+                <h1 className="editor-document-title">{props.currentTitle || "未命名文档"}</h1>
+                <EditorContent editor={editor} />
+              </div>
+            </div>
             {viewMode === "page" ? (
               <div className="paged-preview" aria-label="分页预览">
                 {previewPages.map((page, index) => (
