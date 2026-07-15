@@ -4,7 +4,7 @@ import { createDocxBuffer, parseImportedDocument } from "../server/index.js";
 
 const tinyPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lT3g6wAAAABJRU5ErkJggg==";
 const defaultPageTextStyle = { alignment: "center", fontFamily: "Microsoft YaHei", fontSizePt: 9, color: "#6B7280", bold: false, italic: false };
-const emptyPageVariant = { headerText: "", headerStyle: defaultPageTextStyle, footerText: "", footerStyle: defaultPageTextStyle, headerPageNumberTemplate: "", footerPageNumberTemplate: "", pageNumberEnabled: false, pageNumberPosition: "footer" };
+const emptyPageVariant = { headerText: "", headerStyle: defaultPageTextStyle, footerText: "", footerStyle: defaultPageTextStyle, headerPageNumberTemplate: "", footerPageNumberTemplate: "", headerPageNumberSeparate: false, footerPageNumberSeparate: false, pageNumberEnabled: false, pageNumberPosition: "footer" };
 
 async function buildFormattedDocxFixture() {
   const zip = new JSZip();
@@ -272,12 +272,20 @@ assert.equal(splitPageFieldImported.pageLayout.pageNumberEnabled, true);
 assert.equal(splitPageFieldImported.pageLayout.footerPageNumberTemplate, "第 {PAGE} 页 / 共 {NUMPAGES} 页");
 
 const dualTemplateZip = await JSZip.loadAsync(buffer);
-dualTemplateZip.file("word/header1.xml", `<?xml version="1.0" encoding="UTF-8"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>Page </w:t><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE \\* ROMAN</w:instrText><w:fldChar w:fldCharType="end"/><w:t> of </w:t><w:fldChar w:fldCharType="begin"/><w:instrText>NUMPAGES</w:instrText><w:fldChar w:fldCharType="end"/></w:r></w:p></w:hdr>`);
+dualTemplateZip.file("word/header1.xml", `<?xml version="1.0" encoding="UTF-8"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>Project Atlas</w:t></w:r></w:p><w:p><w:r><w:t>Page </w:t><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE \\* ROMAN</w:instrText><w:fldChar w:fldCharType="end"/><w:t> of </w:t><w:fldChar w:fldCharType="begin"/><w:instrText>NUMPAGES</w:instrText><w:fldChar w:fldCharType="end"/></w:r></w:p></w:hdr>`);
 dualTemplateZip.file("word/footer1.xml", `<?xml version="1.0" encoding="UTF-8"?><w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>Total </w:t><w:fldChar w:fldCharType="begin"/><w:instrText>NUMPAGES</w:instrText><w:fldChar w:fldCharType="end"/></w:r></w:p></w:ftr>`);
 const dualTemplateBuffer = await dualTemplateZip.generateAsync({ type: "nodebuffer" });
 const dualTemplateImported = await parseImportedDocument({ originalname: "dual-page-template.docx", buffer: dualTemplateBuffer, mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: dualTemplateBuffer.length });
 assert.equal(dualTemplateImported.pageLayout.headerPageNumberTemplate, "Page {PAGE:upperRoman} of {NUMPAGES}");
 assert.equal(dualTemplateImported.pageLayout.footerPageNumberTemplate, "Total {NUMPAGES}");
+assert.equal(dualTemplateImported.pageLayout.headerText, "Project Atlas");
+assert.equal(dualTemplateImported.pageLayout.headerPageNumberSeparate, true);
+assert.equal(dualTemplateImported.pageLayout.footerPageNumberSeparate, false);
+const dualTemplateRoundTripBuffer = await createDocxBuffer({ title: "Dual template round trip", content: "<p>Body</p>", pageLayout: dualTemplateImported.pageLayout });
+const dualTemplateRoundTripImported = await parseImportedDocument({ originalname: "dual-page-template-round-trip.docx", buffer: dualTemplateRoundTripBuffer, mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: dualTemplateRoundTripBuffer.length });
+assert.equal(dualTemplateRoundTripImported.pageLayout.headerText, "Project Atlas");
+assert.equal(dualTemplateRoundTripImported.pageLayout.headerPageNumberTemplate, "Page {PAGE:upperRoman} of {NUMPAGES}");
+assert.equal(dualTemplateRoundTripImported.pageLayout.headerPageNumberSeparate, true);
 
 const restartedNumberingZip = await JSZip.loadAsync(buffer);
 const restartedNumberingXml = await restartedNumberingZip.file("word/document.xml")?.async("string") || "";
@@ -286,6 +294,19 @@ const restartedNumberingBuffer = await restartedNumberingZip.generateAsync({ typ
 const restartedNumberingImported = await parseImportedDocument({ originalname: "restarted-page-numbering.docx", buffer: restartedNumberingBuffer, mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: restartedNumberingBuffer.length });
 assert.equal(restartedNumberingImported.pageLayout.pageNumberStart, 0);
 assert.equal(restartedNumberingImported.pageLayout.pageNumberFormat, "lowerRoman");
+
+const multiParagraphHeaderZip = await JSZip.loadAsync(buffer);
+multiParagraphHeaderZip.file("word/header1.xml", `<?xml version="1.0" encoding="UTF-8"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p/><w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia="SimSun"/><w:sz w:val="21"/><w:color w:val="345678"/></w:rPr><w:t>项目名称：智慧办公平台</w:t></w:r></w:p><w:p/><w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia="SimSun"/><w:sz w:val="21"/><w:color w:val="345678"/></w:rPr><w:t>文档状态：内部评审</w:t></w:r></w:p></w:hdr>`);
+const multiParagraphHeaderBuffer = await multiParagraphHeaderZip.generateAsync({ type: "nodebuffer" });
+const multiParagraphHeaderImported = await parseImportedDocument({ originalname: "multi-paragraph-header.docx", buffer: multiParagraphHeaderBuffer, mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: multiParagraphHeaderBuffer.length });
+// 中文注解：相同样式的多个页眉段落是可完整承载的办公格式，不应再被压平或产生降级警告。
+assert.equal(multiParagraphHeaderImported.pageLayout.headerText, "\n项目名称：智慧办公平台\n\n文档状态：内部评审");
+assert.deepEqual(multiParagraphHeaderImported.pageLayout.headerStyle, { alignment: "right", fontFamily: "SimSun", fontSizePt: 10.5, color: "#345678", bold: false, italic: false });
+assert.doesNotMatch(multiParagraphHeaderImported.warnings.join(" "), /多段落.*暂未完整恢复/);
+const multiParagraphRoundTripBuffer = await createDocxBuffer({ title: "Multi paragraph round trip", content: "<p>Body</p>", pageLayout: multiParagraphHeaderImported.pageLayout });
+const multiParagraphRoundTripImported = await parseImportedDocument({ originalname: "multi-paragraph-round-trip.docx", buffer: multiParagraphRoundTripBuffer, mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: multiParagraphRoundTripBuffer.length });
+assert.equal(multiParagraphRoundTripImported.pageLayout.headerText, multiParagraphHeaderImported.pageLayout.headerText);
+assert.deepEqual(multiParagraphRoundTripImported.pageLayout.headerStyle, multiParagraphHeaderImported.pageLayout.headerStyle);
 
 const complexLayoutZip = await JSZip.loadAsync(buffer);
 const complexHeaderXml = await complexLayoutZip.file("word/header1.xml")?.async("string") || "";
@@ -349,6 +370,8 @@ assert.deepEqual(imported.pageLayout, {
   footerStyle: { alignment: "left", fontFamily: "SimSun", fontSizePt: 10.5, color: "#C00000", bold: false, italic: false },
   headerPageNumberTemplate: "",
   footerPageNumberTemplate: "第 {PAGE} 页 / 共 {NUMPAGES} 页",
+  headerPageNumberSeparate: false,
+  footerPageNumberSeparate: false,
   pageNumberEnabled: true,
   pageNumberPosition: "footer",
   firstPageDifferent: false,
@@ -401,6 +424,8 @@ const variantPageLayout = {
   footerStyle: defaultPageTextStyle,
   headerPageNumberTemplate: "",
   footerPageNumberTemplate: "第 {PAGE} 页 / 共 {NUMPAGES} 页",
+  headerPageNumberSeparate: false,
+  footerPageNumberSeparate: false,
   pageNumberEnabled: true,
   pageNumberPosition: "footer",
   firstPageDifferent: true,

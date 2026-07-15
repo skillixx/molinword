@@ -99,6 +99,39 @@ assert.doesNotMatch(footerWithoutPageNumberXml, /<w:fldSimple[^>]+w:instr="PAGE"
 const headerPageNumberDocumentXml = await headerPageNumberZip.file("word/document.xml")?.async("string") || "";
 assert.match(headerPageNumberDocumentXml, /<w:pgNumType[^>]+w:start="0"[^>]*w:fmt="lowerRoman"/);
 
+const multiParagraphHeaderBuffer = await createDocxBuffer({
+  title: "Multi paragraph header",
+  content: "<p>Body</p>",
+  pageLayout: {
+    headerText: "项目名称：智慧办公平台\n\n文档状态：内部评审",
+    headerPageNumberTemplate: "第 {PAGE} 页 / 共 {NUMPAGES} 页",
+    headerPageNumberSeparate: true,
+    headerStyle: { alignment: "right", fontFamily: "SimSun", fontSizePt: 10.5, color: "#345678", bold: false, italic: false }
+  }
+});
+const multiParagraphHeaderZip = await JSZip.loadAsync(multiParagraphHeaderBuffer);
+const multiParagraphHeaderXml = (await Promise.all(multiParagraphHeaderZip.file(/^word\/header\d+\.xml$/).map((file) => file.async("string")))).join("\n");
+const multiParagraphHeaderParagraphs = multiParagraphHeaderXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || [];
+// 中文注解：多行在线页眉必须导出为独立 Word 段落，页码保留为末段，不能写成一个含换行字符的文本 run。
+assert.equal(multiParagraphHeaderParagraphs.length, 4);
+assert.ok(multiParagraphHeaderParagraphs[0].includes("项目名称：智慧办公平台"));
+assert.doesNotMatch(multiParagraphHeaderParagraphs[1], /<w:t/);
+assert.ok(multiParagraphHeaderParagraphs[2].includes("文档状态：内部评审"));
+assert.match(multiParagraphHeaderParagraphs[3], /<w:fldSimple[^>]+w:instr="PAGE"/);
+assert.ok(multiParagraphHeaderParagraphs.every((paragraph) => /<w:jc w:val="right"\/>/.test(paragraph)));
+
+const inlineLastParagraphBuffer = await createDocxBuffer({
+  title: "Inline page number after multiple paragraphs",
+  content: "<p>Body</p>",
+  pageLayout: { footerText: "保密文件\n技术中心", footerPageNumberTemplate: "第 {PAGE} 页", footerPageNumberSeparate: false }
+});
+const inlineLastParagraphZip = await JSZip.loadAsync(inlineLastParagraphBuffer);
+const inlineLastParagraphXml = (await Promise.all(inlineLastParagraphZip.file(/^word\/footer\d+\.xml$/).map((file) => file.async("string")))).join("\n");
+const inlineLastParagraphs = inlineLastParagraphXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || [];
+// 中文注解：关闭“独立一行”时，页码应追加到最后一个文字段，而不是因前面存在换行就强制新增段落。
+assert.equal(inlineLastParagraphs.length, 2);
+assert.ok(inlineLastParagraphs[1].includes("技术中心") && /<w:fldSimple[^>]+w:instr="PAGE"/.test(inlineLastParagraphs[1]));
+
 // 中文注解：直接检查 DOCX XML，确保在线编辑样式没有在 HTML -> Word 转换中被抹掉。
 assert.match(documentXml, /<w:jc w:val="center"\/>/);
 assert.match(documentXml, /<w:color w:val="C00000"\/>/);

@@ -195,7 +195,12 @@ try {
   await page.locator('label[title="设置当前段落样式"] select').selectOption("heading-2");
   assert.match(await editor.innerHTML(), /<h2[^>]*>.*保留小号红字.*<\/h2>/);
 
+  await page.setViewportSize({ width: 1280, height: 720 });
   await page.getByText("页面设置", { exact: true }).click();
+  const desktopPageSettings = await page.locator(".page-layout-popover").boundingBox();
+  // 中文注解：常见 1280×720 办公窗口也必须完整容纳页面设置，长表单通过面板内部滚动访问。
+  assert.ok(desktopPageSettings && desktopPageSettings.x >= 0 && desktopPageSettings.y >= 0);
+  assert.ok(desktopPageSettings.x + desktopPageSettings.width <= 1280 && desktopPageSettings.y + desktopPageSettings.height <= 720);
   await page.getByLabel("默认页眉文字", { exact: true }).fill("奇数页项目页眉");
   await page.getByLabel("默认页眉字体", { exact: true }).selectOption("SimSun");
   await page.getByLabel("默认页眉字号", { exact: true }).fill("12");
@@ -209,6 +214,7 @@ try {
   await page.getByLabel("默认页脚斜体", { exact: true }).click();
   await page.getByLabel("默认页脚对齐", { exact: true }).selectOption("right");
   await page.getByLabel("默认页脚页码", { exact: true }).check();
+  await page.getByLabel("默认页脚页码独立一行", { exact: true }).check();
   await page.getByText("首页不同", { exact: true }).click();
   await page.getByLabel("首页页眉文字", { exact: true }).fill("首页项目封面");
   await page.getByLabel("首页页脚文字", { exact: true }).fill("首页保密标识");
@@ -217,6 +223,7 @@ try {
   await page.getByLabel("偶数页页脚文字", { exact: true }).fill("偶数页办公文档");
   await page.getByLabel("偶数页脚页码", { exact: true }).check();
   await page.getByText("页面设置", { exact: true }).click();
+  await page.setViewportSize({ width: 1440, height: 900 });
 
   await editor.click();
   await editor.press("Control+End");
@@ -231,7 +238,10 @@ try {
   await page.getByLabel("当前节页脚距纸边", { exact: true }).fill("1.48");
   await page.getByLabel("当前节页码格式", { exact: true }).selectOption("upperRoman");
   await page.getByLabel("当前节起始页码", { exact: true }).fill("3");
-  await page.getByLabel("默认页眉文字", { exact: true }).fill("第二节横向页眉");
+  const secondSectionHeaderInput = page.getByLabel("默认页眉文字", { exact: true });
+  await secondSectionHeaderInput.fill("第二节横向页眉");
+  await secondSectionHeaderInput.press("Enter");
+  await secondSectionHeaderInput.type("审批状态：已确认");
   await page.getByLabel("默认页脚文字", { exact: true }).fill("第二节横向页脚");
   await page.getByText("首页不同", { exact: true }).click();
   await page.getByText("奇偶页不同", { exact: true }).click();
@@ -255,7 +265,7 @@ try {
   const storedSectionLayout = JSON.parse(storedSectionLayoutText);
   // 中文注解：直接验证节点负载，避免界面文本存在但连续设置被旧状态覆盖后仍误判为保存成功。
   assert.equal(storedSectionLayout.orientation, "landscape");
-  assert.equal(storedSectionLayout.headerText, "第二节横向页眉");
+  assert.equal(storedSectionLayout.headerText, "第二节横向页眉\n审批状态：已确认");
   assert.equal(storedSectionLayout.footerText, "第二节横向页脚");
   assert.deepEqual(storedSectionLayout.headerStyle, styledHeader);
   assert.deepEqual(storedSectionLayout.footerStyle, styledFooter);
@@ -263,6 +273,7 @@ try {
   assert.equal(storedSectionLayout.oddEvenDifferent, false);
   assert.equal(storedSectionLayout.pageNumberPosition, "footer");
   assert.equal(storedSectionLayout.footerPageNumberTemplate, "第 {PAGE} 页 / 共 {NUMPAGES} 页");
+  assert.equal(storedSectionLayout.footerPageNumberSeparate, true);
   assert.equal(storedSectionLayout.headerDistance, 482);
   assert.equal(storedSectionLayout.footerDistance, 839);
   assert.equal(storedSectionLayout.pageNumberFormat, "upperRoman");
@@ -275,12 +286,14 @@ try {
     footerStyle: styledFooter,
     headerPageNumberTemplate: "",
     footerPageNumberTemplate: "第 {PAGE} 页 / 共 {NUMPAGES} 页",
+    headerPageNumberSeparate: false,
+    footerPageNumberSeparate: true,
     pageNumberEnabled: true,
     pageNumberPosition: "footer",
     firstPageDifferent: true,
-    firstPage: { headerText: "首页项目封面", headerStyle: defaultPageTextStyle, footerText: "首页保密标识", footerStyle: defaultPageTextStyle, headerPageNumberTemplate: "", footerPageNumberTemplate: "", pageNumberEnabled: false, pageNumberPosition: "footer" },
+    firstPage: { headerText: "首页项目封面", headerStyle: defaultPageTextStyle, footerText: "首页保密标识", footerStyle: defaultPageTextStyle, headerPageNumberTemplate: "", footerPageNumberTemplate: "", headerPageNumberSeparate: false, footerPageNumberSeparate: false, pageNumberEnabled: false, pageNumberPosition: "footer" },
     oddEvenDifferent: true,
-    evenPage: { headerText: "偶数页项目页眉", headerStyle: defaultPageTextStyle, footerText: "偶数页办公文档", footerStyle: defaultPageTextStyle, headerPageNumberTemplate: "", footerPageNumberTemplate: "第 {PAGE} 页 / 共 {NUMPAGES} 页", pageNumberEnabled: true, pageNumberPosition: "footer" },
+    evenPage: { headerText: "偶数页项目页眉", headerStyle: defaultPageTextStyle, footerText: "偶数页办公文档", footerStyle: defaultPageTextStyle, headerPageNumberTemplate: "", footerPageNumberTemplate: "第 {PAGE} 页 / 共 {NUMPAGES} 页", headerPageNumberSeparate: false, footerPageNumberSeparate: false, pageNumberEnabled: true, pageNumberPosition: "footer" },
     orientation: "portrait",
     pageNumberFormat: "decimal",
     pageNumberStart: null,
@@ -330,7 +343,9 @@ try {
   assert.ok(headerXmlParts.some((xml) => xml.includes("奇数页项目页眉") && /<w:jc w:val="left"\/>/.test(xml) && /<w:rFonts[^>]+SimSun/.test(xml) && /<w:sz w:val="24"\/>/.test(xml) && /<w:color w:val="C00000"\/>/.test(xml) && /<w:b\/>/.test(xml)));
   assert.ok(headerXmlParts.some((xml) => xml.includes("偶数页项目页眉")));
   assert.ok(headerXmlParts.some((xml) => xml.includes("第二节横向页眉")));
+  assert.ok(headerXmlParts.some((xml) => xml.includes("第二节横向页眉") && xml.includes("审批状态：已确认") && (xml.match(/<w:p(?:\s|>)/g) || []).length === 2));
   assert.ok(footerXmlParts.some((xml) => xml.includes("第二节横向页脚")));
+  assert.ok(footerXmlParts.some((xml) => xml.includes("第二节横向页脚") && /<w:fldSimple[^>]+w:instr="PAGE"/.test(xml) && (xml.match(/<w:p(?:\s|>)/g) || []).length === 2));
   assert.ok(footerXmlParts.some((xml) => xml.includes("奇数页办公文档") && /<w:jc w:val="right"\/>/.test(xml) && /<w:rFonts[^>]+Arial/.test(xml) && /<w:sz w:val="21"\/>/.test(xml) && /<w:color w:val="1F4E79"\/>/.test(xml) && /<w:i\/>/.test(xml)));
   assert.equal(headerXmlParts.filter((xml) => xml.includes("第二节横向页眉")).length, 2);
   assert.equal(footerXmlParts.filter((xml) => xml.includes("第二节横向页脚")).length, 2);
@@ -399,6 +414,7 @@ try {
         const style = item ? getComputedStyle(item) : null;
         return style ? { fontFamily: style.fontFamily, fontSize: style.fontSize, color: style.color, fontWeight: style.fontWeight, textAlign: style.textAlign } : null;
       })(),
+      multilineHeaderCount: document.querySelectorAll('.page-header.multiline').length,
       oddFooterStyle: (() => {
         const item = Array.from(document.querySelectorAll(".page-footer")).find((node) => node.textContent?.includes("奇数页办公文档"));
         const style = item ? getComputedStyle(item) : null;
@@ -431,7 +447,8 @@ try {
   assert.equal(result.headerTexts.length, result.pageCount);
   assert.equal(result.headerTexts[0], "首页项目封面");
   assert.ok(result.headerTexts.slice(1, secondSectionFirstPage).every((text, index) => (index + 2) % 2 === 0 ? text === "偶数页项目页眉" : text === "奇数页项目页眉"));
-  assert.ok(result.headerTexts.slice(secondSectionFirstPage).every((text) => text === "第二节横向页眉"));
+  assert.ok(result.headerTexts.slice(secondSectionFirstPage).every((text) => text.includes("第二节横向页眉") && text.includes("审批状态：已确认")));
+  assert.ok(result.multilineHeaderCount > 0);
   assert.deepEqual(result.oddHeaderStyle, { fontFamily: 'SimSun, sans-serif', fontSize: "16px", color: "rgb(192, 0, 0)", fontWeight: "700", textAlign: "left" });
   assert.equal(result.footerTexts.length, result.pageCount);
   assert.equal(result.footerTexts[0], "首页保密标识");

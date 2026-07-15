@@ -31,6 +31,8 @@ const defaultPageVariant = Object.freeze({
   footerStyle: defaultPageTextStyle,
   headerPageNumberTemplate: "",
   footerPageNumberTemplate: "",
+  headerPageNumberSeparate: false,
+  footerPageNumberSeparate: false,
   pageNumberEnabled: false,
   pageNumberPosition: "footer"
 });
@@ -50,7 +52,13 @@ const defaultPageLayout = Object.freeze({
 });
 
 function normalizePageText(value) {
-  return String(value || "").replace(/\s+/g, " ").trim().slice(0, 500);
+  return String(value || "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+/g, " ").trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .slice(0, 2000);
 }
 
 function normalizePageNumberTemplate(value) {
@@ -93,6 +101,8 @@ function normalizePageVariant(value, fallback = defaultPageVariant) {
     footerStyle: normalizePageTextStyle(source.footerStyle, base.footerStyle || defaultPageTextStyle),
     headerPageNumberTemplate,
     footerPageNumberTemplate,
+    headerPageNumberSeparate: Boolean(headerPageNumberTemplate) && (source.headerPageNumberSeparate === undefined ? Boolean(base.headerPageNumberSeparate) : Boolean(source.headerPageNumberSeparate)),
+    footerPageNumberSeparate: Boolean(footerPageNumberTemplate) && (source.footerPageNumberSeparate === undefined ? Boolean(base.footerPageNumberSeparate) : Boolean(source.footerPageNumberSeparate)),
     pageNumberEnabled,
     pageNumberPosition: headerPageNumberTemplate && !footerPageNumberTemplate ? "header" : "footer"
   };
@@ -1004,12 +1014,13 @@ function docxPartTextTemplate(xml = "") {
     // 中文注解：页码域转换为稳定占位符，其他动态域保留缓存显示值，避免旧页码与新页码叠加。
     .map((paragraph) => textWithFields(paragraph))
     .map(normalizePageNumberTemplate)
-    .filter(Boolean)
-    .join(" ");
+    // 中文注解：Word 页眉页脚中的每个 w:p 都是独立段落，使用换行进入页面模型，不能压成一行。
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n");
 }
 
 function docxPartPlainText(xml = "") {
-  return normalizePageText(docxPartTextTemplate(xml).replaceAll("{PAGE}", "").replaceAll("{NUMPAGES}", ""));
+  return normalizePageText(docxPartTextTemplate(xml).replace(/\{(?:PAGE|NUMPAGES)(?::(?:decimal|upperRoman|lowerRoman|upperLetter|lowerLetter))?\}/g, ""));
 }
 
 function resolvedDocxPageTextStyle(paragraph, run, styleContext, fallback = defaultPageTextStyle) {
@@ -1042,7 +1053,8 @@ function resolvedDocxPageTextStyle(paragraph, run, styleContext, fallback = defa
 function parseDocxPageTextStyle(xml = "", fallback = defaultPageTextStyle, styleContext = null) {
   if (!xml.trim()) return normalizePageTextStyle(fallback);
   const document = parseDocument(xml, { xmlMode: true });
-  const paragraph = xmlDescendants(document, "w:p")[0];
+  const paragraphs = xmlDescendants(document, "w:p");
+  const paragraph = paragraphs.find((item) => xmlDescendants(item, "w:r").some((run) => docxTextFromRun(run).trim())) || paragraphs[0];
   const styledRun = xmlDescendants(paragraph, "w:r").find((run) => docxTextFromRun(run).trim()) || xmlDescendants(paragraph, "w:r")[0];
   return resolvedDocxPageTextStyle(paragraph, styledRun, styleContext, fallback);
 }
@@ -1124,11 +1136,17 @@ function parseDocxPageVariant(headerXml = "", footerXml = "", styleContext = nul
   const headerTemplate = docxPartTextTemplate(headerXml);
   const footerTemplate = docxPartTextTemplate(footerXml);
   const splitGeneratedTemplate = (template, enabled) => {
-    if (!enabled) return { text: template, pageTemplate: "" };
-    const separatorIndex = template.lastIndexOf(" · ");
-    return separatorIndex > 0
-      ? { text: template.slice(0, separatorIndex).trim(), pageTemplate: template.slice(separatorIndex + 3).trim() }
-      : { text: "", pageTemplate: template };
+    if (!enabled) return { text: template, pageTemplate: "", separate: false };
+    const lines = String(template || "").split("\n");
+    const fieldLineIndex = lines.findLastIndex((line) => /\{(?:PAGE|NUMPAGES)(?::(?:decimal|upperRoman|lowerRoman|upperLetter|lowerLetter))?\}/.test(line));
+    if (fieldLineIndex < 0) return { text: template, pageTemplate: "", separate: false };
+    const fieldLine = lines[fieldLineIndex];
+    const separatorIndex = fieldLine.lastIndexOf(" · ");
+    const pageTemplate = separatorIndex > 0 ? fieldLine.slice(separatorIndex + 3).trim() : fieldLine.trim();
+    if (separatorIndex > 0) lines[fieldLineIndex] = fieldLine.slice(0, separatorIndex).trim();
+    else lines.splice(fieldLineIndex, 1);
+    const text = normalizePageText(lines.join("\n"));
+    return { text, pageTemplate: normalizePageNumberTemplate(pageTemplate), separate: separatorIndex < 0 && Boolean(text) };
   };
   const headerParts = splitGeneratedTemplate(headerTemplate, headerPageNumberEnabled);
   const footerParts = splitGeneratedTemplate(footerTemplate, footerPageNumberEnabled);
@@ -1138,7 +1156,9 @@ function parseDocxPageVariant(headerXml = "", footerXml = "", styleContext = nul
     footerText: footerParts.text,
     footerStyle: parseDocxPageTextStyle(footerXml, defaultPageTextStyle, styleContext),
     headerPageNumberTemplate: headerParts.pageTemplate,
-    footerPageNumberTemplate: footerParts.pageTemplate
+    footerPageNumberTemplate: footerParts.pageTemplate,
+    headerPageNumberSeparate: headerParts.separate,
+    footerPageNumberSeparate: footerParts.separate
   });
 }
 
@@ -1150,7 +1170,9 @@ function parseDocxPageVariantParts(headerPart, footerPart, fallback = defaultPag
     footerText: footerPart.present ? parsed.footerText : fallback.footerText,
     footerStyle: footerPart.present ? parsed.footerStyle : fallback.footerStyle,
     headerPageNumberTemplate: headerPart.present ? parsed.headerPageNumberTemplate : fallback.headerPageNumberTemplate,
-    footerPageNumberTemplate: footerPart.present ? parsed.footerPageNumberTemplate : fallback.footerPageNumberTemplate
+    footerPageNumberTemplate: footerPart.present ? parsed.footerPageNumberTemplate : fallback.footerPageNumberTemplate,
+    headerPageNumberSeparate: headerPart.present ? parsed.headerPageNumberSeparate : fallback.headerPageNumberSeparate,
+    footerPageNumberSeparate: footerPart.present ? parsed.footerPageNumberSeparate : fallback.footerPageNumberSeparate
   }, fallback);
 }
 
@@ -1240,7 +1262,6 @@ async function parseDocxPageLayout(buffer) {
 
   // 中文注解：当前页面模型只保存纯文本；只要发现字体、字号、颜色、对齐或其他富格式，就明确提示用户可能丢失样式。
   const hasUnsupportedHeaderFooter = /<w:(?:drawing|pict|tbl|shd|tabs|u|strike|vertAlign)\b/i.test(pageParts.join(""));
-  const hasMultipleParagraphs = pageParts.some((xml) => (xml.match(/<w:p(?:\s|>)/g) || []).length > 1);
   const hasMixedHeaderFooterStyles = pageParts.some((xml) => docxPartHasMixedTextStyles(xml, styleContext));
   const dynamicFieldInstructions = pageParts.flatMap(docxFieldInstructions);
   const hasFlattenedDynamicFields = dynamicFieldInstructions.some((instruction) => !isPageNumberFieldInstruction(instruction));
@@ -1251,7 +1272,7 @@ async function parseDocxPageLayout(buffer) {
   if (rawSectionBreakTypes.includes("continuous")) {
     warnings.push("文档包含连续分节符；为确保在线分页与导出结果一致，已按下一页分节符恢复。");
   }
-  if (hasUnsupportedHeaderFooter || hasMultipleParagraphs || hasMixedHeaderFooterStyles) warnings.push("页眉页脚中的图片、多段落、混合字符样式或高级格式暂未完整恢复；基础字体、字号、颜色、加粗、斜体、对齐和页码已保留。");
+  if (hasUnsupportedHeaderFooter || hasMixedHeaderFooterStyles) warnings.push("页眉页脚中的图片、混合字符样式或高级格式暂未完整恢复；多段落、基础字体、字号、颜色、加粗、斜体、对齐和页码已保留。");
   if (hasFlattenedDynamicFields) warnings.push("页眉页脚中的日期、文件名或其他动态域已按当前显示值恢复为普通文字，再次导出后不会自动更新。");
   // 中文注解：首节保存在文档页面设置中，后续节由正文分节节点携带，编辑、预览和再次导出共用同一顺序。
   return {
@@ -1870,23 +1891,33 @@ function createDocxHeaderFooter(pageLayout, templateStyle = {}, forceDefault = f
     }
     return new TextRun({ text: part, ...runStyle });
   });
+  const createPartParagraphs = (text, pageNumberTemplate, pageNumberSeparate, style) => {
+    const lines = String(text || "").split("\n");
+    const paragraphs = text
+      ? lines.map((line, index) => {
+        const children = line ? [new TextRun({ text: line, ...style.run })] : [];
+        if (index === lines.length - 1 && pageNumberTemplate && !pageNumberSeparate) {
+          if (line) children.push(new TextRun({ text: " · ", ...style.run }));
+          children.push(...pageNumberChildren(pageNumberTemplate, style.run));
+        }
+        return new Paragraph({ alignment: style.alignment, children });
+      })
+      : [];
+    // 中文注解：多段落文字与页码分段输出，保持常见 Word“说明行 + 独立页码行”的页面结构。
+    if (pageNumberTemplate && (!text || pageNumberSeparate)) paragraphs.push(new Paragraph({ alignment: style.alignment, children: pageNumberChildren(pageNumberTemplate, style.run) }));
+    return paragraphs;
+  };
   const createHeader = (variant, force = false) => {
     const style = docxTextStyle(variant.headerStyle);
-    const headerChildren = [];
-    if (variant.headerText) headerChildren.push(new TextRun({ text: variant.headerText, ...style.run }));
-    if (variant.headerText && variant.headerPageNumberTemplate) headerChildren.push(new TextRun({ text: " · ", ...style.run }));
-    headerChildren.push(...pageNumberChildren(variant.headerPageNumberTemplate, style.run));
-    if (!force && !headerChildren.length) return undefined;
-    return new Header({ children: [new Paragraph({ alignment: style.alignment, children: headerChildren })] });
+    const paragraphs = createPartParagraphs(variant.headerText, variant.headerPageNumberTemplate, variant.headerPageNumberSeparate, style);
+    if (!force && !paragraphs.length) return undefined;
+    return new Header({ children: paragraphs.length ? paragraphs : [new Paragraph({ alignment: style.alignment, children: [] })] });
   };
   const createFooter = (variant, force = false) => {
     const style = docxTextStyle(variant.footerStyle);
-    const footerChildren = [];
-    if (variant.footerText) footerChildren.push(new TextRun({ text: variant.footerText, ...style.run }));
-    if (variant.footerText && variant.footerPageNumberTemplate) footerChildren.push(new TextRun({ text: " · ", ...style.run }));
-    footerChildren.push(...pageNumberChildren(variant.footerPageNumberTemplate, style.run));
-    if (!force && !footerChildren.length) return undefined;
-    return new Footer({ children: [new Paragraph({ alignment: style.alignment, children: footerChildren })] });
+    const paragraphs = createPartParagraphs(variant.footerText, variant.footerPageNumberTemplate, variant.footerPageNumberSeparate, style);
+    if (!force && !paragraphs.length) return undefined;
+    return new Footer({ children: paragraphs.length ? paragraphs : [new Paragraph({ alignment: style.alignment, children: [] })] });
   };
 
   const headers = {

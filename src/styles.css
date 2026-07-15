@@ -824,7 +824,7 @@ textarea {
   z-index: 10;
   display: grid;
   width: 360px;
-  max-height: min(620px, calc(100vh - 150px));
+  max-height: min(620px, calc(100vh - 220px));
   overflow-y: auto;
   gap: 10px;
   padding: 12px;
@@ -908,6 +908,7 @@ textarea {
 
 .page-layout-popover input[type="text"],
 .page-layout-popover input[type="number"],
+.page-layout-popover textarea,
 .page-layout-popover select {
   width: 100%;
   min-width: 0;
@@ -917,6 +918,15 @@ textarea {
   padding: 0 9px;
   color: #17212b;
   font: inherit;
+}
+
+.page-layout-popover textarea {
+  min-height: 58px;
+  height: auto;
+  padding-top: 7px;
+  padding-bottom: 7px;
+  line-height: 1.45;
+  resize: vertical;
 }
 
 .page-margin-grid {
@@ -1100,6 +1110,17 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.page-header.multiline,
+.page-footer.multiline {
+  display: block;
+  white-space: pre-wrap;
+}
+
+.page-header.multiline.page-number-separate > span,
+.page-footer.multiline.page-number-separate > span {
+  display: block;
 }
 
 .page-header {

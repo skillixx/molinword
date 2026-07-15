@@ -75,6 +75,8 @@ type DocumentPageVariant = {
   footerStyle: DocumentPageTextStyle;
   headerPageNumberTemplate: string;
   footerPageNumberTemplate: string;
+  headerPageNumberSeparate: boolean;
+  footerPageNumberSeparate: boolean;
   pageNumberEnabled: boolean;
   pageNumberPosition: "header" | "footer";
 };
@@ -101,6 +103,8 @@ const defaultDocumentPageVariant: DocumentPageVariant = {
   footerStyle: { ...defaultDocumentPageTextStyle },
   headerPageNumberTemplate: "",
   footerPageNumberTemplate: "",
+  headerPageNumberSeparate: false,
+  footerPageNumberSeparate: false,
   pageNumberEnabled: false,
   pageNumberPosition: "footer"
 };
@@ -133,6 +137,13 @@ function normalizeDocumentPageTextStyle(value: Partial<DocumentPageTextStyle> | 
   };
 }
 
+function normalizeDocumentPageText(value: unknown) {
+  // 中文注解：客户端处于逐键编辑态，只统一换行和长度；服务端保存时再做空白规范化，避免 Enter 或空格被即时吞掉。
+  return String(value ?? "")
+    .replace(/\r\n?/g, "\n")
+    .slice(0, 2000);
+}
+
 function normalizeDocumentPageVariant(value: Partial<DocumentPageVariant> | null | undefined, fallback = defaultDocumentPageVariant): DocumentPageVariant {
   const source = value || {};
   const hasHeaderTemplate = Object.prototype.hasOwnProperty.call(source, "headerPageNumberTemplate");
@@ -145,12 +156,14 @@ function normalizeDocumentPageVariant(value: Partial<DocumentPageVariant> | null
   }
   const pageNumberEnabled = Boolean(headerPageNumberTemplate || footerPageNumberTemplate);
   return {
-    headerText: String(value?.headerText ?? fallback.headerText ?? ""),
+    headerText: normalizeDocumentPageText(value?.headerText ?? fallback.headerText),
     headerStyle: normalizeDocumentPageTextStyle(value?.headerStyle, fallback.headerStyle),
-    footerText: String(value?.footerText ?? fallback.footerText ?? ""),
+    footerText: normalizeDocumentPageText(value?.footerText ?? fallback.footerText),
     footerStyle: normalizeDocumentPageTextStyle(value?.footerStyle, fallback.footerStyle),
     headerPageNumberTemplate,
     footerPageNumberTemplate,
+    headerPageNumberSeparate: Boolean(headerPageNumberTemplate) && (value?.headerPageNumberSeparate === undefined ? fallback.headerPageNumberSeparate : Boolean(value.headerPageNumberSeparate)),
+    footerPageNumberSeparate: Boolean(footerPageNumberTemplate) && (value?.footerPageNumberSeparate === undefined ? fallback.footerPageNumberSeparate : Boolean(value.footerPageNumberSeparate)),
     pageNumberEnabled,
     pageNumberPosition: headerPageNumberTemplate && !footerPageNumberTemplate ? "header" : "footer"
   };
@@ -506,14 +519,16 @@ function PageVariantSettings(props: {
   const pageNumberPrefix = props.title === "默认页" ? "默认" : props.title === "偶数页" ? "偶数" : props.title;
   return <>
     <strong>{props.title}</strong>
-    <label>页眉<input type="text" aria-label={`${ariaPrefix}页眉文字`} maxLength={500} value={props.variant.headerText} onChange={(event) => update({ headerText: event.target.value })} /></label>
+    <label>页眉<textarea aria-label={`${ariaPrefix}页眉文字`} maxLength={2000} rows={2} value={props.variant.headerText} onChange={(event) => props.onChange({ ...props.variant, headerText: event.target.value.slice(0, 2000) })} /></label>
     <PageTextFormatControls label={`${ariaPrefix}页眉`} value={props.variant.headerStyle} onChange={(headerStyle) => update({ headerStyle })} />
     <label className="page-number-toggle"><input type="checkbox" aria-label={`${pageNumberPrefix}页眉页码`} checked={Boolean(props.variant.headerPageNumberTemplate)} onChange={(event) => update({ headerPageNumberTemplate: event.target.checked ? defaultDocumentPageNumberTemplate : "" })} />页眉页码</label>
     {props.variant.headerPageNumberTemplate ? <label>页眉页码格式<input type="text" aria-label={`${pageNumberPrefix}页眉页码格式`} maxLength={500} value={props.variant.headerPageNumberTemplate} onChange={(event) => update({ headerPageNumberTemplate: event.target.value })} /></label> : null}
-    <label>页脚<input type="text" aria-label={`${ariaPrefix}页脚文字`} maxLength={500} value={props.variant.footerText} onChange={(event) => update({ footerText: event.target.value })} /></label>
+    {props.variant.headerPageNumberTemplate && props.variant.headerText ? <label className="page-number-toggle"><input type="checkbox" aria-label={`${pageNumberPrefix}页眉页码独立一行`} checked={props.variant.headerPageNumberSeparate} onChange={(event) => update({ headerPageNumberSeparate: event.target.checked })} />页码独立一行</label> : null}
+    <label>页脚<textarea aria-label={`${ariaPrefix}页脚文字`} maxLength={2000} rows={2} value={props.variant.footerText} onChange={(event) => props.onChange({ ...props.variant, footerText: event.target.value.slice(0, 2000) })} /></label>
     <PageTextFormatControls label={`${ariaPrefix}页脚`} value={props.variant.footerStyle} onChange={(footerStyle) => update({ footerStyle })} />
     <label className="page-number-toggle"><input type="checkbox" aria-label={`${pageNumberPrefix}页脚页码`} checked={Boolean(props.variant.footerPageNumberTemplate)} onChange={(event) => update({ footerPageNumberTemplate: event.target.checked ? defaultDocumentPageNumberTemplate : "" })} />页脚页码</label>
     {props.variant.footerPageNumberTemplate ? <label>页脚页码格式<input type="text" aria-label={`${pageNumberPrefix}页脚页码格式`} maxLength={500} value={props.variant.footerPageNumberTemplate} onChange={(event) => update({ footerPageNumberTemplate: event.target.value })} /></label> : null}
+    {props.variant.footerPageNumberTemplate && props.variant.footerText ? <label className="page-number-toggle"><input type="checkbox" aria-label={`${pageNumberPrefix}页脚页码独立一行`} checked={props.variant.footerPageNumberSeparate} onChange={(event) => update({ footerPageNumberSeparate: event.target.checked })} />页码独立一行</label> : null}
   </>;
 }
 
@@ -2508,17 +2523,17 @@ function Editor(props: {
                 {previewPages.map((page, index) => {
                   const pageVariant = pageVariantForPage(page.layout, index, page.sectionPageIndex);
                   return <article className="page-sheet" data-section-index={page.sectionIndex} style={pageGeometryStyle(page.layout)} key={index}>
-                    {pageVariant.headerText || pageVariant.headerPageNumberTemplate ? <div className="page-header" style={pageTextCssStyle(pageVariant.headerStyle)}>
+                    {pageVariant.headerText || pageVariant.headerPageNumberTemplate ? <div className={`page-header${pageVariant.headerText.includes("\n") || (pageVariant.headerText && pageVariant.headerPageNumberTemplate && pageVariant.headerPageNumberSeparate) ? " multiline" : ""}${pageVariant.headerText && pageVariant.headerPageNumberTemplate && pageVariant.headerPageNumberSeparate ? " page-number-separate" : ""}`} style={pageTextCssStyle(pageVariant.headerStyle)}>
                       {pageVariant.headerText ? <span>{pageVariant.headerText}</span> : null}
-                      {pageVariant.headerText && pageVariant.headerPageNumberTemplate ? <span aria-hidden="true">·</span> : null}
+                      {pageVariant.headerText && pageVariant.headerPageNumberTemplate && !pageVariant.headerText.includes("\n") && !pageVariant.headerPageNumberSeparate ? <span aria-hidden="true">·</span> : null}
                       {pageVariant.headerPageNumberTemplate ? <span>{pageNumberTemplateText(pageVariant.headerPageNumberTemplate, previewDisplayPageNumbers[index], previewPages.length, page.layout.pageNumberFormat)}</span> : null}
                     </div> : null}
                     <div className="page-body">
                       {page.blocks.map((html, blockIndex) => <div className="page-block" key={`${index}-${blockIndex}`} dangerouslySetInnerHTML={{ __html: html }} />)}
                     </div>
-                    {pageVariant.footerText || pageVariant.footerPageNumberTemplate ? <div className="page-footer" style={pageTextCssStyle(pageVariant.footerStyle)}>
+                    {pageVariant.footerText || pageVariant.footerPageNumberTemplate ? <div className={`page-footer${pageVariant.footerText.includes("\n") || (pageVariant.footerText && pageVariant.footerPageNumberTemplate && pageVariant.footerPageNumberSeparate) ? " multiline" : ""}${pageVariant.footerText && pageVariant.footerPageNumberTemplate && pageVariant.footerPageNumberSeparate ? " page-number-separate" : ""}`} style={pageTextCssStyle(pageVariant.footerStyle)}>
                       {pageVariant.footerText ? <span>{pageVariant.footerText}</span> : null}
-                      {pageVariant.footerText && pageVariant.footerPageNumberTemplate ? <span aria-hidden="true">·</span> : null}
+                      {pageVariant.footerText && pageVariant.footerPageNumberTemplate && !pageVariant.footerText.includes("\n") && !pageVariant.footerPageNumberSeparate ? <span aria-hidden="true">·</span> : null}
                       {pageVariant.footerPageNumberTemplate ? <span>{pageNumberTemplateText(pageVariant.footerPageNumberTemplate, previewDisplayPageNumbers[index], previewPages.length, page.layout.pageNumberFormat)}</span> : null}
                     </div> : null}
                   </article>;
