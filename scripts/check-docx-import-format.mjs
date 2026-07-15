@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import JSZip from "jszip";
-import { parseImportedDocument } from "../server/index.js";
+import { createDocxBuffer, parseImportedDocument } from "../server/index.js";
 
 const tinyPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lT3g6wAAAABJRU5ErkJggg==";
 
@@ -57,8 +57,21 @@ async function buildFormattedDocxFixture() {
     "styles.xml",
     `<?xml version="1.0" encoding="UTF-8"?>
 <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:docDefaults>
+    <w:pPrDefault><w:pPr><w:spacing w:after="80" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault>
+  </w:docDefaults>
+  <w:style w:type="paragraph" w:default="1" w:styleId="Normal">
+    <w:name w:val="Normal"/>
+    <w:pPr><w:spacing w:before="120"/></w:pPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="BodyBased">
+    <w:name w:val="Body Based"/>
+    <w:basedOn w:val="Normal"/>
+    <w:pPr><w:spacing w:after="240"/></w:pPr>
+  </w:style>
   <w:style w:type="paragraph" w:styleId="Title">
     <w:name w:val="Title"/>
+    <w:basedOn w:val="Normal"/>
     <w:pPr><w:jc w:val="center"/></w:pPr>
     <w:rPr>
       <w:rFonts w:ascii="Microsoft YaHei" w:eastAsia="Microsoft YaHei" w:hAnsi="Microsoft YaHei"/>
@@ -82,7 +95,7 @@ async function buildFormattedDocxFixture() {
       <w:r><w:t>格式恢复测试标题</w:t></w:r>
     </w:p>
     <w:p>
-      <w:pPr><w:jc w:val="both"/><w:ind w:firstLine="480"/></w:pPr>
+      <w:pPr><w:jc w:val="both"/><w:ind w:firstLine="480"/><w:spacing w:before="120" w:after="240" w:line="360" w:lineRule="auto"/></w:pPr>
       <w:r>
         <w:rPr>
           <w:rFonts w:ascii="Microsoft YaHei" w:eastAsia="Microsoft YaHei" w:hAnsi="Microsoft YaHei"/>
@@ -95,6 +108,8 @@ async function buildFormattedDocxFixture() {
         <w:t>红色加粗文本</w:t>
       </w:r>
     </w:p>
+    <w:p><w:pPr><w:pStyle w:val="BodyBased"/></w:pPr><w:r><w:t>Inherited spacing</w:t></w:r></w:p>
+    <w:p><w:pPr><w:spacing w:line="360" w:lineRule="atLeast"/></w:pPr><w:r><w:t>At least spacing</w:t></w:r></w:p>
     <w:tbl>
       <w:tr>
         <w:tc><w:p><w:r><w:t>Header A</w:t></w:r></w:p></w:tc>
@@ -152,6 +167,9 @@ assert.match(imported.content, /font-family:\s*(?:&quot;Microsoft YaHei&quot;|"M
 assert.match(imported.content, /font-size:\s*24pt/);
 assert.match(imported.content, /text-align:\s*justify/);
 assert.match(imported.content, /text-indent:\s*24pt/);
+assert.match(imported.content, /line-height:\s*1\.5/);
+assert.match(imported.content, /margin-top:\s*6pt/);
+assert.match(imported.content, /margin-bottom:\s*12pt/);
 assert.match(imported.content, /color:\s*#C00000/i);
 assert.match(imported.content, /<strong>/);
 assert.match(imported.content, /<table>/);
@@ -164,6 +182,23 @@ assert.match(imported.content, /<img[^>]+src="data:image\/png;base64,/);
 assert.match(imported.content, /<ol><li>Ordered item 1<ol><li>Nested ordered item<\/li><\/ol><\/li><li>Ordered item 2<\/li><\/ol>/);
 assert.match(imported.content, /<ul><li>Bullet item<\/li><\/ul>/);
 assert.match(imported.content, /<ol><li>Override ordered item<\/li><\/ol><ol><li>Restart ordered item<\/li><\/ol>/);
-assert.match(imported.content, /<td><p>Import Cell 1<\/p><ol><li>Table ordered item<\/li><\/ol><\/td>/);
+assert.match(imported.content, /<td><p[^>]*>Import Cell 1<\/p><ol><li>Table ordered item<\/li><\/ol><\/td>/);
+
+const inheritedParagraph = imported.content.match(/<p[^>]*>Inherited spacing<\/p>/)?.[0] || "";
+assert.match(inheritedParagraph, /line-height:\s*1\.15/);
+assert.match(inheritedParagraph, /margin-top:\s*6pt/);
+assert.match(inheritedParagraph, /margin-bottom:\s*12pt/);
+const atLeastParagraph = imported.content.match(/<p[^>]*>At least spacing<\/p>/)?.[0] || "";
+assert.match(atLeastParagraph, /line-height:\s*18pt/);
+assert.match(atLeastParagraph, /--word-line-rule:\s*atLeast/);
+
+const roundTripBuffer = await createDocxBuffer({ title: "Spacing round trip", content: imported.content });
+const roundTripZip = await JSZip.loadAsync(roundTripBuffer);
+const roundTripXml = await roundTripZip.file("word/document.xml")?.async("string") || "";
+const atLeastRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || [])
+  .find((paragraph) => paragraph.includes(">At least spacing</w:t>")) || "";
+// 中文注解：最小行距往返后仍必须是 atLeast，避免大字号文字被固定行高裁切并改变分页。
+assert.match(atLeastRoundTripXml, /<w:spacing[^>]+w:line="360"/);
+assert.match(atLeastRoundTripXml, /<w:spacing[^>]+w:lineRule="atLeast"/);
 
 console.log("DOCX import format check passed");

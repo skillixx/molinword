@@ -37,6 +37,7 @@ import {
   PenLine,
   Plus,
   RefreshCw,
+  Rows3,
   Save,
   Search,
   Sparkles,
@@ -53,6 +54,9 @@ type AiAction = "continue" | "expand" | "shorten" | "correct" | "polish" | "form
 type AiApplyMode = "replace" | "insert";
 type TextCaseMode = "upper" | "lower" | "title";
 type EditorViewMode = "edit" | "page";
+type ParagraphSpacingProperty = "line-height" | "margin-top" | "margin-bottom" | "--word-line-rule";
+type ParagraphSpacingStyles = Partial<Record<ParagraphSpacingProperty, string>>;
+type FormatSelectOption = { label: string; value: string };
 
 type RecentDocument = {
   id: number;
@@ -113,6 +117,7 @@ declare module "@tiptap/core" {
       increaseIndent: () => ReturnType;
       decreaseIndent: () => ReturnType;
       setFirstLineIndent: (level: number) => ReturnType;
+      setParagraphSpacing: (styles: ParagraphSpacingStyles) => ReturnType;
     };
   }
 }
@@ -174,7 +179,37 @@ const fontSizeOptions = [
   { label: "二号", value: "22pt" }
 ];
 const importedInlineStyleNames = ["font-family", "font-size", "color", "font-weight", "font-style"];
-const importedBlockStyleNames = ["text-align", "text-indent", "margin-left", "line-height"];
+const importedBlockStyleNames = ["text-align", "text-indent", "margin-left", "line-height", "margin-top", "margin-bottom", "--word-line-rule"];
+const lineSpacingOptions = [
+  { label: "单倍", value: "1" },
+  { label: "1.15 倍", value: "1.15" },
+  { label: "1.5 倍", value: "1.5" },
+  { label: "双倍", value: "2" }
+];
+const paragraphSpacingOptions = ["0pt", "6pt", "12pt", "18pt", "24pt"].map((value) => ({ label: value, value }));
+
+function ParagraphSpacingSelect(props: {
+  title: string;
+  placeholder: string;
+  options: FormatSelectOption[];
+  icon?: React.ReactNode;
+  onSelect: (value: string, label: string) => void;
+}) {
+  return (
+    <label className="format-select" title={props.title}>
+      {props.icon}
+      <select defaultValue="" onChange={(event) => {
+        const value = event.target.value;
+        const label = event.target.selectedOptions[0]?.text || value;
+        if (value) props.onSelect(value, label);
+        event.target.value = "";
+      }}>
+        <option value="">{props.placeholder}</option>
+        {props.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </select>
+    </label>
+  );
+}
 
 function pickImportedStyles(styleText: string | null, allowedNames: string[]) {
   const allowed = new Set(allowedNames);
@@ -192,7 +227,7 @@ function pickImportedStyles(styleText: string | null, allowedNames: string[]) {
     .join("; ");
 }
 
-function mergeStyleText(styleText: string | null, nextStyles: Record<string, string>, allowedNames: string[]) {
+function mergeStyleText(styleText: string | null, nextStyles: Record<string, string | undefined>, allowedNames: string[]) {
   const styles = new Map<string, string>();
   pickImportedStyles(styleText, allowedNames).split(";").forEach((item) => {
     const separator = item.indexOf(":");
@@ -346,6 +381,13 @@ const ParagraphIndent = Extension.create({
         ({ state, tr, dispatch }: CommandProps) => updateSelectedTextblocks(state, tr, dispatch, (node) => {
           // 中文注解：对齐写入段落级安全样式，分页预览和 DOCX 导出会复用同一份格式。
           const importedStyle = mergeStyleText(String(node.attrs.importedStyle || ""), { "text-align": alignment }, importedBlockStyleNames);
+          return { importedStyle };
+        }),
+      setParagraphSpacing:
+        (styles) =>
+        ({ state, tr, dispatch }: CommandProps) => updateSelectedTextblocks(state, tr, dispatch, (node) => {
+          // 中文注解：行距、段前和段后统一保存在段落安全样式中，编辑视图、分页预览和导出共用同一数据源。
+          const importedStyle = mergeStyleText(String(node.attrs.importedStyle || ""), styles, importedBlockStyleNames);
           return { importedStyle };
         })
     };
@@ -1242,6 +1284,12 @@ function Editor(props: {
     setSelectionHint(applied ? `已设置${label}。` : "请把光标放到段落或标题中，再设置对齐方式。");
   };
 
+  const applyParagraphSpacing = (styles: ParagraphSpacingStyles, label: string) => {
+    if (!editor) return;
+    const applied = (editor.chain().focus() as unknown as { setParagraphSpacing: (value: ParagraphSpacingStyles) => { run: () => boolean } }).setParagraphSpacing(styles).run();
+    setSelectionHint(applied ? `已设置${label}。` : "请把光标放到段落或标题中，再设置段落间距。");
+  };
+
   const insertImageFile = (file: File | null) => {
     if (!editor || !file) return;
     if (!file.type.startsWith("image/")) {
@@ -1387,6 +1435,10 @@ function Editor(props: {
             <button onClick={() => applyParagraphAlignment("center", "居中对齐")} title="居中对齐"><AlignCenter size={16} /></button>
             <button onClick={() => applyParagraphAlignment("right", "右对齐")} title="右对齐"><AlignRight size={16} /></button>
             <button onClick={() => applyParagraphAlignment("justify", "两端对齐")} title="两端对齐"><AlignJustify size={16} /></button>
+            <span className="format-divider" />
+            <ParagraphSpacingSelect title="设置当前段落或选区的行距" placeholder="行距" options={lineSpacingOptions} icon={<Rows3 size={16} />} onSelect={(value, label) => applyParagraphSpacing({ "line-height": value, "--word-line-rule": "auto" }, `${label}行距`)} />
+            <ParagraphSpacingSelect title="设置当前段落或选区的段前间距" placeholder="段前" options={paragraphSpacingOptions} onSelect={(value) => applyParagraphSpacing({ "margin-top": value }, `段前 ${value}`)} />
+            <ParagraphSpacingSelect title="设置当前段落或选区的段后间距" placeholder="段后" options={paragraphSpacingOptions} onSelect={(value) => applyParagraphSpacing({ "margin-bottom": value }, `段后 ${value}`)} />
             <span className="format-divider" />
             <button onClick={() => editor?.chain().focus().decreaseIndent().run()} title="减少首行缩进"><IndentDecrease size={16} />减少首行</button>
             <button onClick={() => editor?.chain().focus().increaseIndent().run()} title="增加首行缩进"><IndentIncrease size={16} />首行缩进</button>

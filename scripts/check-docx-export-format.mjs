@@ -22,6 +22,9 @@ const content = `
   </table>
   <div data-page-break="true" class="page-break-marker"></div>
   <p>分页符后的内容</p>
+  <p style="line-height:1.5;margin-top:6pt;margin-bottom:12pt">Spacing paragraph</p>
+  <p style="line-height:18pt;--word-line-rule:exact">Exact spacing paragraph</p>
+  <p style="margin-top:0pt;margin-bottom:0pt">Zero spacing paragraph</p>
   <ol>
     <li>Ordered item 1<ol><li>Nested ordered item</li></ol></li>
     <li>Ordered item 2</li>
@@ -58,6 +61,29 @@ assert.match(documentXml, /表头 A/);
 assert.match(documentXml, /单元格 1/);
 assert.match(documentXml, /<w:br w:type="page"\/>/);
 
+function paragraphXmlForText(text) {
+  return (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || [])
+    .find((paragraph) => paragraph.includes(`>${text}</w:t>`));
+}
+
+const spacingParagraphXml = paragraphXmlForText("Spacing paragraph");
+assert.ok(spacingParagraphXml, "spacing paragraph should exist");
+// 中文注解：段前、段后和 1.5 倍行距会改变分页位置，必须写入同一个 Word 段落属性。
+assert.match(spacingParagraphXml, /<w:spacing[^>]+w:before="120"/);
+assert.match(spacingParagraphXml, /<w:spacing[^>]+w:after="240"/);
+assert.match(spacingParagraphXml, /<w:spacing[^>]+w:line="360"/);
+assert.match(spacingParagraphXml, /<w:spacing[^>]+w:lineRule="auto"/);
+
+const exactSpacingParagraphXml = paragraphXmlForText("Exact spacing paragraph");
+assert.ok(exactSpacingParagraphXml, "exact spacing paragraph should exist");
+assert.match(exactSpacingParagraphXml, /<w:spacing[^>]+w:line="360"/);
+assert.match(exactSpacingParagraphXml, /<w:spacing[^>]+w:lineRule="exact"/);
+
+const zeroSpacingParagraphXml = paragraphXmlForText("Zero spacing paragraph");
+assert.ok(zeroSpacingParagraphXml, "zero spacing paragraph should exist");
+assert.match(zeroSpacingParagraphXml, /<w:spacing[^>]+w:before="0"/);
+assert.match(zeroSpacingParagraphXml, /<w:spacing[^>]+w:after="0"/);
+
 // 中文注解：编号列表、嵌套层级和项目符号必须保留各自语义，不能统一退化为一级圆点。
 assert.match(documentXml, /<w:numPr><w:ilvl w:val="0"\/><w:numId w:val="\d+"\/><\/w:numPr>/);
 assert.match(documentXml, /<w:numPr><w:ilvl w:val="1"\/><w:numId w:val="\d+"\/><\/w:numPr>/);
@@ -65,8 +91,7 @@ assert.match(numberingXml, /<w:numFmt w:val="decimal"\/>/);
 assert.match(numberingXml, /<w:numFmt w:val="bullet"\/>/);
 
 function listInfoForText(text) {
-  const paragraphXml = (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || [])
-    .find((paragraph) => paragraph.includes(`>${text}</w:t>`));
+  const paragraphXml = paragraphXmlForText(text);
   assert.ok(paragraphXml, `list paragraph should exist: ${text}`);
   return {
     level: Number(paragraphXml.match(/<w:ilvl w:val="(\d+)"\/>/)?.[1]),

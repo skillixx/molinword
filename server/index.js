@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import express from "express";
-import { AlignmentType, Document, HeadingLevel, ImageRun, LevelFormat, Packer, PageBreak as DocxPageBreak, Paragraph, Table, TableCell, TableRow, TextRun, WidthType } from "docx";
+import { AlignmentType, Document, HeadingLevel, ImageRun, LevelFormat, LineRuleType, Packer, PageBreak as DocxPageBreak, Paragraph, Table, TableCell, TableRow, TextRun, WidthType } from "docx";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
 import mammoth from "mammoth";
@@ -180,7 +180,10 @@ function sanitizeImportedHtml(value = "") {
         "text-align": [/^(?:left|center|right|justify)$/],
         "text-indent": [/^-?\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
         "line-height": [/^\d+(?:\.\d+)?(?:px|pt|em|rem|%)?$/],
-        "margin-left": [/^\d+(?:\.\d+)?(?:px|pt|em|rem)$/]
+        "--word-line-rule": [/^(?:auto|exact|atLeast)$/],
+        "margin-left": [/^\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
+        "margin-top": [/^\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
+        "margin-bottom": [/^\d+(?:\.\d+)?(?:px|pt|em|rem)$/]
       },
       img: {
         width: [/^\d+(?:\.\d+)?(?:px|%)$/],
@@ -239,6 +242,20 @@ function wordTwipToPt(value = "") {
   return Number.isFinite(twip) && twip > 0 ? `${Math.round((twip / 20) * 10) / 10}pt` : "";
 }
 
+function wordSpacingToPt(value = "") {
+  const twip = Number.parseFloat(value);
+  return Number.isFinite(twip) && twip >= 0 ? `${Math.round((twip / 20) * 10) / 10}pt` : "";
+}
+
+function wordLineHeightToCss(spacingNode) {
+  const line = Number.parseFloat(firstValue(spacingNode?.attribs, ["w:line", "line"]));
+  if (!Number.isFinite(line) || line <= 0) return "";
+  const lineRule = firstValue(spacingNode?.attribs, ["w:lineRule", "lineRule"]);
+  // 中文注解：Word 的 auto 行距以 240 为单倍，固定值和最小值则使用 twip，转换后交给浏览器参与分页测量。
+  if (!lineRule || lineRule === "auto") return String(Math.round((line / 240) * 100) / 100);
+  return wordSpacingToPt(line);
+}
+
 function wordTwipToIndentLevel(value = "") {
   const twip = Number.parseFloat(value);
   return Number.isFinite(twip) && twip > 0 ? Math.max(1, Math.min(Math.round(twip / 240), 6)) : 0;
@@ -275,26 +292,68 @@ function parseParagraphProperties(pPr) {
   const left = firstValue(indent?.attribs, ["w:left", "left"]);
   if (firstLine) styles["text-indent"] = wordTwipToPt(firstLine);
   if (left) styles["margin-left"] = wordTwipToPt(left);
+  const spacing = xmlChild(pPr, "w:spacing");
+  const before = wordSpacingToPt(firstValue(spacing?.attribs, ["w:before", "before"]));
+  const after = wordSpacingToPt(firstValue(spacing?.attribs, ["w:after", "after"]));
+  const lineHeight = wordLineHeightToCss(spacing);
+  const lineRule = firstValue(spacing?.attribs, ["w:lineRule", "lineRule"]);
+  if (before) styles["margin-top"] = before;
+  if (after) styles["margin-bottom"] = after;
+  if (lineHeight) styles["line-height"] = lineHeight;
+  if (["exact", "atLeast"].includes(lineRule)) styles["--word-line-rule"] = lineRule;
+  // 中文注解：段落间距及行距规则都进入安全样式，后续编辑和再次导出才能保持同一分页语义。
   return styles;
 }
 
 function parseDocxStyles(stylesXml = "") {
-  const styles = new Map();
-  if (!stylesXml.trim()) return styles;
+  const emptyContext = { styleMap: new Map(), defaultParagraphStyleId: "", defaultParagraphStyle: { paragraph: {}, run: {} } };
+  if (!stylesXml.trim()) return emptyContext;
   const document = parseDocument(stylesXml, { xmlMode: true });
+  const docDefaults = xmlDescendants(document, "w:docDefaults")[0];
+  const defaultParagraph = parseParagraphProperties(xmlChild(xmlChild(docDefaults, "w:pPrDefault"), "w:pPr"));
+  const defaultRun = parseRunProperties(xmlChild(xmlChild(docDefaults, "w:rPrDefault"), "w:rPr"));
+  const rawStyles = new Map();
+  let defaultParagraphStyleId = "";
+
   for (const styleNode of xmlDescendants(document, "w:style")) {
     const styleId = firstValue(styleNode.attribs, ["w:styleId", "styleId"]);
     if (!styleId) continue;
     const pPr = xmlChild(styleNode, "w:pPr");
     const rPr = xmlChild(styleNode, "w:rPr");
-    styles.set(styleId, {
-      type: firstValue(styleNode.attribs, ["w:type", "type"]),
+    const type = firstValue(styleNode.attribs, ["w:type", "type"]);
+    if (type === "paragraph" && firstValue(styleNode.attribs, ["w:default", "default"]) === "1") defaultParagraphStyleId = styleId;
+    rawStyles.set(styleId, {
+      type,
       name: xmlVal(xmlChild(styleNode, "w:name")) || styleId,
+      basedOn: xmlVal(xmlChild(styleNode, "w:basedOn")),
       paragraph: parseParagraphProperties(pPr),
       run: parseRunProperties(rPr)
     });
   }
-  return styles;
+
+  if (!defaultParagraphStyleId && rawStyles.has("Normal")) defaultParagraphStyleId = "Normal";
+  const styleMap = new Map();
+  const resolveStyle = (styleId, ancestors = new Set()) => {
+    if (styleMap.has(styleId)) return styleMap.get(styleId);
+    const style = rawStyles.get(styleId);
+    if (!style || ancestors.has(styleId)) return { paragraph: defaultParagraph, run: defaultRun };
+    const nextAncestors = new Set(ancestors).add(styleId);
+    const parent = style.basedOn ? resolveStyle(style.basedOn, nextAncestors) : { paragraph: defaultParagraph, run: defaultRun };
+    const resolved = {
+      ...style,
+      paragraph: { ...defaultParagraph, ...(parent.paragraph || {}), ...style.paragraph },
+      run: { ...defaultRun, ...(parent.run || {}), ...style.run }
+    };
+    styleMap.set(styleId, resolved);
+    return resolved;
+  };
+  for (const styleId of rawStyles.keys()) resolveStyle(styleId);
+
+  // 中文注解：Word 样式按 docDefaults、basedOn、当前样式逐层覆盖，普通段落再继承默认段落样式。
+  const defaultParagraphStyle = defaultParagraphStyleId
+    ? resolveStyle(defaultParagraphStyleId)
+    : { paragraph: defaultParagraph, run: defaultRun };
+  return { styleMap, defaultParagraphStyleId, defaultParagraphStyle };
 }
 
 function parseDocxNumbering(numberingXml = "") {
@@ -429,10 +488,11 @@ async function docxRunToHtml(runNode, inheritedRunStyles = {}, zip = null, relat
 }
 
 async function parseStyledDocxParagraph(paragraphNode, context) {
-  const { styleMap, numbering, zip, relationships } = context;
+  const { styleMap, defaultParagraphStyleId, defaultParagraphStyle, numbering, zip, relationships } = context;
   const pPr = xmlChild(paragraphNode, "w:pPr");
   const styleId = xmlVal(xmlChild(pPr, "w:pStyle"));
-  const style = { id: styleId, ...(styleMap.get(styleId) || {}) };
+  const effectiveStyleId = styleId || defaultParagraphStyleId;
+  const style = { id: effectiveStyleId, ...(styleMap.get(effectiveStyleId) || defaultParagraphStyle) };
   const paragraphStyles = { ...(style.paragraph || {}), ...parseParagraphProperties(pPr) };
   const inheritedRunStyles = style.run || {};
   const body = (await Promise.all(xmlChildren(paragraphNode, "w:r").map((run) => docxRunToHtml(run, inheritedRunStyles, zip, relationships)))).join("") || "<br>";
@@ -544,10 +604,10 @@ async function parseStyledDocxToHtml(buffer) {
   const stylesXml = await zip.file("word/styles.xml")?.async("string");
   const numberingXml = await zip.file("word/numbering.xml")?.async("string");
   const relsXml = await zip.file("word/_rels/document.xml.rels")?.async("string");
-  const styleMap = parseDocxStyles(stylesXml || "");
+  const styleContext = parseDocxStyles(stylesXml || "");
   const numbering = parseDocxNumbering(numberingXml || "");
   const relationships = parseDocxRelationships(relsXml || "");
-  const context = { styleMap, numbering, zip, relationships };
+  const context = { ...styleContext, numbering, zip, relationships };
   const document = parseDocument(documentXml, { xmlMode: true });
   const body = xmlDescendants(document, "w:body")[0];
   const chunks = [];
@@ -745,6 +805,24 @@ function paragraphStyleFromNode(node) {
   const firstLine = cssLengthToTwip(styles["text-indent"]);
   const left = cssLengthToTwip(styles["margin-left"]);
   if (firstLine || left) paragraphStyle.indent = { ...(paragraphStyle.indent || {}), ...(firstLine ? { firstLine } : {}), ...(left ? { left } : {}) };
+  const spacing = {};
+  const before = cssLengthToTwip(styles["margin-top"]);
+  const after = cssLengthToTwip(styles["margin-bottom"]);
+  const unitlessLine = String(styles["line-height"] || "").match(/^([\d.]+)$/);
+  const percentLine = String(styles["line-height"] || "").match(/^([\d.]+)%$/);
+  const exactLine = cssLengthToTwip(styles["line-height"]);
+  if (before !== undefined) spacing.before = before;
+  if (after !== undefined) spacing.after = after;
+  if (unitlessLine || percentLine) {
+    const multiplier = unitlessLine ? Number(unitlessLine[1]) : Number(percentLine[1]) / 100;
+    spacing.line = Math.round(multiplier * 240);
+    spacing.lineRule = LineRuleType.AUTO;
+  } else if (exactLine !== undefined) {
+    spacing.line = exactLine;
+    spacing.lineRule = styles["--word-line-rule"] === "atLeast" ? LineRuleType.AT_LEAST : LineRuleType.EXACT;
+  }
+  // 中文注解：只有 HTML 明确携带段落间距时才覆盖模板默认值，避免普通段落丢失既有样式。
+  if (Object.keys(spacing).length) paragraphStyle.spacing = spacing;
   return paragraphStyle;
 }
 
@@ -829,7 +907,8 @@ function mergeParagraphOptions(...options) {
     return {
       ...merged,
       ...option,
-      indent: option.indent ? { ...(merged.indent || {}), ...option.indent } : merged.indent
+      indent: option.indent ? { ...(merged.indent || {}), ...option.indent } : merged.indent,
+      spacing: option.spacing ? { ...(merged.spacing || {}), ...option.spacing } : merged.spacing
     };
   }, {});
 }
@@ -844,15 +923,15 @@ function paragraphFromNode(node, listContext = null) {
   const paragraphStyle = mergeParagraphOptions(paragraphStyleFromNode(node), paragraphIndentFromNode(node));
 
   if (tagName === "h1") {
-    return new Paragraph({ children: textRunsFromNode(node), heading: HeadingLevel.HEADING_1, spacing: { after: 160 }, ...paragraphStyle });
+    return new Paragraph({ children: textRunsFromNode(node), heading: HeadingLevel.HEADING_1, ...mergeParagraphOptions({ spacing: { after: 160 } }, paragraphStyle) });
   }
 
   if (tagName === "h2") {
-    return new Paragraph({ children: textRunsFromNode(node), heading: HeadingLevel.HEADING_2, spacing: { before: 180, after: 120 }, ...paragraphStyle });
+    return new Paragraph({ children: textRunsFromNode(node), heading: HeadingLevel.HEADING_2, ...mergeParagraphOptions({ spacing: { before: 180, after: 120 } }, paragraphStyle) });
   }
 
   if (tagName === "h3") {
-    return new Paragraph({ children: textRunsFromNode(node), heading: HeadingLevel.HEADING_3, spacing: { before: 140, after: 100 }, ...paragraphStyle });
+    return new Paragraph({ children: textRunsFromNode(node), heading: HeadingLevel.HEADING_3, ...mergeParagraphOptions({ spacing: { before: 140, after: 100 } }, paragraphStyle) });
   }
 
   if (tagName === "li") {
@@ -863,16 +942,14 @@ function paragraphFromNode(node, listContext = null) {
     // 中文注解：按 HTML 的 ol/ul 类型和嵌套深度写入 Word 原生列表，在线编号不会在导出后变成圆点。
     return new Paragraph({
       children: textRunsFromListItem(node),
-      spacing: { after: 80 },
       ...listOptions,
-      ...paragraphStyle
+      ...mergeParagraphOptions({ spacing: { after: 80 } }, paragraphStyle)
     });
   }
 
   return new Paragraph({
     children: textRunsFromNode(node),
-    spacing: { after: 120 },
-    ...paragraphStyle
+    ...mergeParagraphOptions({ spacing: { after: 120 } }, paragraphStyle)
   });
 }
 
