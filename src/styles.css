@@ -839,6 +839,20 @@ textarea {
   gap: 8px;
 }
 
+.page-layout-current-section {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #dfe5eb;
+}
+
+.page-layout-current-section span {
+  color: #687684;
+  font-size: 11px;
+}
+
 .page-layout-section + .page-layout-switch,
 .page-layout-switch + .page-layout-section {
   margin-top: 2px;
@@ -870,7 +884,9 @@ textarea {
   font-size: 12px;
 }
 
-.page-layout-popover input[type="text"] {
+.page-layout-popover input[type="text"],
+.page-layout-popover input[type="number"],
+.page-layout-popover select {
   width: 100%;
   min-width: 0;
   height: 34px;
@@ -879,6 +895,12 @@ textarea {
   padding: 0 9px;
   color: #17212b;
   font: inherit;
+}
+
+.page-margin-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .page-number-toggle {
@@ -948,15 +970,15 @@ textarea {
 
 .page-sheet {
   position: relative;
-  width: 794px;
-  min-height: 1123px;
+  width: var(--page-width, 794px);
+  min-height: var(--page-height, 1123px);
   background: #ffffff;
   box-shadow: 0 12px 30px rgba(23, 33, 43, 0.18);
 }
 
 .page-body,
 .pagination-measurer {
-  width: 602px;
+  width: var(--page-content-width, 602px);
   color: #17212b;
   font-family: var(--document-font-family, "Microsoft YaHei"), sans-serif;
   font-size: var(--document-body-size, 14.67px);
@@ -964,15 +986,15 @@ textarea {
 }
 
 .page-body {
-  min-height: 931px;
-  margin: 96px;
+  min-height: var(--page-content-height, 931px);
+  margin: var(--page-margin-top, 96px) var(--page-margin-right, 96px) var(--page-margin-bottom, 96px) var(--page-margin-left, 96px);
 }
 
 .page-header,
 .page-footer {
   position: absolute;
-  left: 96px;
-  right: 96px;
+  left: var(--page-margin-left, 96px);
+  right: var(--page-margin-right, 96px);
   color: #87929d;
   text-align: center;
   font-family: var(--document-font-family, "Microsoft YaHei"), sans-serif;
@@ -1004,7 +1026,9 @@ textarea {
 }
 
 .paged-preview .page-break-marker,
-.pagination-measurer .page-break-marker {
+.pagination-measurer .page-break-marker,
+.paged-preview .section-break-marker,
+.pagination-measurer .section-break-marker {
   display: none;
 }
 
@@ -1115,7 +1139,8 @@ textarea {
   object-fit: contain;
 }
 
-.word-editor .page-break-marker {
+.word-editor .page-break-marker,
+.word-editor .section-break-marker {
   position: relative;
   display: block;
   height: 24px;
@@ -1135,6 +1160,29 @@ textarea {
   transform: translateX(-50%);
   background: #ffffff;
   padding: 0 8px;
+}
+
+.word-editor .section-break-marker {
+  border-top-style: double;
+  border-top-color: #6f9f95;
+}
+
+.word-editor .section-break-marker::before {
+  content: "分节符（下一页）";
+  position: absolute;
+  left: 50%;
+  top: -9px;
+  transform: translateX(-50%);
+  background: #ffffff;
+  padding: 0 8px;
+}
+
+.word-editor .section-break-marker[data-section-break="oddPage"]::before {
+  content: "分节符（奇数页）";
+}
+
+.word-editor .section-break-marker[data-section-break="evenPage"]::before {
+  content: "分节符（偶数页）";
 }
 
 .word-editor td p,

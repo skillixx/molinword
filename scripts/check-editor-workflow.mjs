@@ -205,6 +205,21 @@ try {
   await page.getByLabel("显示页码", { exact: true }).last().check();
   await page.getByText("页面设置", { exact: true }).click();
 
+  await editor.click();
+  await editor.press("Control+End");
+  await page.getByRole("button", { name: "分节符", exact: true }).click();
+  await editor.type("第二节横向内容");
+  await page.getByText("页面设置", { exact: true }).click();
+  await page.getByText("第 2 节 / 共 2 节", { exact: true }).waitFor();
+  await page.getByLabel("当前节纸张方向", { exact: true }).selectOption("landscape");
+  await page.getByLabel("当前节上边距", { exact: true }).fill("1.27");
+  await page.getByLabel("当前节下边距", { exact: true }).fill("1.27");
+  await page.getByLabel("默认页眉文字", { exact: true }).fill("第二节横向页眉");
+  await page.getByLabel("默认页脚文字", { exact: true }).fill("第二节横向页脚");
+  await page.getByText("首页不同", { exact: true }).click();
+  await page.getByText("奇偶页不同", { exact: true }).click();
+  await page.getByText("页面设置", { exact: true }).click();
+
   const manualSaveCountBeforeShortcut = manualSaveRequestCount;
   await page.keyboard.press("Control+S");
   await page.keyboard.press("Control+S");
@@ -214,6 +229,20 @@ try {
   assert.match(storedDocument.content, /<h2[^>]*>.*保留小号红字.*<\/h2>/);
   assert.match(storedDocument.content, /font-family:\s*SimSun/);
   assert.match(storedDocument.content, /font-size:\s*12pt/);
+  assert.match(storedDocument.content, /data-section-break="nextPage"/);
+  assert.match(storedDocument.content, /第二节横向内容/);
+  assert.match(storedDocument.content, /第二节横向页眉/);
+  const storedSectionLayoutText = storedDocument.content.match(/data-section-layout="([^"]+)"/)?.[1]
+    .replaceAll("&quot;", '"')
+    .replaceAll("&amp;", "&") || "";
+  const storedSectionLayout = JSON.parse(storedSectionLayoutText);
+  // 中文注解：直接验证节点负载，避免界面文本存在但连续设置被旧状态覆盖后仍误判为保存成功。
+  assert.equal(storedSectionLayout.orientation, "landscape");
+  assert.equal(storedSectionLayout.headerText, "第二节横向页眉");
+  assert.equal(storedSectionLayout.footerText, "第二节横向页脚");
+  assert.equal(storedSectionLayout.firstPageDifferent, false);
+  assert.equal(storedSectionLayout.oddEvenDifferent, false);
+  assert.deepEqual(storedSectionLayout.margins, { top: 720, right: 1440, bottom: 720, left: 1440 });
   assert.deepEqual(storedDocument.pageLayout, {
     headerText: "奇数页项目页眉",
     footerText: "奇数页办公文档",
@@ -221,7 +250,9 @@ try {
     firstPageDifferent: true,
     firstPage: { headerText: "首页项目封面", footerText: "首页保密标识", pageNumberEnabled: false },
     oddEvenDifferent: true,
-    evenPage: { headerText: "偶数页项目页眉", footerText: "偶数页办公文档", pageNumberEnabled: true }
+    evenPage: { headerText: "偶数页项目页眉", footerText: "偶数页办公文档", pageNumberEnabled: true },
+    orientation: "portrait",
+    margins: { top: 1440, right: 1440, bottom: 1440, left: 1440 }
   });
 
   await page.reload({ waitUntil: "networkidle" });
@@ -234,6 +265,8 @@ try {
   assert.match(reopenedHtml, /font-size:\s*18pt/);
   assert.match(reopenedHtml, /<em>/);
   assert.match(reopenedHtml, /<s>/);
+  assert.match(reopenedHtml, /data-section-break="nextPage"/);
+  assert.match(reopenedHtml, /第二节横向内容/);
 
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "导出 Word", exact: true }).click();
@@ -248,15 +281,23 @@ try {
   const headerXmlParts = await Promise.all(archive.file(/^word\/header\d+\.xml$/).map((file) => file.async("string")));
   const footerXmlParts = await Promise.all(archive.file(/^word\/footer\d+\.xml$/).map((file) => file.async("string")));
   assert.ok(documentXml, "导出的 DOCX 应包含 document.xml");
-  assert.equal(headerXmlParts.length, 3, "导出的 DOCX 应包含首页、奇数页和偶数页页眉");
-  assert.equal(footerXmlParts.length, 3, "导出的 DOCX 应包含首页、奇数页和偶数页页脚");
+  assert.equal(headerXmlParts.length, 5, "导出的 DOCX 应包含首节三类页眉和第二节默认/偶数页眉");
+  assert.equal(footerXmlParts.length, 5, "导出的 DOCX 应包含首节三类页脚和第二节默认/偶数页脚");
+  assert.equal((documentXml.match(/<w:sectPr(?:\s|>)/g) || []).length, 2);
+  assert.match(documentXml, /<w:type w:val="nextPage"\/>/);
+  assert.match(documentXml, /<w:pgSz[^>]+w:orient="landscape"/);
+  assert.match(documentXml, /<w:pgMar[^>]+w:top="720"[^>]+w:right="1440"[^>]+w:bottom="720"[^>]+w:left="1440"/);
   assert.match(documentXml, /<w:titlePg\/>/);
   assert.match(settingsXml, /<w:evenAndOddHeaders\/>/);
   assert.ok(headerXmlParts.some((xml) => xml.includes("首页项目封面")));
   assert.ok(headerXmlParts.some((xml) => xml.includes("奇数页项目页眉")));
   assert.ok(headerXmlParts.some((xml) => xml.includes("偶数页项目页眉")));
+  assert.ok(headerXmlParts.some((xml) => xml.includes("第二节横向页眉")));
+  assert.ok(footerXmlParts.some((xml) => xml.includes("第二节横向页脚")));
+  assert.equal(headerXmlParts.filter((xml) => xml.includes("第二节横向页眉")).length, 2);
+  assert.equal(footerXmlParts.filter((xml) => xml.includes("第二节横向页脚")).length, 2);
   assert.ok(footerXmlParts.some((xml) => xml.includes("首页保密标识")));
-  assert.equal(footerXmlParts.filter((xml) => /<w:instrText[^>]*>PAGE<\/w:instrText>/.test(xml)).length, 2);
+  assert.equal(footerXmlParts.filter((xml) => /<w:instrText[^>]*>PAGE<\/w:instrText>/.test(xml)).length, 4);
   // 中文注解：检查在线编辑后的具体文字，证明保存、重开和导出使用的是同一份格式数据。
   const paragraphs = documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || [];
   const headingParagraph = paragraphs.find((paragraph) => paragraph.includes(">保留小号红字</w:t>"));
@@ -292,8 +333,11 @@ try {
       pageCount: pages.length,
       overflowPages: pages.map((page, index) => {
         const body = page.querySelector(".page-body");
-        return body && body.scrollHeight > 931 ? index + 1 : null;
+        const availableHeight = Number.parseFloat(getComputedStyle(page).getPropertyValue("--page-content-height"));
+        return body && body.scrollHeight > availableHeight + 1 ? index + 1 : null;
       }).filter(Boolean),
+      sectionIndexes: pages.map((page) => Number(page.getAttribute("data-section-index") || 0)),
+      pageSizes: pages.map((page) => ({ width: Math.round(page.getBoundingClientRect().width), height: Math.round(page.getBoundingClientRect().height) })),
       firstPageHasList: Boolean(pages[0]?.querySelector("ol")),
       continuationMarkers: Array.from(document.querySelectorAll(".pagination-list-continuation > li")).map((item) => getComputedStyle(item).listStyleType),
       listMarginLeft: getComputedStyle(document.querySelector(".page-body ol")).marginLeft,
@@ -333,16 +377,21 @@ try {
   assert.equal(result.templateLabelVisible, true);
   assert.equal(result.fontVariable, '"SimSun"');
   assert.equal(result.lineVariable, "1.5833");
+  const secondSectionFirstPage = result.sectionIndexes.indexOf(1);
+  assert.ok(secondSectionFirstPage > 0);
+  assert.deepEqual(result.pageSizes[secondSectionFirstPage], { width: 1123, height: 794 });
   assert.equal(result.headerTexts.length, result.pageCount);
   assert.equal(result.headerTexts[0], "首页项目封面");
-  assert.ok(result.headerTexts.slice(1).every((text, index) => (index + 2) % 2 === 0 ? text === "偶数页项目页眉" : text === "奇数页项目页眉"));
+  assert.ok(result.headerTexts.slice(1, secondSectionFirstPage).every((text, index) => (index + 2) % 2 === 0 ? text === "偶数页项目页眉" : text === "奇数页项目页眉"));
+  assert.ok(result.headerTexts.slice(secondSectionFirstPage).every((text) => text === "第二节横向页眉"));
   assert.equal(result.footerTexts.length, result.pageCount);
   assert.equal(result.footerTexts[0], "首页保密标识");
-  assert.ok(result.footerTexts.slice(1).every((text, index) => {
+  assert.ok(result.footerTexts.slice(1, secondSectionFirstPage).every((text, index) => {
     const pageNumber = index + 2;
     const expectedLabel = pageNumber % 2 === 0 ? "偶数页办公文档" : "奇数页办公文档";
     return text.includes(expectedLabel) && text.includes(`第 ${pageNumber} 页 / 共 ${result.pageCount} 页`);
   }));
+  assert.ok(result.footerTexts.slice(secondSectionFirstPage).every((text, index) => text.includes("第二节横向页脚") && text.includes(`第 ${secondSectionFirstPage + index + 1} 页 / 共 ${result.pageCount} 页`)));
   assert.equal(maxConcurrentSaveRequestCount, 1);
 
   const desktopNavigation = await page.evaluate(() => {
@@ -375,6 +424,13 @@ try {
   assert.equal(mobile.viewportWidth, 390);
   assert.ok(mobile.scrollClientWidth <= 390);
   assert.ok(mobile.scrollWidth > mobile.scrollClientWidth);
+  await page.getByRole("button", { name: "编辑", exact: true }).click();
+  await editor.locator("td").first().click();
+  const sectionCountBeforeNestedInsert = await editor.locator(":scope > .section-break-marker").count();
+  await page.getByRole("button", { name: "分节符", exact: true }).click();
+  // 中文注解：从表格单元格插入时也必须提升为正文顶层节点，否则预览和导出都无法拆节。
+  assert.equal(await editor.locator(":scope > .section-break-marker").count(), sectionCountBeforeNestedInsert + 1);
+  assert.equal(await editor.locator("table .section-break-marker, li .section-break-marker").count(), 0);
   assert.deepEqual(browserErrors, []);
 
   console.log("Editor workflow browser check passed");

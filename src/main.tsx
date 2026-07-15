@@ -61,19 +61,27 @@ type ParagraphSpacingProperty = "line-height" | "margin-top" | "margin-bottom" |
 type ParagraphSpacingStyles = Partial<Record<ParagraphSpacingProperty, string>>;
 type FormatSelectOption = { label: string; value: string };
 type DocumentPageVariant = { headerText: string; footerText: string; pageNumberEnabled: boolean };
+type DocumentPageMargins = { top: number; right: number; bottom: number; left: number };
+type SectionBreakType = "nextPage" | "oddPage" | "evenPage";
 type DocumentPageLayout = DocumentPageVariant & {
   firstPageDifferent: boolean;
   firstPage: DocumentPageVariant;
   oddEvenDifferent: boolean;
   evenPage: DocumentPageVariant;
+  orientation: "portrait" | "landscape";
+  margins: DocumentPageMargins;
 };
 const defaultDocumentPageVariant: DocumentPageVariant = { headerText: "", footerText: "", pageNumberEnabled: false };
+const defaultDocumentPageMargins: DocumentPageMargins = { top: 1440, right: 1440, bottom: 1440, left: 1440 };
+const a4PageTwip = { width: 11906, height: 16838 };
 const defaultDocumentPageLayout: DocumentPageLayout = {
   ...defaultDocumentPageVariant,
   firstPageDifferent: false,
   firstPage: { ...defaultDocumentPageVariant },
   oddEvenDifferent: false,
-  evenPage: { ...defaultDocumentPageVariant }
+  evenPage: { ...defaultDocumentPageVariant },
+  orientation: "portrait",
+  margins: { ...defaultDocumentPageMargins }
 };
 
 function normalizeDocumentPageVariant(value: Partial<DocumentPageVariant> | null | undefined): DocumentPageVariant {
@@ -85,19 +93,62 @@ function normalizeDocumentPageVariant(value: Partial<DocumentPageVariant> | null
 }
 
 function normalizeDocumentPageLayout(value: Partial<DocumentPageLayout> | null | undefined): DocumentPageLayout {
+  const orientation = value?.orientation === "landscape" ? "landscape" : "portrait";
+  const normalizeMargin = (side: keyof DocumentPageMargins) => {
+    const number = Number(value?.margins?.[side]);
+    return Number.isFinite(number) ? Math.max(0, Math.min(Math.round(number), 7200)) : defaultDocumentPageMargins[side];
+  };
+  const margins = { top: normalizeMargin("top"), right: normalizeMargin("right"), bottom: normalizeMargin("bottom"), left: normalizeMargin("left") };
+  const pageWidth = orientation === "landscape" ? a4PageTwip.height : a4PageTwip.width;
+  const pageHeight = orientation === "landscape" ? a4PageTwip.width : a4PageTwip.height;
+  const fitPair = (first: number, second: number, maximum: number) => {
+    const total = first + second;
+    if (total <= maximum || total <= 0) return [first, second];
+    const ratio = maximum / total;
+    return [Math.round(first * ratio), Math.round(second * ratio)];
+  };
+  // 中文注解：前后端使用同一联合约束，为 A4 正文保留至少 0.5 英寸，避免浏览器与 Word 各自修正非法页距。
+  [margins.left, margins.right] = fitPair(margins.left, margins.right, pageWidth - 720);
+  [margins.top, margins.bottom] = fitPair(margins.top, margins.bottom, pageHeight - 720);
   return {
     ...normalizeDocumentPageVariant(value),
     firstPageDifferent: Boolean(value?.firstPageDifferent),
     firstPage: normalizeDocumentPageVariant(value?.firstPage),
     oddEvenDifferent: Boolean(value?.oddEvenDifferent),
-    evenPage: normalizeDocumentPageVariant(value?.evenPage)
+    evenPage: normalizeDocumentPageVariant(value?.evenPage),
+    orientation,
+    margins
   };
 }
 
-function pageVariantForPage(layout: DocumentPageLayout, pageIndex: number): DocumentPageVariant {
-  if (pageIndex === 0 && layout.firstPageDifferent) return layout.firstPage || defaultDocumentPageVariant;
-  if ((pageIndex + 1) % 2 === 0 && layout.oddEvenDifferent) return layout.evenPage || defaultDocumentPageVariant;
+function pageVariantForPage(layout: DocumentPageLayout, globalPageIndex: number, sectionPageIndex: number): DocumentPageVariant {
+  if (sectionPageIndex === 0 && layout.firstPageDifferent) return layout.firstPage || defaultDocumentPageVariant;
+  if ((globalPageIndex + 1) % 2 === 0 && layout.oddEvenDifferent) return layout.evenPage || defaultDocumentPageVariant;
   return layout;
+}
+
+function parseSectionPageLayout(value: unknown, fallback: DocumentPageLayout): DocumentPageLayout {
+  try {
+    const parsed = (typeof value === "string" ? JSON.parse(value) : value) as Partial<DocumentPageLayout> | null;
+    return normalizeDocumentPageLayout({
+      ...fallback,
+      ...(parsed || {}),
+      firstPage: { ...fallback.firstPage, ...(parsed?.firstPage || {}) },
+      evenPage: { ...fallback.evenPage, ...(parsed?.evenPage || {}) },
+      margins: { ...fallback.margins, ...(parsed?.margins || {}) }
+    });
+  } catch {
+    return normalizeDocumentPageLayout(fallback);
+  }
+}
+
+function samePageLayout(left: DocumentPageLayout, right: DocumentPageLayout) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function normalizeSectionBreakType(value: unknown): SectionBreakType {
+  // 中文注解：连续分节无法在当前分页画布中等价呈现，统一按下一页分节，确保在线预览与导出一致。
+  return ["oddPage", "evenPage"].includes(String(value)) ? value as SectionBreakType : "nextPage";
 }
 
 type RecentDocument = {
@@ -207,8 +258,51 @@ const maxIndentLevel = 6;
 const docxPagePreview = {
   widthPx: 794,
   heightPx: 1123,
-  marginPx: 96
+  twipToPx: 96 / 1440
 };
+type PreviewPage = { blocks: string[]; sectionIndex: number; sectionPageIndex: number; layout: DocumentPageLayout };
+
+function pageGeometry(layout: DocumentPageLayout) {
+  const landscape = layout.orientation === "landscape";
+  const widthPx = landscape ? docxPagePreview.heightPx : docxPagePreview.widthPx;
+  const heightPx = landscape ? docxPagePreview.widthPx : docxPagePreview.heightPx;
+  const margins = {
+    top: layout.margins.top * docxPagePreview.twipToPx,
+    right: layout.margins.right * docxPagePreview.twipToPx,
+    bottom: layout.margins.bottom * docxPagePreview.twipToPx,
+    left: layout.margins.left * docxPagePreview.twipToPx
+  };
+  return {
+    widthPx,
+    heightPx,
+    margins,
+    contentWidthPx: Math.max(96, widthPx - margins.left - margins.right),
+    contentHeightPx: Math.max(96, heightPx - margins.top - margins.bottom)
+  };
+}
+
+function pageGeometryStyle(layout: DocumentPageLayout): React.CSSProperties {
+  const geometry = pageGeometry(layout);
+  return {
+    "--page-width": `${geometry.widthPx}px`,
+    "--page-height": `${geometry.heightPx}px`,
+    "--page-margin-top": `${geometry.margins.top}px`,
+    "--page-margin-right": `${geometry.margins.right}px`,
+    "--page-margin-bottom": `${geometry.margins.bottom}px`,
+    "--page-margin-left": `${geometry.margins.left}px`,
+    "--page-content-width": `${geometry.contentWidthPx}px`,
+    "--page-content-height": `${geometry.contentHeightPx}px`
+  } as React.CSSProperties;
+}
+
+function twipToCentimeter(value: number) {
+  return Math.round((value * 2.54 / 1440) * 100) / 100;
+}
+
+function centimeterToTwip(value: string, fallback: number) {
+  const centimeters = Number(value);
+  return Number.isFinite(centimeters) ? Math.max(0, Math.min(Math.round(centimeters / 2.54 * 1440), 7200)) : fallback;
+}
 const textColorOptions = [
   { label: "黑", value: "#17212B" },
   { label: "红", value: "#C00000" },
@@ -466,6 +560,34 @@ const PageBreak = TiptapNode.create({
   renderHTML() {
     // 中文注解：分页符作为独立块保存，分页预览和后端 DOCX 导出都用同一个标记识别强制分页。
     return ["div", { "data-page-break": "true", class: "page-break-marker" }];
+  }
+});
+
+const SectionBreak = TiptapNode.create({
+  name: "sectionBreak",
+  group: "block",
+  atom: true,
+  selectable: true,
+  addAttributes() {
+    return {
+      pageLayout: {
+        default: JSON.stringify(defaultDocumentPageLayout),
+        parseHTML: (element) => element.getAttribute("data-section-layout") || JSON.stringify(defaultDocumentPageLayout),
+        renderHTML: (attributes) => ({ "data-section-layout": String(attributes.pageLayout || JSON.stringify(defaultDocumentPageLayout)) })
+      },
+      breakType: {
+        default: "nextPage",
+        parseHTML: (element) => normalizeSectionBreakType(element.getAttribute("data-section-break")),
+        renderHTML: (attributes) => ({ "data-section-break": normalizeSectionBreakType(attributes.breakType) })
+      }
+    };
+  },
+  parseHTML() {
+    return [{ tag: "div[data-section-break]" }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    // 中文注解：分节符携带下一节完整页面设置，保存、分页预览和 DOCX 导出都从同一节点读取。
+    return ["div", { ...HTMLAttributes, class: "section-break-marker" }];
   }
 });
 
@@ -1517,11 +1639,16 @@ function Editor(props: {
   const [hasSelection, setHasSelection] = React.useState(false);
   const [manualSavePending, setManualSavePending] = React.useState(false);
   const [viewMode, setViewMode] = React.useState<EditorViewMode>("edit");
-  const [previewPages, setPreviewPages] = React.useState<string[][]>([[buildExportPreviewHtml(props.currentTitle, props.content)]]);
+  const [previewPages, setPreviewPages] = React.useState<PreviewPage[]>([{ blocks: [buildExportPreviewHtml(props.currentTitle, props.content)], sectionIndex: 0, sectionPageIndex: 0, layout: normalizeDocumentPageLayout(props.pageLayout) }]);
+  const [activeSectionIndex, setActiveSectionIndex] = React.useState(0);
+  const [activeSectionLayout, setActiveSectionLayout] = React.useState<DocumentPageLayout>(() => normalizeDocumentPageLayout(props.pageLayout));
+  const [sectionCount, setSectionCount] = React.useState(1);
   const [paginationAssetVersion, setPaginationAssetVersion] = React.useState(0);
   const paginationMeasureRef = React.useRef<HTMLDivElement | null>(null);
   const imageInputRef = React.useRef<HTMLInputElement | null>(null);
   const manualSavePromiseRef = React.useRef<Promise<ApiDocument | null> | null>(null);
+  const activeSectionIndexRef = React.useRef(0);
+  const activeSectionLayoutRef = React.useRef<DocumentPageLayout>(normalizeDocumentPageLayout(props.pageLayout));
 
   const updateOutlineFromEditor = React.useCallback((editor: TiptapEditor) => {
     const nextOutline: OutlineItem[] = [];
@@ -1532,18 +1659,38 @@ function Editor(props: {
       }
     });
     if (nextOutline.length) props.setOutline(nextOutline);
-  }, [props]);
+  }, [props.setOutline]);
+
+  const syncActiveSectionFromEditor = React.useCallback((editor: TiptapEditor) => {
+    const boundaries: Array<{ position: number; layout: DocumentPageLayout }> = [];
+    let previousLayout = normalizeDocumentPageLayout(props.pageLayout);
+    editor.state.doc.descendants((node, position) => {
+      if (node.type.name !== "sectionBreak") return;
+      const layout = parseSectionPageLayout(node.attrs.pageLayout, previousLayout);
+      boundaries.push({ position, layout });
+      previousLayout = layout;
+    });
+    const nextIndex = boundaries.filter((boundary) => editor.state.selection.from >= boundary.position).length;
+    const nextLayout = nextIndex === 0 ? normalizeDocumentPageLayout(props.pageLayout) : boundaries[nextIndex - 1].layout;
+    activeSectionIndexRef.current = nextIndex;
+    activeSectionLayoutRef.current = nextLayout;
+    setSectionCount(boundaries.length + 1);
+    setActiveSectionIndex(nextIndex);
+    // 中文注解：Tiptap 会在 React 更新选项时重复同步选区，等值页面设置必须复用旧对象以阻断更新循环。
+    setActiveSectionLayout((current) => samePageLayout(current, nextLayout) ? current : nextLayout);
+  }, [props.pageLayout]);
 
   const editor = useEditor({
-    extensions: [StarterKit, ImageExtension.configure({ inline: false, allowBase64: true }), ImportedTextStyle, ParagraphIndent, PageBreak, Table.configure({ resizable: true }), TableRow, TableHeader, TableCell],
+    extensions: [StarterKit, ImageExtension.configure({ inline: false, allowBase64: true }), ImportedTextStyle, ParagraphIndent, PageBreak, SectionBreak, Table.configure({ resizable: true }), TableRow, TableHeader, TableCell],
     content: props.content,
     editorProps: { attributes: { class: "word-editor" } },
-    onCreate({ editor }) { updateOutlineFromEditor(editor); },
-    onUpdate({ editor }) { props.setContent(editor.getHTML()); updateOutlineFromEditor(editor); },
+    onCreate({ editor }) { updateOutlineFromEditor(editor); syncActiveSectionFromEditor(editor); },
+    onUpdate({ editor }) { props.setContent(editor.getHTML()); updateOutlineFromEditor(editor); syncActiveSectionFromEditor(editor); },
     onSelectionUpdate({ editor }) {
       const selectedText = getSelectedText(editor);
       setHasSelection(Boolean(selectedText));
       setSelectionHint(selectedText ? `已选中 ${selectedText.length} 个字符` : "请先选中文本，再使用局部 AI 操作。");
+      syncActiveSectionFromEditor(editor);
     }
   });
 
@@ -1553,11 +1700,21 @@ function Editor(props: {
     updateOutlineFromEditor(editor);
   }, [editor, props.content, updateOutlineFromEditor]);
 
+  React.useEffect(() => {
+    if (activeSectionIndex !== 0) return;
+    const nextLayout = normalizeDocumentPageLayout(props.pageLayout);
+    activeSectionLayoutRef.current = nextLayout;
+    setActiveSectionLayout((current) => samePageLayout(current, nextLayout) ? current : nextLayout);
+  }, [activeSectionIndex, props.pageLayout]);
+
   React.useLayoutEffect(() => {
     const measureElement = paginationMeasureRef.current;
     if (!measureElement) return;
 
     const sourceHtml = buildExportPreviewHtml(props.currentTitle, props.content);
+    let currentLayout = normalizeDocumentPageLayout(props.pageLayout);
+    let currentGeometry = pageGeometry(currentLayout);
+    measureElement.style.width = `${currentGeometry.contentWidthPx}px`;
     measureElement.innerHTML = sourceHtml;
     const pendingImages = Array.from(measureElement.querySelectorAll("img")).filter((image) => !image.complete);
     if (pendingImages.length) {
@@ -1578,20 +1735,41 @@ function Editor(props: {
       });
     }
     const sourceBlocks = Array.from(measureElement.children).map((child) => child.cloneNode(true) as HTMLElement);
-    const pageContentHeight = docxPagePreview.heightPx - docxPagePreview.marginPx * 2;
-    const nextPages: string[][] = [[]];
+    let pageContentHeight = currentGeometry.contentHeightPx;
+    let currentSectionIndex = 0;
+    let currentSectionPageIndex = 0;
+    const nextPages: PreviewPage[] = [{ blocks: [], sectionIndex: 0, sectionPageIndex: 0, layout: currentLayout }];
     let currentHeight = 0;
 
     const openNextPage = (preserveBlankPage = false) => {
-      if (preserveBlankPage || nextPages[nextPages.length - 1].length) nextPages.push([]);
+      if (preserveBlankPage || nextPages[nextPages.length - 1].blocks.length) {
+        currentSectionPageIndex += 1;
+        nextPages.push({ blocks: [], sectionIndex: currentSectionIndex, sectionPageIndex: currentSectionPageIndex, layout: currentLayout });
+      }
+      currentHeight = 0;
+    };
+    const openNextSection = (layoutValue: string, breakTypeValue: string) => {
+      const breakType = normalizeSectionBreakType(breakTypeValue);
+      const nextPageNumber = nextPages.length + 1;
+      if ((breakType === "oddPage" && nextPageNumber % 2 === 0) || (breakType === "evenPage" && nextPageNumber % 2 === 1)) {
+        // 中文注解：奇数页/偶数页分节需要补一张空白页，在线打印预览与 Word 的起始页码保持一致。
+        openNextPage(true);
+      }
+      currentLayout = parseSectionPageLayout(layoutValue, currentLayout);
+      currentGeometry = pageGeometry(currentLayout);
+      pageContentHeight = currentGeometry.contentHeightPx;
+      currentSectionIndex += 1;
+      currentSectionPageIndex = 0;
+      nextPages.push({ blocks: [], sectionIndex: currentSectionIndex, sectionPageIndex: 0, layout: currentLayout });
       currentHeight = 0;
     };
     const measureHtml = (html: string) => {
+      measureElement.style.width = `${currentGeometry.contentWidthPx}px`;
       measureElement.innerHTML = html;
       return measuredBlockHeight(measureElement.firstElementChild);
     };
     const appendHtml = (html: string, height = measureHtml(html)) => {
-      nextPages[nextPages.length - 1].push(html);
+      nextPages[nextPages.length - 1].blocks.push(html);
       currentHeight += height;
     };
     const appendOversizedListItem = (list: HTMLElement, itemIndex: number) => {
@@ -1669,6 +1847,11 @@ function Editor(props: {
     };
 
     sourceBlocks.forEach((child) => {
+      if (child instanceof HTMLElement && child.dataset.sectionBreak) {
+        // 中文注解：分节符总从下一页开始，并切换后续内容的纸张方向、页边距及页眉页脚。
+        openNextSection(child.dataset.sectionLayout || "", child.dataset.sectionBreak);
+        return;
+      }
       if (child instanceof HTMLElement && child.dataset.pageBreak === "true") {
         // 中文注解：手动分页符直接强制开启新页，保证在线分页位置和 DOCX 导出的分页位置一致。
         openNextPage(true);
@@ -1771,7 +1954,7 @@ function Editor(props: {
     });
 
     setPreviewPages(nextPages);
-  }, [paginationAssetVersion, props.content, props.currentTitle, props.selectedTemplate]);
+  }, [paginationAssetVersion, props.content, props.currentTitle, props.pageLayout, props.selectedTemplate]);
 
   const runSelectionAi = async (action: AiAction) => {
     const selectedText = getSelectedText(editor);
@@ -1879,6 +2062,49 @@ function Editor(props: {
     // 中文注解：分页符后立刻补一个空段落，用户继续输入时会落在下一页，而不是替换分页符本身。
     editor.chain().focus().insertContent([{ type: "pageBreak" }, { type: "paragraph" }]).run();
     setSelectionHint("已插入分页符。");
+  };
+
+  const updateCurrentSectionLayout = (updater: (current: DocumentPageLayout) => DocumentPageLayout) => {
+    const currentSectionIndex = activeSectionIndexRef.current;
+    const nextLayout = normalizeDocumentPageLayout(updater(activeSectionLayoutRef.current));
+    activeSectionLayoutRef.current = nextLayout;
+    setActiveSectionLayout(nextLayout);
+    if (currentSectionIndex === 0) {
+      props.setPageLayout(() => nextLayout);
+      return;
+    }
+    if (!editor) return;
+    let sectionIndex = 0;
+    let targetPosition = -1;
+    let targetNode: ProseMirrorNode | null = null;
+    editor.state.doc.descendants((node, position) => {
+      if (node.type.name !== "sectionBreak") return;
+      sectionIndex += 1;
+      if (sectionIndex === currentSectionIndex) {
+        targetPosition = position;
+        targetNode = node;
+      }
+    });
+    if (targetPosition < 0 || !targetNode) return;
+    // 中文注解：后续节设置写回它前面的分节节点，正文保存后即可随文档版本持久化。
+    const transaction = editor.state.tr.setNodeMarkup(targetPosition, undefined, {
+      ...(targetNode as ProseMirrorNode).attrs,
+      pageLayout: JSON.stringify(nextLayout)
+    });
+    editor.view.dispatch(transaction);
+  };
+
+  const insertSectionBreak = () => {
+    if (!editor) return;
+    const inheritedLayout = normalizeDocumentPageLayout(activeSectionLayoutRef.current);
+    const { $from } = editor.state.selection;
+    const insertPosition = $from.depth >= 1 ? $from.after(1) : editor.state.selection.to;
+    // 中文注解：无论光标位于表格、列表还是普通段落，分节符都提升到当前顶层块之后，保证预览和 DOCX 拆节能识别。
+    editor.chain().focus().insertContentAt(insertPosition, [
+      { type: "sectionBreak", attrs: { pageLayout: JSON.stringify(inheritedLayout), breakType: "nextPage" } },
+      { type: "paragraph" }
+    ], { updateSelection: true }).run();
+    setSelectionHint("已插入分节符（下一页），新节继承当前节页面设置。");
   };
 
   const applyAiFirstLineIndent = (level: number) => {
@@ -1989,25 +2215,39 @@ function Editor(props: {
             <details className="page-layout-menu">
               <summary title="设置页眉、页脚和页码"><FileText size={16} />页面设置</summary>
               <div className="page-layout-popover">
+                <div className="page-layout-current-section">
+                  <strong>第 {activeSectionIndex + 1} 节 / 共 {sectionCount} 节</strong>
+                  <span>设置作用于光标所在节</span>
+                </div>
+                <div className="page-layout-section">
+                  <strong>纸张</strong>
+                  <label>方向<select aria-label="当前节纸张方向" value={activeSectionLayout.orientation} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, orientation: event.target.value === "landscape" ? "landscape" : "portrait" }))}><option value="portrait">纵向</option><option value="landscape">横向</option></select></label>
+                  <div className="page-margin-grid">
+                    {(["top", "bottom", "left", "right"] as const).map((side) => {
+                      const labels = { top: "上", bottom: "下", left: "左", right: "右" };
+                      return <label key={side}>{labels[side]}边距（厘米）<input type="number" aria-label={`当前节${labels[side]}边距`} min="0" max="12.7" step="0.1" value={twipToCentimeter(activeSectionLayout.margins[side])} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, margins: { ...current.margins, [side]: centimeterToTwip(event.target.value, current.margins[side]) } }))} /></label>;
+                    })}
+                  </div>
+                </div>
                 <div className="page-layout-section">
                   <strong>默认页</strong>
-                  <label>页眉<input type="text" aria-label="默认页眉文字" maxLength={500} value={props.pageLayout.headerText} onChange={(event) => props.setPageLayout((current) => ({ ...current, headerText: event.target.value }))} /></label>
-                  <label>页脚<input type="text" aria-label="默认页脚文字" maxLength={500} value={props.pageLayout.footerText} onChange={(event) => props.setPageLayout((current) => ({ ...current, footerText: event.target.value }))} /></label>
-                  <label className="page-number-toggle"><input type="checkbox" checked={props.pageLayout.pageNumberEnabled} onChange={(event) => props.setPageLayout((current) => ({ ...current, pageNumberEnabled: event.target.checked }))} />显示页码</label>
+                  <label>页眉<input type="text" aria-label="默认页眉文字" maxLength={500} value={activeSectionLayout.headerText} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, headerText: event.target.value }))} /></label>
+                  <label>页脚<input type="text" aria-label="默认页脚文字" maxLength={500} value={activeSectionLayout.footerText} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, footerText: event.target.value }))} /></label>
+                  <label className="page-number-toggle"><input type="checkbox" checked={activeSectionLayout.pageNumberEnabled} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, pageNumberEnabled: event.target.checked }))} />显示页码</label>
                 </div>
-                <label className="page-number-toggle page-layout-switch"><input type="checkbox" checked={props.pageLayout.firstPageDifferent} onChange={(event) => props.setPageLayout((current) => ({ ...current, firstPageDifferent: event.target.checked }))} />首页不同</label>
-                {props.pageLayout.firstPageDifferent ? <div className="page-layout-section page-layout-variant">
+                <label className="page-number-toggle page-layout-switch"><input type="checkbox" checked={activeSectionLayout.firstPageDifferent} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, firstPageDifferent: event.target.checked }))} />首页不同</label>
+                {activeSectionLayout.firstPageDifferent ? <div className="page-layout-section page-layout-variant">
                   <strong>首页</strong>
-                  <label>页眉<input type="text" aria-label="首页页眉文字" maxLength={500} value={props.pageLayout.firstPage?.headerText || ""} onChange={(event) => props.setPageLayout((current) => ({ ...current, firstPage: { ...(current.firstPage || defaultDocumentPageVariant), headerText: event.target.value } }))} /></label>
-                  <label>页脚<input type="text" aria-label="首页页脚文字" maxLength={500} value={props.pageLayout.firstPage?.footerText || ""} onChange={(event) => props.setPageLayout((current) => ({ ...current, firstPage: { ...(current.firstPage || defaultDocumentPageVariant), footerText: event.target.value } }))} /></label>
-                  <label className="page-number-toggle"><input type="checkbox" checked={Boolean(props.pageLayout.firstPage?.pageNumberEnabled)} onChange={(event) => props.setPageLayout((current) => ({ ...current, firstPage: { ...(current.firstPage || defaultDocumentPageVariant), pageNumberEnabled: event.target.checked } }))} />显示页码</label>
+                  <label>页眉<input type="text" aria-label="首页页眉文字" maxLength={500} value={activeSectionLayout.firstPage.headerText} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, firstPage: { ...current.firstPage, headerText: event.target.value } }))} /></label>
+                  <label>页脚<input type="text" aria-label="首页页脚文字" maxLength={500} value={activeSectionLayout.firstPage.footerText} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, firstPage: { ...current.firstPage, footerText: event.target.value } }))} /></label>
+                  <label className="page-number-toggle"><input type="checkbox" checked={activeSectionLayout.firstPage.pageNumberEnabled} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, firstPage: { ...current.firstPage, pageNumberEnabled: event.target.checked } }))} />显示页码</label>
                 </div> : null}
-                <label className="page-number-toggle page-layout-switch"><input type="checkbox" checked={props.pageLayout.oddEvenDifferent} onChange={(event) => props.setPageLayout((current) => ({ ...current, oddEvenDifferent: event.target.checked }))} />奇偶页不同</label>
-                {props.pageLayout.oddEvenDifferent ? <div className="page-layout-section page-layout-variant">
+                <label className="page-number-toggle page-layout-switch"><input type="checkbox" checked={activeSectionLayout.oddEvenDifferent} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, oddEvenDifferent: event.target.checked }))} />奇偶页不同</label>
+                {activeSectionLayout.oddEvenDifferent ? <div className="page-layout-section page-layout-variant">
                   <strong>偶数页</strong>
-                  <label>页眉<input type="text" aria-label="偶数页页眉文字" maxLength={500} value={props.pageLayout.evenPage?.headerText || ""} onChange={(event) => props.setPageLayout((current) => ({ ...current, evenPage: { ...(current.evenPage || defaultDocumentPageVariant), headerText: event.target.value } }))} /></label>
-                  <label>页脚<input type="text" aria-label="偶数页页脚文字" maxLength={500} value={props.pageLayout.evenPage?.footerText || ""} onChange={(event) => props.setPageLayout((current) => ({ ...current, evenPage: { ...(current.evenPage || defaultDocumentPageVariant), footerText: event.target.value } }))} /></label>
-                  <label className="page-number-toggle"><input type="checkbox" checked={Boolean(props.pageLayout.evenPage?.pageNumberEnabled)} onChange={(event) => props.setPageLayout((current) => ({ ...current, evenPage: { ...(current.evenPage || defaultDocumentPageVariant), pageNumberEnabled: event.target.checked } }))} />显示页码</label>
+                  <label>页眉<input type="text" aria-label="偶数页页眉文字" maxLength={500} value={activeSectionLayout.evenPage.headerText} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, evenPage: { ...current.evenPage, headerText: event.target.value } }))} /></label>
+                  <label>页脚<input type="text" aria-label="偶数页页脚文字" maxLength={500} value={activeSectionLayout.evenPage.footerText} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, evenPage: { ...current.evenPage, footerText: event.target.value } }))} /></label>
+                  <label className="page-number-toggle"><input type="checkbox" checked={activeSectionLayout.evenPage.pageNumberEnabled} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, evenPage: { ...current.evenPage, pageNumberEnabled: event.target.checked } }))} />显示页码</label>
                 </div> : null}
               </div>
             </details>
@@ -2015,6 +2255,7 @@ function Editor(props: {
             <button onClick={() => editor?.chain().focus().undo().run()} disabled={!editor?.can().undo()} title="撤销" aria-label="撤销"><Undo2 size={16} /></button>
             <button onClick={() => editor?.chain().focus().redo().run()} disabled={!editor?.can().redo()} title="重做" aria-label="重做"><Redo2 size={16} /></button>
             <button onClick={insertManualPageBreak} title="在当前位置插入分页符"><FileText size={16} />分页符</button>
+            <button onClick={insertSectionBreak} title="从下一页开始新节并允许独立页面设置"><Rows3 size={16} />分节符</button>
             <span className="format-divider" />
             <FormatSelect title="设置当前段落样式" placeholder="段落样式" options={paragraphStyleOptions} onSelect={(value) => applyDocumentTextStyle(value)} />
             <button className={editor?.isActive("bold") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleBold().run()} title="加粗"><Bold size={16} />加粗</button>
@@ -2083,11 +2324,11 @@ function Editor(props: {
             {viewMode === "page" ? (
               <div className="paged-preview" aria-label="分页预览">
                 {previewPages.map((page, index) => {
-                  const pageVariant = pageVariantForPage(props.pageLayout, index);
-                  return <article className="page-sheet" key={index}>
+                  const pageVariant = pageVariantForPage(page.layout, index, page.sectionPageIndex);
+                  return <article className="page-sheet" data-section-index={page.sectionIndex} style={pageGeometryStyle(page.layout)} key={index}>
                     {pageVariant.headerText ? <div className="page-header">{pageVariant.headerText}</div> : null}
                     <div className="page-body">
-                      {page.map((html, blockIndex) => <div className="page-block" key={`${index}-${blockIndex}`} dangerouslySetInnerHTML={{ __html: html }} />)}
+                      {page.blocks.map((html, blockIndex) => <div className="page-block" key={`${index}-${blockIndex}`} dangerouslySetInnerHTML={{ __html: html }} />)}
                     </div>
                     {pageVariant.footerText || pageVariant.pageNumberEnabled ? <div className="page-footer">
                       {pageVariant.footerText ? <span>{pageVariant.footerText}</span> : null}

@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import express from "express";
-import { AlignmentType, Document, Footer, Header, HeadingLevel, ImageRun, LevelFormat, LineRuleType, Packer, PageBreak as DocxPageBreak, PageNumber, Paragraph, Table, TableCell, TableRow, TextRun, WidthType } from "docx";
+import { AlignmentType, Document, Footer, Header, HeadingLevel, ImageRun, LevelFormat, LineRuleType, Packer, PageBreak as DocxPageBreak, PageNumber, PageOrientation, Paragraph, SectionType, Table, TableCell, TableRow, TextRun, WidthType } from "docx";
 import { imageSize } from "image-size";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
@@ -17,19 +17,21 @@ const pdf = require("pdf-parse");
 const WordExtractor = require("word-extractor");
 const wordExtractor = new WordExtractor();
 const docxPage = {
-  // 中文注解：导出和前端分页预览共用 A4 + 1 英寸页边距，减少在线显示与 Word 文件的版式偏差。
+  // 中文注解：纸张固定为 A4，方向和四边页距由每个节独立决定。
   widthTwip: 11906,
-  heightTwip: 16838,
-  marginTwip: 1440
+  heightTwip: 16838
 };
 const orderedListReference = "online-ordered-list";
 const defaultPageVariant = Object.freeze({ headerText: "", footerText: "", pageNumberEnabled: false });
+const defaultPageMargins = Object.freeze({ top: 1440, right: 1440, bottom: 1440, left: 1440 });
 const defaultPageLayout = Object.freeze({
   ...defaultPageVariant,
   firstPageDifferent: false,
   firstPage: defaultPageVariant,
   oddEvenDifferent: false,
-  evenPage: defaultPageVariant
+  evenPage: defaultPageVariant,
+  orientation: "portrait",
+  margins: defaultPageMargins
 });
 
 function normalizePageText(value) {
@@ -46,16 +48,47 @@ function normalizePageVariant(value, fallback = defaultPageVariant) {
   };
 }
 
+function normalizePageMargin(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.min(Math.round(number), 7200)) : fallback;
+}
+
+function normalizePageMargins(value, fallback = defaultPageMargins, orientation = "portrait") {
+  const source = value && typeof value === "object" ? value : {};
+  const base = fallback && typeof fallback === "object" ? fallback : defaultPageMargins;
+  const margins = {
+    top: normalizePageMargin(source.top, base.top),
+    right: normalizePageMargin(source.right, base.right),
+    bottom: normalizePageMargin(source.bottom, base.bottom),
+    left: normalizePageMargin(source.left, base.left)
+  };
+  const pageWidth = orientation === "landscape" ? docxPage.heightTwip : docxPage.widthTwip;
+  const pageHeight = orientation === "landscape" ? docxPage.widthTwip : docxPage.heightTwip;
+  const fitPair = (first, second, maximum) => {
+    const total = first + second;
+    if (total <= maximum || total <= 0) return [first, second];
+    const ratio = maximum / total;
+    return [Math.round(first * ratio), Math.round(second * ratio)];
+  };
+  // 中文注解：四边页距必须联合校验，始终为 A4 正文保留至少 0.5 英寸，避免预览和 Word 采用不同的冲突修正。
+  [margins.left, margins.right] = fitPair(margins.left, margins.right, pageWidth - 720);
+  [margins.top, margins.bottom] = fitPair(margins.top, margins.bottom, pageHeight - 720);
+  return margins;
+}
+
 function normalizePageLayout(value, fallback = defaultPageLayout) {
   const source = value && typeof value === "object" ? value : {};
   const base = fallback && typeof fallback === "object" ? fallback : defaultPageLayout;
   const normalizedDefault = normalizePageVariant(source, base);
+  const orientation = source.orientation === "landscape" ? "landscape" : (base.orientation === "landscape" ? "landscape" : "portrait");
   return {
     ...normalizedDefault,
     firstPageDifferent: source.firstPageDifferent === undefined ? Boolean(base.firstPageDifferent) : Boolean(source.firstPageDifferent),
     firstPage: normalizePageVariant(source.firstPage, base.firstPage || defaultPageVariant),
     oddEvenDifferent: source.oddEvenDifferent === undefined ? Boolean(base.oddEvenDifferent) : Boolean(source.oddEvenDifferent),
-    evenPage: normalizePageVariant(source.evenPage, base.evenPage || defaultPageVariant)
+    evenPage: normalizePageVariant(source.evenPage, base.evenPage || defaultPageVariant),
+    orientation,
+    margins: normalizePageMargins(source.margins, base.margins || defaultPageMargins, orientation)
   };
 }
 
@@ -203,7 +236,7 @@ function sanitizeImportedHtml(value = "") {
       th: ["colspan", "rowspan"],
       td: ["colspan", "rowspan"],
       img: ["src", "alt", "style"],
-      div: ["data-page-break", "class"]
+      div: ["data-page-break", "data-section-break", "data-section-layout", "class"]
     },
     allowedSchemes: ["data"],
     allowedStyles: {
@@ -470,6 +503,16 @@ function pageBreakHtml() {
   return '<div data-page-break="true" class="page-break-marker"></div>';
 }
 
+function normalizeSectionBreakType(value) {
+  // 中文注解：连续分节会改变同页内版式，当前在线分页器无法等价显示，因此导入和导出统一降级为下一页分节。
+  return ["nextPage", "oddPage", "evenPage"].includes(value) ? value : "nextPage";
+}
+
+function sectionBreakHtml(pageLayout, breakType = "nextPage") {
+  const encodedLayout = escapeHtml(JSON.stringify(normalizePageLayout(pageLayout)));
+  return `<div data-section-break="${normalizeSectionBreakType(breakType)}" data-section-layout="${encodedLayout}" class="section-break-marker"></div>`;
+}
+
 function docxPageBreaksFromRun(runNode) {
   return xmlChildren(runNode, "w:br")
     .filter((breakNode) => firstValue(breakNode.attribs, ["w:type", "type"]) === "page")
@@ -670,7 +713,7 @@ function renderDocxParagraphs(parsedParagraphs) {
   return chunks.join("");
 }
 
-async function parseStyledDocxToHtml(buffer) {
+async function parseStyledDocxToHtml(buffer, sectionLayouts = [], sectionBreakTypes = []) {
   const zip = await JSZip.loadAsync(buffer);
   const documentXml = await zip.file("word/document.xml")?.async("string");
   if (!documentXml) return "";
@@ -685,6 +728,7 @@ async function parseStyledDocxToHtml(buffer) {
   const body = xmlDescendants(document, "w:body")[0];
   const chunks = [];
   let openList = [];
+  let completedSectionCount = 0;
   const flushList = () => {
     if (!openList.length) return;
     chunks.push(renderDocxListItems(openList));
@@ -706,6 +750,12 @@ async function parseStyledDocxToHtml(buffer) {
       } else {
         flushList();
         chunks.push(parsed.html);
+      }
+      if (xmlDescendants(block, "w:sectPr").length && sectionLayouts[completedSectionCount + 1]) {
+        flushList();
+        completedSectionCount += 1;
+        // 中文注解：段落属性中的 sectPr 结束当前节，紧随其后的正文属于下一节，因此标记携带下一节页面设置。
+        chunks.push(sectionBreakHtml(sectionLayouts[completedSectionCount], sectionBreakTypes[completedSectionCount - 1]));
       }
     }
   }
@@ -737,55 +787,105 @@ function parseDocxPageVariant(headerXml = "", footerXml = "") {
   return normalizePageVariant({ headerText: docxPartPlainText(headerXml), footerText, pageNumberEnabled });
 }
 
+function parseDocxPageVariantParts(headerPart, footerPart, fallback = defaultPageVariant) {
+  const parsed = parseDocxPageVariant(headerPart.xml || "", footerPart.xml || "");
+  return normalizePageVariant({
+    headerText: headerPart.present ? parsed.headerText : fallback.headerText,
+    footerText: footerPart.present ? parsed.footerText : fallback.footerText,
+    pageNumberEnabled: footerPart.present ? parsed.pageNumberEnabled : fallback.pageNumberEnabled
+  }, fallback);
+}
+
+function parseDocxPageGeometry(section, fallback = defaultPageLayout) {
+  const pageSize = xmlChild(section, "w:pgSz");
+  const pageMargin = xmlChild(section, "w:pgMar");
+  const width = Number(firstValue(pageSize?.attribs, ["w:w", "w", "width"]));
+  const height = Number(firstValue(pageSize?.attribs, ["w:h", "h", "height"]));
+  const explicitOrientation = firstValue(pageSize?.attribs, ["w:orient", "orient"]);
+  const orientation = explicitOrientation === "landscape" || (!explicitOrientation && width > height)
+    ? "landscape"
+    : (pageSize ? "portrait" : fallback.orientation);
+  const marginValue = (name) => {
+    const value = firstValue(pageMargin?.attribs, [`w:${name}`, name]);
+    return value === undefined || value === null || value === "" ? fallback.margins[name] : value;
+  };
+  return {
+    orientation,
+    margins: normalizePageMargins({
+      top: marginValue("top"),
+      right: marginValue("right"),
+      bottom: marginValue("bottom"),
+      left: marginValue("left")
+    }, fallback.margins, orientation)
+  };
+}
+
 async function parseDocxPageLayout(buffer) {
   const zip = await JSZip.loadAsync(buffer);
   const documentXml = await zip.file("word/document.xml")?.async("string");
   const relationshipsXml = await zip.file("word/_rels/document.xml.rels")?.async("string");
-  if (!documentXml || !relationshipsXml) return { pageLayout: { ...defaultPageLayout }, warnings: [] };
-  const relationships = parseDocxRelationships(relationshipsXml);
+  if (!documentXml) return { pageLayout: normalizePageLayout(defaultPageLayout), sectionLayouts: [normalizePageLayout(defaultPageLayout)], sectionBreakTypes: [], warnings: [] };
+  const relationships = parseDocxRelationships(relationshipsXml || "");
   const document = parseDocument(documentXml, { xmlMode: true });
   const sections = xmlDescendants(document, "w:sectPr");
-  const section = sections[0];
+  const settingsXml = await zip.file("word/settings.xml")?.async("string") || "";
+  const settings = settingsXml ? parseDocument(settingsXml, { xmlMode: true }) : null;
+  const oddEvenDifferent = wordOnOffEnabled(settings ? xmlDescendants(settings, "w:evenAndOddHeaders")[0] : null);
+  // 中文注解：w:type 属于目标节的 sectPr，描述该节如何开始，因此第 N 个边界读取第 N+1 节的类型。
+  const rawSectionBreakTypes = sections.slice(1).map((section) => xmlVal(xmlChild(section, "w:type")) || "nextPage");
+  const sectionBreakTypes = rawSectionBreakTypes.map(normalizeSectionBreakType);
 
-  // 中文注解：页眉页脚通过节属性中的关系 ID 指向独立 XML 部件，不能假设文件名固定为 header1/footer1。
-  const readReferencedPart = async (referenceName, referenceType) => {
+  // 中文注解：页眉页脚通过节属性中的关系 ID 指向独立 XML 部件，且缺省引用表示“链接到前一节”。
+  const readReferencedPart = async (section, referenceName, referenceType) => {
     const references = xmlChildren(section, referenceName);
     const reference = references.find((item) => (firstValue(item.attribs, ["w:type", "type"]) || "default") === referenceType);
     const relationshipId = firstValue(reference?.attribs, ["r:id", "id"]);
     const target = relationships.get(relationshipId);
-    if (!target) return "";
+    if (!reference || !target) return { present: false, xml: "" };
     const path = target.startsWith("/") ? target.slice(1) : `word/${target.replace(/^\.?\//, "")}`;
-    return zip.file(path)?.async("string") || "";
+    return { present: true, xml: await zip.file(path)?.async("string") || "" };
   };
 
-  const [defaultHeaderXml, defaultFooterXml, firstHeaderXml, firstFooterXml, evenHeaderXml, evenFooterXml, settingsXml] = await Promise.all([
-    readReferencedPart("w:headerReference", "default"),
-    readReferencedPart("w:footerReference", "default"),
-    readReferencedPart("w:headerReference", "first"),
-    readReferencedPart("w:footerReference", "first"),
-    readReferencedPart("w:headerReference", "even"),
-    readReferencedPart("w:footerReference", "even"),
-    zip.file("word/settings.xml")?.async("string") || ""
-  ]);
-  const pageParts = [defaultHeaderXml, defaultFooterXml, firstHeaderXml, firstFooterXml, evenHeaderXml, evenFooterXml];
-  const settings = settingsXml ? parseDocument(settingsXml, { xmlMode: true }) : null;
-  const firstPageDifferent = wordOnOffEnabled(xmlChild(section, "w:titlePg"));
-  const oddEvenDifferent = Boolean(evenHeaderXml || evenFooterXml) || wordOnOffEnabled(settings ? xmlDescendants(settings, "w:evenAndOddHeaders")[0] : null);
+  const sectionLayouts = [];
+  const pageParts = [];
+  for (const section of sections.length ? sections : [null]) {
+    const fallback = sectionLayouts[sectionLayouts.length - 1] || normalizePageLayout(defaultPageLayout);
+    const [defaultHeader, defaultFooter, firstHeader, firstFooter, evenHeader, evenFooter] = section ? await Promise.all([
+      readReferencedPart(section, "w:headerReference", "default"),
+      readReferencedPart(section, "w:footerReference", "default"),
+      readReferencedPart(section, "w:headerReference", "first"),
+      readReferencedPart(section, "w:footerReference", "first"),
+      readReferencedPart(section, "w:headerReference", "even"),
+      readReferencedPart(section, "w:footerReference", "even")
+    ]) : Array.from({ length: 6 }, () => ({ present: false, xml: "" }));
+    pageParts.push(defaultHeader.xml, defaultFooter.xml, firstHeader.xml, firstFooter.xml, evenHeader.xml, evenFooter.xml);
+    const geometry = section ? parseDocxPageGeometry(section, fallback) : { orientation: fallback.orientation, margins: fallback.margins };
+    sectionLayouts.push(normalizePageLayout({
+      ...parseDocxPageVariantParts(defaultHeader, defaultFooter, fallback),
+      firstPageDifferent: section ? wordOnOffEnabled(xmlChild(section, "w:titlePg")) : fallback.firstPageDifferent,
+      firstPage: parseDocxPageVariantParts(firstHeader, firstFooter, fallback.firstPage),
+      oddEvenDifferent,
+      evenPage: parseDocxPageVariantParts(evenHeader, evenFooter, fallback.evenPage),
+      ...geometry
+    }, fallback));
+  }
+
   // 中文注解：当前页面模型只保存纯文本；只要发现字体、字号、颜色、对齐或其他富格式，就明确提示用户可能丢失样式。
   const hasRichHeaderFooter = /<w:(?:drawing|pict|tbl|shd|tabs|rFonts|color|sz|jc|b|i|u|strike)\b/i.test(pageParts.join(""));
   const hasMultipleParagraphs = pageParts.some((xml) => (xml.match(/<w:p(?:\s|>)/g) || []).length > 1);
   const warnings = [];
-  if (sections.length > 1) warnings.push("该 DOCX 包含多个分节；当前已导入第一节的页面设置，后续分节的页眉页脚差异暂未恢复。");
+  if (rawSectionBreakTypes.some((type) => !["nextPage", "continuous", "oddPage", "evenPage"].includes(type))) {
+    warnings.push("文档包含暂不支持的分栏分节符，已按下一页分节符恢复；其他分节类型已保留。");
+  }
+  if (rawSectionBreakTypes.includes("continuous")) {
+    warnings.push("文档包含连续分节符；为确保在线分页与导出结果一致，已按下一页分节符恢复。");
+  }
   if (hasRichHeaderFooter || hasMultipleParagraphs) warnings.push("页眉页脚中的图片、多段落或富文本格式暂未恢复，已保留各页面类型的纯文本和页码。");
-  // 中文注解：首页、默认奇数页和偶数页分别保存，在线预览才能按实际页码选择与 Word 相同的部件。
+  // 中文注解：首节保存在文档页面设置中，后续节由正文分节节点携带，编辑、预览和再次导出共用同一顺序。
   return {
-    pageLayout: normalizePageLayout({
-      ...parseDocxPageVariant(defaultHeaderXml, defaultFooterXml),
-      firstPageDifferent,
-      firstPage: parseDocxPageVariant(firstHeaderXml, firstFooterXml),
-      oddEvenDifferent,
-      evenPage: parseDocxPageVariant(evenHeaderXml, evenFooterXml)
-    }),
+    pageLayout: sectionLayouts[0] || normalizePageLayout(defaultPageLayout),
+    sectionLayouts,
+    sectionBreakTypes,
     warnings
   };
 }
@@ -832,9 +932,15 @@ async function parseImportedDocument(file) {
     return { content: legacyDocTextToHtml(text), outline: extractPlainTextOutline(text), documentType: "Word 文档", pageLayout: { ...defaultPageLayout }, warnings: [] };
   }
   if (extension === "docx") {
+    const pageLayoutResult = await parseDocxPageLayout(file.buffer).catch(() => ({
+      pageLayout: normalizePageLayout(defaultPageLayout),
+      sectionLayouts: [normalizePageLayout(defaultPageLayout)],
+      sectionBreakTypes: [],
+      warnings: ["页眉页脚结构未能识别，正文已正常导入。"]
+    }));
     let rawHtml = "";
     try {
-      rawHtml = await parseStyledDocxToHtml(file.buffer);
+      rawHtml = await parseStyledDocxToHtml(file.buffer, pageLayoutResult.sectionLayouts, pageLayoutResult.sectionBreakTypes);
     } catch (error) {
       // 中文注解：少数 DOCX 结构异常时回退 Mammoth，优先保证用户能导入并继续编辑。
       console.error("Styled DOCX import fallback to mammoth", error);
@@ -844,8 +950,13 @@ async function parseImportedDocument(file) {
       rawHtml = result.value;
     }
     const content = sanitizeImportedHtml(rawHtml);
-    const pageLayoutResult = await parseDocxPageLayout(file.buffer).catch(() => ({ pageLayout: { ...defaultPageLayout }, warnings: ["页眉页脚结构未能识别，正文已正常导入。"] }));
-    return { content: content || "<p></p>", outline: extractImportedOutline(content), documentType: "Word 文档", ...pageLayoutResult };
+    return {
+      content: content || "<p></p>",
+      outline: extractImportedOutline(content),
+      documentType: "Word 文档",
+      pageLayout: pageLayoutResult.pageLayout,
+      warnings: pageLayoutResult.warnings
+    };
   }
   if (extension === "pdf") {
     const result = await pdf(file.buffer);
@@ -1210,13 +1321,24 @@ function isPageBreakNode(node) {
   return node?.name === "div" && node.attribs?.["data-page-break"] === "true";
 }
 
+function isSectionBreakNode(node) {
+  return node?.name === "div" && Boolean(node.attribs?.["data-section-break"]);
+}
+
+function pageLayoutFromSectionBreakNode(node, fallback) {
+  try {
+    return normalizePageLayout(JSON.parse(node?.attribs?.["data-section-layout"] || "{}"), fallback);
+  } catch {
+    return normalizePageLayout(fallback);
+  }
+}
+
 function pageBreakParagraph() {
   // 中文注解：在线分页符导出为 Word 原生分页符，保证用户手动控制的换页位置不会漂移。
   return new Paragraph({ children: [new TextRun({ children: [new DocxPageBreak()] })] });
 }
 
-function extractDocxBlocksFromHtml(html = "") {
-  const parsed = parseDocument(html, { decodeEntities: true });
+function extractDocxBlocksFromNodes(nodes = [], emptyText = "空白文档") {
   const blocks = [];
   // 中文注解：正文和每个表格单元格共用实例分配器，确保所有顶层编号列表都能独立从 1 开始。
   const listState = { nextOrderedInstance: 1 };
@@ -1256,13 +1378,36 @@ function extractDocxBlocksFromHtml(html = "") {
     }
   }
 
-  for (const child of parsed.children || []) {
+  for (const child of nodes) {
     walk(child);
   }
 
   return blocks.length
     ? blocks
-    : [new Paragraph({ text: stripHtml(html) || "空白文档", spacing: { after: 120 } })];
+    : [new Paragraph({ text: emptyText, spacing: { after: 120 } })];
+}
+
+function extractDocxSectionsFromHtml(html = "", firstPageLayout = defaultPageLayout) {
+  const parsed = parseDocument(html, { decodeEntities: true });
+  const sections = [{ pageLayout: normalizePageLayout(firstPageLayout), breakType: "nextPage", nodes: [] }];
+  for (const child of parsed.children || []) {
+    if (isSectionBreakNode(child)) {
+      const previousLayout = sections[sections.length - 1].pageLayout;
+      sections.push({
+        pageLayout: pageLayoutFromSectionBreakNode(child, previousLayout),
+        breakType: normalizeSectionBreakType(child.attribs?.["data-section-break"]),
+        nodes: []
+      });
+    } else {
+      sections[sections.length - 1].nodes.push(child);
+    }
+  }
+  // 中文注解：分节节点只决定边界和下一节设置，不导出为可见段落或普通分页符。
+  return sections.map((section) => ({
+    pageLayout: section.pageLayout,
+    breakType: section.breakType,
+    children: extractDocxBlocksFromNodes(section.nodes, "")
+  }));
 }
 
 function cleanDocxColor(value, fallback) {
@@ -1326,7 +1471,7 @@ function createDocxStyles(templateStyle = {}) {
   };
 }
 
-function createDocxHeaderFooter(pageLayout, templateStyle = {}) {
+function createDocxHeaderFooter(pageLayout, templateStyle = {}, forceDefault = false, forceEven = false) {
   const layout = normalizePageLayout(pageLayout);
   const runStyle = { font: templateStyle.fontFamily || "Microsoft YaHei", size: 18, color: "6B7280" };
   const createHeader = (variant, force = false) => {
@@ -1343,14 +1488,14 @@ function createDocxHeaderFooter(pageLayout, templateStyle = {}) {
   };
 
   const headers = {
-    default: createHeader(layout),
+    default: createHeader(layout, forceDefault),
     first: layout.firstPageDifferent ? createHeader(layout.firstPage, true) : undefined,
-    even: layout.oddEvenDifferent ? createHeader(layout.evenPage, true) : undefined
+    even: forceEven ? createHeader(layout.oddEvenDifferent ? layout.evenPage : layout, true) : undefined
   };
   const footers = {
-    default: createFooter(layout),
+    default: createFooter(layout, forceDefault),
     first: layout.firstPageDifferent ? createFooter(layout.firstPage, true) : undefined,
-    even: layout.oddEvenDifferent ? createFooter(layout.evenPage, true) : undefined
+    even: forceEven ? createFooter(layout.oddEvenDifferent ? layout.evenPage : layout, true) : undefined
   };
   // 中文注解：显式创建空的首页或偶数页部件，避免 Word 回退到默认页眉页脚而与在线预览不一致。
   return {
@@ -1361,10 +1506,50 @@ function createDocxHeaderFooter(pageLayout, templateStyle = {}) {
   };
 }
 
+function createDocxSectionProperties(pageLayout, isFirstSection, breakType = "nextPage") {
+  const layout = normalizePageLayout(pageLayout);
+  const sectionTypes = {
+    nextPage: SectionType.NEXT_PAGE,
+    oddPage: SectionType.ODD_PAGE,
+    evenPage: SectionType.EVEN_PAGE
+  };
+  return {
+    ...(!isFirstSection ? { type: sectionTypes[normalizeSectionBreakType(breakType)] } : {}),
+    titlePage: layout.firstPageDifferent,
+    page: {
+      size: {
+        width: docxPage.widthTwip,
+        height: docxPage.heightTwip,
+        orientation: layout.orientation === "landscape" ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT
+      },
+      margin: layout.margins
+    }
+  };
+}
+
 async function createDocxBuffer({ title, content, templateStyle = null, pageLayout = null }) {
-  const headerFooter = createDocxHeaderFooter(pageLayout, templateStyle || {});
+  const contentSections = extractDocxSectionsFromHtml(content, pageLayout);
+  const evenAndOddHeadersEnabled = contentSections.some((section) => section.pageLayout.oddEvenDifferent);
+  const documentSections = contentSections.map((section, index) => {
+    // 中文注解：Word 的奇偶页开关是文档级；开启后每节都显式写偶数页部件，防止关闭差异的节继承前节偶数页内容。
+    const headerFooter = createDocxHeaderFooter(section.pageLayout, templateStyle || {}, index > 0, evenAndOddHeadersEnabled);
+    const children = index === 0 ? [
+      new Paragraph({
+        text: title || "未命名文档",
+        heading: HeadingLevel.TITLE,
+        spacing: { after: 260 }
+      }),
+      ...section.children
+    ] : section.children;
+    return {
+      ...(headerFooter.headers ? { headers: headerFooter.headers } : {}),
+      ...(headerFooter.footers ? { footers: headerFooter.footers } : {}),
+      properties: createDocxSectionProperties(section.pageLayout, index === 0, section.breakType),
+      children
+    };
+  });
   const document = new Document({
-    evenAndOddHeaderAndFooters: headerFooter.evenAndOdd,
+    evenAndOddHeaderAndFooters: evenAndOddHeadersEnabled,
     styles: createDocxStyles(templateStyle || {}),
     numbering: {
       config: [
@@ -1381,32 +1566,7 @@ async function createDocxBuffer({ title, content, templateStyle = null, pageLayo
         }
       ]
     },
-    sections: [
-      {
-        ...(headerFooter.headers ? { headers: headerFooter.headers } : {}),
-        ...(headerFooter.footers ? { footers: headerFooter.footers } : {}),
-        properties: {
-          titlePage: headerFooter.titlePage,
-          page: {
-            size: { width: docxPage.widthTwip, height: docxPage.heightTwip },
-            margin: {
-              top: docxPage.marginTwip,
-              right: docxPage.marginTwip,
-              bottom: docxPage.marginTwip,
-              left: docxPage.marginTwip
-            }
-          }
-        },
-        children: [
-          new Paragraph({
-            text: title || "未命名文档",
-            heading: HeadingLevel.TITLE,
-            spacing: { after: 260 }
-          }),
-          ...extractDocxBlocksFromHtml(content)
-        ]
-      }
-    ]
+    sections: documentSections
   });
 
   return Packer.toBuffer(document);

@@ -174,4 +174,59 @@ assert.ok(mediaFiles.length > 0, "exported DOCX should contain image media");
 // 中文注解：方形图片必须按真实比例写入 DrawingML，不能退化为固定的 0.62 假比例。
 assert.match(documentXml, /<wp:extent cx="1143000" cy="1143000"\/>/);
 
+const secondSectionLayout = {
+  headerText: "Landscape section header",
+  footerText: "Landscape section footer",
+  pageNumberEnabled: true,
+  firstPageDifferent: false,
+  firstPage: { headerText: "", footerText: "", pageNumberEnabled: false },
+  oddEvenDifferent: false,
+  evenPage: { headerText: "", footerText: "", pageNumberEnabled: false },
+  orientation: "landscape",
+  margins: { top: 720, right: 900, bottom: 720, left: 900 }
+};
+const sectionLayoutAttribute = JSON.stringify(secondSectionLayout)
+  .replaceAll("&", "&amp;")
+  .replaceAll('"', "&quot;")
+  .replaceAll("<", "&lt;")
+  .replaceAll(">", "&gt;");
+const sectionBuffer = await createDocxBuffer({
+  title: "Multi section export",
+  content: `<p>Portrait section</p><div data-section-break="nextPage" data-section-layout="${sectionLayoutAttribute}"></div><p>Landscape section</p>`,
+  pageLayout: {
+    headerText: "Portrait section header",
+    footerText: "Portrait section footer",
+    pageNumberEnabled: false,
+    oddEvenDifferent: true,
+    evenPage: { headerText: "Portrait even header", footerText: "Portrait even footer", pageNumberEnabled: false },
+    orientation: "portrait",
+    margins: { top: 1440, right: 1440, bottom: 1440, left: 1440 }
+  }
+});
+const sectionZip = await JSZip.loadAsync(sectionBuffer);
+const sectionDocumentXml = await sectionZip.file("word/document.xml")?.async("string") || "";
+const sectionHeaders = await Promise.all(sectionZip.file(/^word\/header\d+\.xml$/).map((file) => file.async("string")));
+// 中文注解：分节符必须生成两个原生 Word 节，第二节独立使用横向纸张、页边距和页眉，不能退化成普通分页符。
+assert.equal((sectionDocumentXml.match(/<w:sectPr(?:\s|>)/g) || []).length, 2);
+assert.match(sectionDocumentXml, /<w:type w:val="nextPage"\/>/);
+assert.match(sectionDocumentXml, /<w:pgSz[^>]+w:w="16838"[^>]+w:h="11906"[^>]+w:orient="landscape"/);
+assert.match(sectionDocumentXml, /<w:pgMar[^>]+w:top="720"[^>]+w:right="900"[^>]+w:bottom="720"[^>]+w:left="900"/);
+assert.ok(sectionHeaders.some((xml) => xml.includes("Portrait section header")));
+assert.ok(sectionHeaders.some((xml) => xml.includes("Landscape section header")));
+// 中文注解：奇偶页开关是文档级，第二节关闭差异时仍需显式生成与默认页相同的偶数页部件，阻断前节继承。
+assert.equal(sectionHeaders.filter((xml) => xml.includes("Landscape section header")).length, 2);
+
+const constrainedMarginBuffer = await createDocxBuffer({
+  title: "Constrained margins",
+  content: "<p>Body</p>",
+  pageLayout: { orientation: "portrait", margins: { top: 7200, right: 7200, bottom: 7200, left: 7200 } }
+});
+const constrainedMarginZip = await JSZip.loadAsync(constrainedMarginBuffer);
+const constrainedMarginXml = await constrainedMarginZip.file("word/document.xml")?.async("string") || "";
+const constrainedMarginMatch = constrainedMarginXml.match(/<w:pgMar[^>]+w:top="(\d+)"[^>]+w:right="(\d+)"[^>]+w:bottom="(\d+)"[^>]+w:left="(\d+)"/);
+assert.ok(constrainedMarginMatch);
+const [, constrainedTop, constrainedRight, constrainedBottom, constrainedLeft] = constrainedMarginMatch.map(Number);
+assert.ok(constrainedLeft + constrainedRight <= 11906 - 720);
+assert.ok(constrainedTop + constrainedBottom <= 16838 - 720);
+
 console.log("DOCX export format check passed");

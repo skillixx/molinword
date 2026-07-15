@@ -219,7 +219,9 @@ assert.deepEqual(imported.pageLayout, {
   firstPageDifferent: false,
   firstPage: emptyPageVariant,
   oddEvenDifferent: false,
-  evenPage: emptyPageVariant
+  evenPage: emptyPageVariant,
+  orientation: "portrait",
+  margins: { top: 1440, right: 1440, bottom: 1440, left: 1440 }
 });
 
 const inheritedParagraph = imported.content.match(/<p[^>]*>Inherited spacing<\/p>/)?.[0] || "";
@@ -260,7 +262,9 @@ const variantPageLayout = {
   firstPageDifferent: true,
   firstPage: { headerText: "首页页眉", footerText: "首页页脚", pageNumberEnabled: false },
   oddEvenDifferent: true,
-  evenPage: { headerText: "偶数页页眉", footerText: "偶数页页脚", pageNumberEnabled: true }
+  evenPage: { headerText: "偶数页页眉", footerText: "偶数页页脚", pageNumberEnabled: true },
+  orientation: "portrait",
+  margins: { top: 1440, right: 1440, bottom: 1440, left: 1440 }
 };
 const variantRoundTripBuffer = await createDocxBuffer({ title: "页面类型往返", content: "<p>正文</p>", pageLayout: variantPageLayout });
 const variantRoundTripImported = await parseImportedDocument({
@@ -271,5 +275,100 @@ const variantRoundTripImported = await parseImportedDocument({
 });
 // 中文注解：Word 的 first/default/even 三套部件必须往返保留，不能再次折叠成一组全局页眉页脚。
 assert.deepEqual(variantRoundTripImported.pageLayout, variantPageLayout);
+
+const importedSecondSectionLayout = {
+  headerText: "Imported landscape header",
+  footerText: "Imported landscape footer",
+  pageNumberEnabled: true,
+  firstPageDifferent: false,
+  firstPage: { headerText: "", footerText: "", pageNumberEnabled: false },
+  oddEvenDifferent: false,
+  evenPage: { headerText: "", footerText: "", pageNumberEnabled: false },
+  orientation: "landscape",
+  margins: { top: 720, right: 900, bottom: 720, left: 900 }
+};
+const importedSectionAttribute = JSON.stringify(importedSecondSectionLayout)
+  .replaceAll("&", "&amp;")
+  .replaceAll('"', "&quot;")
+  .replaceAll("<", "&lt;")
+  .replaceAll(">", "&gt;");
+const multiSectionBuffer = await createDocxBuffer({
+  title: "Multi section import",
+  content: `<p>First section</p><div data-section-break="nextPage" data-section-layout="${importedSectionAttribute}"></div><p>Second section</p>`,
+  pageLayout: {
+    headerText: "Imported portrait header",
+    footerText: "Imported portrait footer",
+    pageNumberEnabled: false,
+    orientation: "portrait",
+    margins: { top: 1440, right: 1440, bottom: 1440, left: 1440 }
+  }
+});
+const multiSectionImported = await parseImportedDocument({
+  originalname: "multi-section.docx",
+  buffer: multiSectionBuffer,
+  mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  size: multiSectionBuffer.length
+});
+// 中文注解：导入多节 DOCX 时节边界必须回到可编辑正文，首节和后续节的方向、页边距及页眉页脚才能再次导出。
+assert.match(multiSectionImported.content, /data-section-break="nextPage"/);
+assert.equal(multiSectionImported.pageLayout.orientation, "portrait");
+assert.deepEqual(multiSectionImported.pageLayout.margins, { top: 1440, right: 1440, bottom: 1440, left: 1440 });
+assert.doesNotMatch(multiSectionImported.warnings.join(" "), /后续分节.*暂未恢复/);
+const multiSectionRoundTripBuffer = await createDocxBuffer({
+  title: "Multi section import",
+  content: multiSectionImported.content,
+  pageLayout: multiSectionImported.pageLayout
+});
+const multiSectionRoundTripZip = await JSZip.loadAsync(multiSectionRoundTripBuffer);
+const multiSectionRoundTripXml = await multiSectionRoundTripZip.file("word/document.xml")?.async("string") || "";
+assert.equal((multiSectionRoundTripXml.match(/<w:sectPr(?:\s|>)/g) || []).length, 2);
+assert.match(multiSectionRoundTripXml, /<w:pgSz[^>]+w:orient="landscape"/);
+
+const oddSectionBuffer = await createDocxBuffer({
+  title: "Odd section type",
+  content: `<p>First</p><div data-section-break="oddPage" data-section-layout="${importedSectionAttribute}"></div><p>Odd page section</p>`,
+  pageLayout: { headerText: "First", footerText: "", pageNumberEnabled: false }
+});
+const oddSectionImported = await parseImportedDocument({
+  originalname: "odd-section.docx",
+  buffer: oddSectionBuffer,
+  mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  size: oddSectionBuffer.length
+});
+// 中文注解：原生奇数页分节符必须在导入正文中保留类型，再次导出不能静默改成下一页。
+assert.match(oddSectionImported.content, /data-section-break="oddPage"/);
+const oddSectionRoundTripBuffer = await createDocxBuffer({ title: "Odd section type", content: oddSectionImported.content, pageLayout: oddSectionImported.pageLayout });
+const oddSectionRoundTripZip = await JSZip.loadAsync(oddSectionRoundTripBuffer);
+const oddSectionRoundTripXml = await oddSectionRoundTripZip.file("word/document.xml")?.async("string") || "";
+assert.match(oddSectionRoundTripXml, /<w:type w:val="oddPage"\/>/);
+
+const continuousSectionSourceBuffer = await createDocxBuffer({
+  title: "Continuous section compatibility",
+  content: `<p>First</p><div data-section-break="nextPage" data-section-layout="${importedSectionAttribute}"></div><p>Second</p>`,
+  pageLayout: { headerText: "First", footerText: "", pageNumberEnabled: false }
+});
+// 中文注解：导出器会主动规整连续分节，因此直接修改 OOXML，模拟由 Microsoft Word 创建的外部连续分节文件。
+const continuousSourceZip = await JSZip.loadAsync(continuousSectionSourceBuffer);
+const continuousSourceXml = await continuousSourceZip.file("word/document.xml")?.async("string") || "";
+continuousSourceZip.file("word/document.xml", continuousSourceXml.replace('<w:type w:val="nextPage"/>', '<w:type w:val="continuous"/>'));
+const continuousSectionBuffer = await continuousSourceZip.generateAsync({ type: "nodebuffer" });
+const continuousSectionImported = await parseImportedDocument({
+  originalname: "continuous-section.docx",
+  buffer: continuousSectionBuffer,
+  mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  size: continuousSectionBuffer.length
+});
+// 中文注解：当前在线画布不能等价显示同页连续分节，导入时必须显式降级，确保在线分页和再次导出采用同一边界。
+assert.match(continuousSectionImported.content, /data-section-break="nextPage"/);
+assert.match(continuousSectionImported.warnings.join(" "), /连续分节符.*下一页分节符/);
+const continuousRoundTripBuffer = await createDocxBuffer({
+  title: "Continuous section compatibility",
+  content: continuousSectionImported.content,
+  pageLayout: continuousSectionImported.pageLayout
+});
+const continuousRoundTripZip = await JSZip.loadAsync(continuousRoundTripBuffer);
+const continuousRoundTripXml = await continuousRoundTripZip.file("word/document.xml")?.async("string") || "";
+assert.match(continuousRoundTripXml, /<w:type w:val="nextPage"\/>/);
+assert.doesNotMatch(continuousRoundTripXml, /<w:type w:val="continuous"\/>/);
 
 console.log("DOCX import format check passed");
