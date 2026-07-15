@@ -28,6 +28,8 @@ const fixtureDocument = {
   wordCount: listText.length + cellA.length + cellB.length,
   updatedAt: new Date().toISOString()
 };
+// 中文注解：复用现有编辑器回归文档，加入可被真实选区工具操作的链接文字。
+fixtureDocument.content = fixtureDocument.content.replace("下标工具", "下标工具 链接工具");
 const fixtureTemplate = {
   id: 3,
   name: "商业计划书",
@@ -225,6 +227,14 @@ try {
   assert.match(advancedFormatHtml, /<mark[^>]+data-highlight="yellow"[^>]*>突出显示工具<\/mark>/);
   assert.match(advancedFormatHtml, /<sup>上标工具<\/sup>/);
   assert.match(advancedFormatHtml, /<sub>下标工具<\/sub>/);
+  await selectEditorText("链接工具");
+  await page.getByRole("button", { name: "设置超链接", exact: true }).click();
+  await page.getByLabel("超链接地址", { exact: true }).fill("https://example.com/office");
+  await page.getByRole("button", { name: "确认超链接", exact: true }).click();
+  const editorLink = editor.locator('a[href="https://example.com/office"]');
+  assert.equal(await editorLink.textContent(), "链接工具");
+  assert.equal(await editorLink.getAttribute("target"), "_blank");
+  assert.equal(await editorLink.getAttribute("rel"), "noopener noreferrer");
   const tabKeyboardParagraph = editor.locator("p").filter({ hasText: "Tab keyboard" });
   await tabKeyboardParagraph.evaluate((paragraph) => {
     const range = document.createRange();
@@ -475,6 +485,7 @@ try {
   assert.match(reopenedHtml, /font-size:\s*18pt/);
   assert.match(reopenedHtml, /<em>/);
   assert.match(reopenedHtml, /<s>/);
+  assert.match(reopenedHtml, /<a[^>]+href="https:\/\/example\.com\/office"[^>]*>[\s\S]*链接工具[\s\S]*<\/a>/);
   assert.match(reopenedHtml, /data-section-break="nextPage"/);
   assert.match(reopenedHtml, /第二节横向内容/);
   assert.equal((reopenedHtml.match(/data-docx-tab="true"/g) || []).length, 4);
@@ -495,6 +506,7 @@ try {
   const downloadedBuffer = await readFile(downloadedPath);
   const archive = await JSZip.loadAsync(downloadedBuffer);
   const documentXml = await archive.file("word/document.xml")?.async("string");
+  const documentRelationshipsXml = await archive.file("word/_rels/document.xml.rels")?.async("string") || "";
   const settingsXml = await archive.file("word/settings.xml")?.async("string");
   const headerXmlParts = await Promise.all(archive.file(/^word\/header\d+\.xml$/).map((file) => file.async("string")));
   const footerXmlParts = await Promise.all(archive.file(/^word\/footer\d+\.xml$/).map((file) => file.async("string")));
@@ -538,6 +550,8 @@ try {
   assert.match(documentXml, /<w:highlight w:val="yellow"\/>/);
   assert.match(documentXml, /<w:vertAlign w:val="superscript"\/>/);
   assert.match(documentXml, /<w:vertAlign w:val="subscript"\/>/);
+  assert.match(documentXml, /<w:hyperlink[^>]+r:id="[^"]+"[^>]*>[\s\S]*链接工具[\s\S]*<\/w:hyperlink>/);
+  assert.match(documentRelationshipsXml, /Target="https:\/\/example\.com\/office" TargetMode="External"/);
   const tabWorkflowParagraph = (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Tab workflow")) || "";
   assert.match(tabWorkflowParagraph, /<w:tabs><w:tab w:val="left" w:pos="1440"\/><w:tab w:val="right" w:pos="5760"\/><\/w:tabs>/);
   assert.equal((tabWorkflowParagraph.match(/<w:tab\/>/g) || []).length, 2);
@@ -580,6 +594,9 @@ try {
   await page.getByRole("button", { name: "分页", exact: true }).click();
   await page.locator(".page-sheet").first().waitFor();
   await page.waitForFunction(() => document.querySelectorAll(".page-sheet").length > 5);
+  const previewLink = page.locator('.page-body a[href="https://example.com/office"]').first();
+  await previewLink.waitFor();
+  assert.equal(await previewLink.evaluate((link) => getComputedStyle(link).textDecorationLine), "underline");
 
   const result = await page.evaluate(() => {
     const pages = Array.from(document.querySelectorAll(".page-sheet"));

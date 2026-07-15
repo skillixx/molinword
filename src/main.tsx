@@ -17,6 +17,7 @@ import {
   AlignRight,
   Bold,
   Bot,
+  Check,
   CheckCircle2,
   ChevronRight,
   ChevronsLeft,
@@ -37,6 +38,7 @@ import {
   List,
   ListOrdered,
   ListTree,
+  Link2,
   PenLine,
   PanelTop,
   Plus,
@@ -53,9 +55,11 @@ import {
   Trash2,
   Type,
   Underline as UnderlineIcon,
+  Unlink,
   Undo2,
   Redo2,
   Wand2,
+  X,
   XCircle
 } from "lucide-react";
 import "./styles.css";
@@ -68,6 +72,17 @@ type EditorViewMode = "edit" | "page";
 type ParagraphSpacingProperty = "line-height" | "margin-top" | "margin-bottom" | "--word-line-rule";
 type ParagraphSpacingStyles = Partial<Record<ParagraphSpacingProperty, string>>;
 type ParagraphPaginationAttribute = "keepNext" | "keepLines" | "pageBreakBefore" | "widowControl";
+
+function normalizeSafeHyperlink(value: string) {
+  const href = value.trim().slice(0, 2048);
+  if (/^mailto:[^\s@]+@[^\s@]+$/i.test(href)) return href;
+  try {
+    const url = new URL(href);
+    return ["http:", "https:"].includes(url.protocol) ? url.href : "";
+  } catch {
+    return "";
+  }
+}
 type FormatSelectOption = { label: string; value: string };
 type DocumentPageTextStyle = {
   alignment: "left" | "center" | "right";
@@ -2490,6 +2505,8 @@ function Editor(props: {
   const [sectionCount, setSectionCount] = React.useState(1);
   const [paginationAssetVersion, setPaginationAssetVersion] = React.useState(0);
   const [paginationPending, setPaginationPending] = React.useState(false);
+  const [linkEditorOpen, setLinkEditorOpen] = React.useState(false);
+  const [linkUrl, setLinkUrl] = React.useState("https://");
   const paginationMeasureRef = React.useRef<HTMLDivElement | null>(null);
   const imageInputRef = React.useRef<HTMLInputElement | null>(null);
   const manualSavePromiseRef = React.useRef<Promise<ApiDocument | null> | null>(null);
@@ -2527,7 +2544,7 @@ function Editor(props: {
   }, [props.pageLayout]);
 
   const editor = useEditor({
-    extensions: [StarterKit, ImageExtension.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DocxTab, ParagraphIndent, PageBreak, SectionBreak, DocumentTable, DocumentTableRow, DocumentTableHeader, DocumentTableCell],
+    extensions: [StarterKit.configure({ link: { openOnClick: false, autolink: false, linkOnPaste: true, HTMLAttributes: { target: "_blank", rel: "noopener noreferrer" } } }), ImageExtension.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DocxTab, ParagraphIndent, PageBreak, SectionBreak, DocumentTable, DocumentTableRow, DocumentTableHeader, DocumentTableCell],
     content: props.content,
     editorProps: { attributes: { class: "word-editor" } },
     onCreate({ editor }) { updateOutlineFromEditor(editor); syncActiveSectionFromEditor(editor); },
@@ -3185,6 +3202,35 @@ function Editor(props: {
     props.exportWord(latestContent);
   };
 
+  const openLinkEditor = () => {
+    if (!editor || (editor.state.selection.empty && !editor.isActive("link"))) {
+      setSelectionHint("请先选中文字，或把光标放到已有链接中。");
+      return;
+    }
+    setLinkUrl(editor.getAttributes("link").href || "https://");
+    setLinkEditorOpen(true);
+  };
+
+  const applyHyperlink = () => {
+    if (!editor) return;
+    const href = normalizeSafeHyperlink(linkUrl);
+    if (!href) {
+      setSelectionHint("链接地址仅支持 http、https 或 mailto。");
+      return;
+    }
+    // 中文注解：扩展到完整链接标记后再更新，保证编辑已有链接时不会只改动光标附近的字符。
+    editor.chain().focus().extendMarkRange("link").setLink({ href, target: "_blank", rel: "noopener noreferrer" }).run();
+    setLinkEditorOpen(false);
+    setSelectionHint("已设置超链接。");
+  };
+
+  const removeHyperlink = () => {
+    if (!editor?.isActive("link")) return;
+    editor.chain().focus().extendMarkRange("link").unsetLink().run();
+    setLinkEditorOpen(false);
+    setSelectionHint("已取消超链接。");
+  };
+
   const jumpToOutline = (item: OutlineItem) => {
     if (!editor || typeof item.position !== "number") return;
     editor.chain().focus().setTextSelection(item.position + 1).scrollIntoView().run();
@@ -3263,6 +3309,13 @@ function Editor(props: {
             <button className={editor?.isActive("bold") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleBold().run()} title="加粗"><Bold size={16} />加粗</button>
             <button className={editor?.isActive("italic") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleItalic().run()} title="斜体"><Italic size={16} /></button>
             <button className={editor?.isActive("underline") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleUnderline().run()} title="下划线"><UnderlineIcon size={16} />下划线</button>
+            <button aria-label="设置超链接" className={editor?.isActive("link") ? "active-format" : ""} onClick={openLinkEditor} title="设置超链接"><Link2 size={16} /></button>
+            <button aria-label="取消超链接" onClick={removeHyperlink} disabled={!editor?.isActive("link")} title="取消超链接"><Unlink size={16} /></button>
+            {linkEditorOpen ? <div className="link-editor">
+              <input aria-label="超链接地址" autoFocus value={linkUrl} onChange={(event) => setLinkUrl(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") applyHyperlink(); if (event.key === "Escape") setLinkEditorOpen(false); }} />
+              <button aria-label="确认超链接" onClick={applyHyperlink} title="确认超链接"><Check size={16} /></button>
+              <button aria-label="关闭超链接编辑" onClick={() => setLinkEditorOpen(false)} title="关闭"><X size={16} /></button>
+            </div> : null}
             <button className={editor?.isActive("strike") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleStrike().run()} title="删除线"><Strikethrough size={16} /></button>
             <button aria-label="黄色突出显示" className={editor?.isActive("textHighlight") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleMark("textHighlight", { color: "yellow" }).run()} title="黄色突出显示"><Highlighter size={16} /></button>
             <button aria-label="上标" className={editor?.isActive("superscriptText") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleMark("superscriptText").run()} title="上标"><Superscript size={16} /></button>

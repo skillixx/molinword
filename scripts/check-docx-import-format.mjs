@@ -36,6 +36,7 @@ async function buildFormattedDocxFixture() {
   <Relationship Id="rIdImage1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/>
   <Relationship Id="rIdHeader1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>
   <Relationship Id="rIdFooter1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>
+  <Relationship Id="rIdHyperlink1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://platform.openai.com/docs" TargetMode="External"/>
 </Relationships>`
   );
   zip.folder("word").file("header1.xml", `<?xml version="1.0" encoding="UTF-8"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:eastAsia="Microsoft YaHei"/><w:sz w:val="24"/><w:color w:val="1F4E79"/><w:b/><w:i/></w:rPr><w:t>导入页眉</w:t></w:r></w:p></w:hdr>`);
@@ -123,6 +124,7 @@ async function buildFormattedDocxFixture() {
       <w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:t>Superscript text</w:t></w:r>
       <w:r><w:rPr><w:vertAlign w:val="subscript"/></w:rPr><w:t>Subscript text</w:t></w:r>
     </w:p>
+    <w:p><w:r><w:t>链接前 </w:t></w:r><w:hyperlink r:id="rIdHyperlink1"><w:r><w:rPr><w:u w:val="single"/><w:color w:val="0563C1"/></w:rPr><w:t>OpenAI documentation</w:t></w:r></w:hyperlink><w:r><w:t> 链接后</w:t></w:r></w:p>
     <w:p><w:pPr><w:pStyle w:val="BodyBased"/></w:pPr><w:r><w:t>Inherited spacing</w:t></w:r></w:p>
     <w:p><w:pPr><w:spacing w:line="360" w:lineRule="atLeast"/></w:pPr><w:r><w:t>At least spacing</w:t></w:r></w:p>
     <w:p><w:pPr><w:keepNext/><w:keepLines/><w:pageBreakBefore/><w:widowControl/></w:pPr><w:r><w:t>Pagination controlled paragraph</w:t></w:r></w:p>
@@ -390,6 +392,16 @@ assert.match(imported.content, /<s><em><u>斜体下划线删除线文本<\/u><\/
 assert.match(imported.content, /<mark data-highlight="yellow" style="background-color:\s*#FFFF00">Highlighted text<\/mark>/);
 assert.match(imported.content, /<sup>Superscript text<\/sup>/);
 assert.match(imported.content, /<sub>Subscript text<\/sub>/);
+assert.match(imported.content, /链接前 <a href="https:\/\/platform\.openai\.com\/docs" target="_blank" rel="noopener noreferrer">[\s\S]*OpenAI documentation[\s\S]*<\/a> 链接后/);
+// 中文注解：链接不仅要在导入时可见，再次导出和重开也必须保留外部关系及文字顺序。
+const hyperlinkRoundTripBuffer = await createDocxBuffer({ title: "Hyperlink round trip", content: imported.content, pageLayout: imported.pageLayout });
+const hyperlinkRoundTripZip = await JSZip.loadAsync(hyperlinkRoundTripBuffer);
+const hyperlinkRoundTripXml = await hyperlinkRoundTripZip.file("word/document.xml")?.async("string") || "";
+const hyperlinkRoundTripRels = await hyperlinkRoundTripZip.file("word/_rels/document.xml.rels")?.async("string") || "";
+assert.match(hyperlinkRoundTripXml, /<w:hyperlink[^>]+r:id="[^"]+"[^>]*>[\s\S]*OpenAI documentation[\s\S]*<\/w:hyperlink>/);
+assert.match(hyperlinkRoundTripRels, /Target="https:\/\/platform\.openai\.com\/docs" TargetMode="External"/);
+const hyperlinkReimported = await parseImportedDocument({ originalname: "hyperlink-round-trip.docx", buffer: hyperlinkRoundTripBuffer, mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: hyperlinkRoundTripBuffer.length });
+assert.match(hyperlinkReimported.content, /<a href="https:\/\/platform\.openai\.com\/docs"[^>]*>[\s\S]*OpenAI documentation[\s\S]*<\/a>/);
 assert.match(imported.content, /<p[^>]+data-keep-next="true"[^>]+data-keep-lines="true"[^>]+data-page-break-before="true"[^>]+data-widow-control="true"[^>]*>Pagination controlled paragraph<\/p>/);
 assert.match(imported.content, /<p[^>]+data-widow-control="false"[^>]*>Widow control disabled paragraph<\/p>/);
 const importedTabParagraph = (imported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || [])

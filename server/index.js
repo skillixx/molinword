@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import express from "express";
-import { AlignmentType, BorderStyle, Document, Footer, Header, HeadingLevel, HeightRule, ImageRun, LevelFormat, LineRuleType, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, Tab, Table, TableCell, TableLayoutType, TableRow, TextRun, VerticalAlignTable, WidthType } from "docx";
+import { AlignmentType, BorderStyle, Document, ExternalHyperlink, Footer, Header, HeadingLevel, HeightRule, ImageRun, LevelFormat, LineRuleType, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, Tab, Table, TableCell, TableLayoutType, TableRow, TextRun, VerticalAlignTable, WidthType } from "docx";
 import { imageSize } from "image-size";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
@@ -336,9 +336,9 @@ function importedTextToHtml(value = "") {
 }
 
 function sanitizeImportedHtml(value = "") {
-  // 中文注解：导入内容只放行编辑器可承载的安全样式，避免脚本、外链和存储细节进入前端。
+  // 中文注解：导入内容只放行编辑器可承载的安全样式和受控外链，避免脚本与存储细节进入前端。
   return sanitizeHtml(String(value), {
-    allowedTags: ["h1", "h2", "h3", "p", "span", "strong", "b", "em", "i", "u", "s", "mark", "sup", "sub", "ul", "ol", "li", "blockquote", "br", "table", "tbody", "thead", "tr", "th", "td", "img", "div"],
+    allowedTags: ["h1", "h2", "h3", "p", "span", "strong", "b", "em", "i", "u", "s", "mark", "sup", "sub", "a", "ul", "ol", "li", "blockquote", "br", "table", "tbody", "thead", "tr", "th", "td", "img", "div"],
     allowedAttributes: {
       h1: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops"],
       h2: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops"],
@@ -347,6 +347,7 @@ function sanitizeImportedHtml(value = "") {
       li: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops"],
       span: ["style", "class", "data-docx-tab", "data-tab-position", "data-tab-alignment"],
       mark: ["data-highlight", "style"],
+      a: ["href", "target", "rel"],
       table: ["style", "data-table-width-type", "data-table-width-value", "data-table-grid-width", "data-table-layout", "data-table-borders"],
       tr: ["style", "data-row-height", "data-row-height-rule", "data-row-cant-split", "data-row-repeat-header"],
       th: ["style", "colspan", "rowspan", "colwidth", "data-docx-cell", "data-cell-margins", "data-cell-vertical-align", "data-cell-shading", "data-cell-borders"],
@@ -354,7 +355,7 @@ function sanitizeImportedHtml(value = "") {
       img: ["src", "alt", "style"],
       div: ["data-page-break", "data-section-break", "data-section-layout", "class"]
     },
-    allowedSchemes: ["data"],
+    allowedSchemes: ["data", "http", "https", "mailto"],
     allowedStyles: {
       "*": {
         color: [/^#[0-9a-f]{6}$/i, /^rgb\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*\)$/i],
@@ -860,6 +861,17 @@ function parseDocxRelationships(relsXml = "") {
   return relationships;
 }
 
+function safeDocumentHyperlink(value = "") {
+  const href = String(value).trim().slice(0, 2048);
+  if (/^mailto:[^\s@]+@[^\s@]+$/i.test(href)) return href;
+  try {
+    const url = new URL(href);
+    return ["http:", "https:"].includes(url.protocol) ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
 async function readDocxImageDataUrl(zip, relationships, embedId) {
   const target = relationships.get(embedId);
   if (!target) return "";
@@ -1035,8 +1047,20 @@ async function parseStyledDocxParagraph(paragraphNode, context) {
   const inheritedRunStyles = style.run || {};
   const tabState = { stops: normalizeDocxTabStops(paragraphStyles.$tabStops), index: 0 };
   const bodyParts = [];
-  // 中文注解：制表位按段落中的出现顺序消费，不能并行解析 run，否则多个 Tab 会绑定到错误位置。
-  for (const run of xmlChildren(paragraphNode, "w:r")) bodyParts.push(await docxRunToHtml(run, inheritedRunStyles, context, tabState));
+  // 中文注解：按真实子节点顺序解析普通 run 与 hyperlink，链接容器中的文字不能被跳过或移动位置。
+  for (const child of paragraphNode.children || []) {
+    if (child.name === "w:r") {
+      bodyParts.push(await docxRunToHtml(child, inheritedRunStyles, context, tabState));
+      continue;
+    }
+    if (child.name !== "w:hyperlink") continue;
+    const relationshipId = firstValue(child.attribs, ["r:id", "id"]);
+    const href = safeDocumentHyperlink(relationships.get(relationshipId));
+    const linkParts = [];
+    for (const run of xmlChildren(child, "w:r")) linkParts.push(await docxRunToHtml(run, inheritedRunStyles, context, tabState));
+    const linkHtml = linkParts.join("");
+    bodyParts.push(href && linkHtml ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${linkHtml}</a>` : linkHtml);
+  }
   const body = bodyParts.join("") || "<br>";
   const tag = docxParagraphTag(style);
   const list = docxListInfo(pPr, style, numbering);
@@ -1924,6 +1948,14 @@ function textRunsFromNode(node, marks = {}) {
       superScript: marks.superScript,
       subScript: marks.subScript
     })] : [];
+  }
+
+  if (node.name === "a") {
+    const href = safeDocumentHyperlink(node.attribs?.href);
+    const linkMarks = { ...marks, color: marks.color || "0563C1", underline: marks.underline ?? true };
+    const children = (node.children || []).flatMap((child) => textRunsFromNode(child, linkMarks));
+    // 中文注解：只有安全 URL 才生成 DOCX 外部关系；无效地址降级为可读文字，避免导出危险链接。
+    return href && children.length ? [new ExternalHyperlink({ link: href, children })] : children;
   }
 
   const nodeRunStyle = textRunStyleFromNode(node);

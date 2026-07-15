@@ -213,6 +213,29 @@ button:disabled {
   padding: 0 12px;
 }
 
+.link-editor {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.link-editor input {
+  width: 220px;
+  height: 34px;
+  padding: 0 9px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #fff;
+  color: #172033;
+}
+
+.link-editor button {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  padding: 0;
+}
+
 .sidebar-collapsed .side-nav button {
   justify-content: center;
   padding: 0;
@@ -1374,6 +1397,13 @@ textarea {
   height: auto;
   margin: 8px auto 12px;
   object-fit: contain;
+}
+
+.word-editor a,
+.page-body a,
+.pagination-measurer a {
+  color: #0563c1;
+  text-decoration: underline;
 }
 
 .word-editor .page-break-marker,

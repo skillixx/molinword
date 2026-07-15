@@ -33,6 +33,7 @@ const content = `
   <p data-keep-next="true" data-keep-lines="true" data-page-break-before="true" data-widow-control="true">Pagination controlled paragraph</p>
   <p data-widow-control="false">Widow control disabled paragraph</p>
   <p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab project<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Tab amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p>
+  <p>查看 <a href="https://example.com/report?from=editor" target="_blank" rel="noopener noreferrer">Linked report</a></p>
   <table data-table-width-type="dxa" data-table-width-value="6000" data-table-grid-width="6000" data-table-layout="fixed" data-table-borders='{"top":{"style":"single","size":8,"color":"#FF0000"},"right":{"style":"dashed","size":6,"color":"#00AA00"},"bottom":{"style":"double","size":12,"color":"#0000FF"},"left":{"style":"nil","size":0,"color":"#000000"},"insideHorizontal":{"style":"dotted","size":4,"color":"#888888"},"insideVertical":{"style":"single","size":4,"color":"#000000"}}' style="width:400px;table-layout:fixed"><tbody><tr data-row-height="720" data-row-height-rule="exact" data-row-cant-split="true" data-row-repeat-header="true" style="height:48px"><th colwidth="120" data-docx-cell="true" data-cell-margins='{"top":100,"right":600,"bottom":300,"left":400}' data-cell-vertical-align="center" data-cell-shading="#D9EAD3" data-cell-borders='{"top":{"style":"single","size":8,"color":"#FF0000"},"right":{"style":"double","size":16,"color":"#800080"},"bottom":{"style":"dotted","size":4,"color":"#888888"},"left":{"style":"nil","size":0,"color":"#000000"}}' style="padding-top:6.67px;padding-right:40px;padding-bottom:20px;padding-left:26.67px;vertical-align:middle;background-color:#D9EAD3;border-top:1.33px solid #FF0000;border-right:2.67px double #800080;border-bottom:0.67px dotted #888888;border-left:none"><p>Geometry A</p></th><th colwidth="280" data-docx-cell="true"><p>Geometry B</p></th></tr><tr><td colwidth="120"><p>Short</p></td><td colwidth="280"><p>Wide content</p></td></tr></tbody></table>
   <ol>
     <li>Ordered item 1<ol><li>Nested ordered item</li></ol></li>
@@ -72,6 +73,9 @@ const mediaFiles = zip.file(/^word\/media\/.+\.(?:png|jpe?g|gif|webp)$/i);
 assert.ok(documentXml, "document.xml should exist");
 assert.ok(relationshipsXml, "document relationships should exist");
 assert.ok(numberingXml, "numbering.xml should exist");
+// 中文注解：在线链接必须写入原生 DOCX hyperlink 关系，不能退化成仅有蓝色下划线的普通文字。
+assert.match(documentXml, /<w:hyperlink[^>]+r:id="[^"]+"[^>]*>[\s\S]*Linked report[\s\S]*<\/w:hyperlink>/);
+assert.match(relationshipsXml, /Target="https:\/\/example\.com\/report\?from=editor" TargetMode="External"/);
 assert.equal(headerXmlParts.length, 3, "default, first and even headers should exist");
 assert.equal(footerXmlParts.length, 3, "default, first and even footers should exist");
 
