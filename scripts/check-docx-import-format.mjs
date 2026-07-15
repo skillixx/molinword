@@ -137,7 +137,7 @@ async function buildFormattedDocxFixture() {
     <w:p>
       <w:r>
         <w:drawing>
-          <wp:extent cx="1143000" cy="762000"/>
+          <wp:extent cx="11430000" cy="7620000"/>
           <a:graphic>
             <a:graphicData>
               <pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
@@ -179,7 +179,8 @@ assert.match(imported.content, /<td>/);
 assert.match(imported.content, /Import Cell 1/);
 assert.match(imported.content, /data-page-break="true"/);
 assert.match(imported.content, /<img[^>]+src="data:image\/png;base64,/);
-assert.match(imported.content, /<img[^>]+style="[^"]*width:\s*120px;\s*height:\s*80px;/);
+// 中文注解：超出 A4 内容区的大图在导入时即等比缩放，避免浏览器与导出端分别限制宽高后产生占位差。
+assert.match(imported.content, /<img[^>]+style="[^"]*width:\s*602px;\s*height:\s*401\.33px;/);
 // 中文注解：读取 numbering.xml 后应恢复编号类型和嵌套层级，供 Tiptap 继续编辑。
 assert.match(imported.content, /<ol><li>Ordered item 1<ol><li>Nested ordered item<\/li><\/ol><\/li><li>Ordered item 2<\/li><\/ol>/);
 assert.match(imported.content, /<ul><li>Bullet item<\/li><\/ul>/);

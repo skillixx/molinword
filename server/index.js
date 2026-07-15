@@ -465,10 +465,15 @@ async function docxImagesFromRun(runNode, zip, relationships) {
     const embedId = firstValue(blip.attribs, ["r:embed", "embed"]);
     const dataUrl = await readDocxImageDataUrl(zip, relationships, embedId);
     const extent = xmlDescendants(container, "wp:extent")[0];
-    const width = Number.parseFloat(firstValue(extent?.attribs, ["cx"]));
-    const height = Number.parseFloat(firstValue(extent?.attribs, ["cy"]));
+    const widthEmu = Number.parseFloat(firstValue(extent?.attribs, ["cx"]));
+    const heightEmu = Number.parseFloat(firstValue(extent?.attribs, ["cy"]));
+    let width = widthEmu / 9525;
+    let height = heightEmu / 9525;
+    const scale = width > 0 && height > 0 ? Math.min(1, 602 / width, 911 / height) : 1;
+    width *= scale;
+    height *= scale;
     const sizeStyle = width > 0 && height > 0
-      ? `width: ${Math.round(width / 9525 * 100) / 100}px; height: ${Math.round(height / 9525 * 100) / 100}px; `
+      ? `width: ${Math.round(width * 100) / 100}px; height: ${Math.round(height * 100) / 100}px; `
       : "";
     // 中文注解：Word 图片尺寸使用 EMU，导入时换算为 CSS 像素，在线分页才能按原图占位测量。
     if (dataUrl) images.push(`<img src="${dataUrl}" alt="导入图片" style="${sizeStyle}max-width: 100%;" />`);
