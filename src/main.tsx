@@ -72,6 +72,7 @@ type EditorViewMode = "edit" | "page";
 type ParagraphSpacingProperty = "line-height" | "margin-top" | "margin-bottom" | "--word-line-rule";
 type ParagraphSpacingStyles = Partial<Record<ParagraphSpacingProperty, string>>;
 type ParagraphPaginationAttribute = "keepNext" | "keepLines" | "pageBreakBefore" | "widowControl";
+type ParagraphAppearancePatch = { shading?: string | null; borders?: string | null };
 
 function imagePixelAttribute(element: HTMLElement, property: "width" | "height") {
   const styleValue = element.style[property];
@@ -457,6 +458,7 @@ declare module "@tiptap/core" {
       decreaseIndent: () => ReturnType;
       setFirstLineIndent: (level: number) => ReturnType;
       setParagraphSpacing: (styles: ParagraphSpacingStyles) => ReturnType;
+      setParagraphAppearance: (patch: ParagraphAppearancePatch) => ReturnType;
       toggleParagraphPagination: (attribute: ParagraphPaginationAttribute) => ReturnType;
     };
   }
@@ -611,6 +613,20 @@ const tableCellBorderOptions = [
   { label: "细实线", value: "thin" },
   { label: "粗实线", value: "thick" },
   { label: "虚线", value: "dashed" }
+];
+const paragraphShadingOptions = [
+  { label: "无底纹", value: "none" },
+  { label: "浅灰", value: "#F3F6F8" },
+  { label: "浅绿", value: "#E8F3F0" },
+  { label: "浅黄", value: "#FFF2CC" },
+  { label: "浅蓝", value: "#DDEBF7" }
+];
+const paragraphBorderOptions = [
+  { label: "无边框", value: "none" },
+  { label: "细边框", value: "thin" },
+  { label: "粗边框", value: "thick" },
+  { label: "虚线边框", value: "dashed" },
+  { label: "下边框", value: "bottom" }
 ];
 const tableRowHeightOptions = [
   { label: "自动行高", value: "0" },
@@ -947,6 +963,75 @@ function tableCellStyle(cellMargins: string | null, verticalAlign: string, shadi
   return styles.length ? styles.join("; ") : null;
 }
 
+function normalizeParagraphShading(value: unknown) {
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    const fill = /^#[0-9a-f]{6}$/i.test(String(parsed?.fill || "")) ? String(parsed.fill).toUpperCase() : "";
+    if (!fill) return null;
+    const color = /^#[0-9a-f]{6}$/i.test(String(parsed?.color || "")) ? String(parsed.color).toUpperCase() : "#000000";
+    const type = /^[A-Za-z0-9]+$/.test(String(parsed?.type || "")) ? String(parsed.type) : "clear";
+    return JSON.stringify({ fill, color, type });
+  } catch {
+    return null;
+  }
+}
+
+function normalizeParagraphBorders(value: unknown) {
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    const result: Record<string, { style: string; size: number; color: string; space: number }> = {};
+    const styles = new Set(["single", "dashed", "dashSmallGap", "dotted", "dotDash", "dotDotDash", "double", "thick", "none", "nil"]);
+    for (const side of ["top", "right", "bottom", "left", "between"]) {
+      const border = parsed?.[side];
+      if (!border || !styles.has(String(border.style))) continue;
+      const size = Math.max(0, Math.min(96, Math.round(Number(border.size) || 0)));
+      const color = /^#[0-9a-f]{6}$/i.test(String(border.color || "")) ? String(border.color).toUpperCase() : "#000000";
+      const space = Math.max(0, Math.min(31, Math.round(Number(border.space) || 0)));
+      result[side] = { style: String(border.style), size, color, space };
+    }
+    return Object.keys(result).length ? JSON.stringify(result) : null;
+  } catch {
+    return null;
+  }
+}
+
+function paragraphBorderPreset(value: string) {
+  if (value === "none") return null;
+  const border = value === "thick"
+    ? { style: "single", size: 12, color: "#000000", space: 4 }
+    : value === "dashed"
+      ? { style: "dashed", size: 6, color: "#6B7280", space: 3 }
+      : { style: "single", size: 4, color: "#000000", space: 3 };
+  const sides = value === "bottom" ? ["bottom"] : ["top", "right", "bottom", "left"];
+  return normalizeParagraphBorders(Object.fromEntries(sides.map((side) => [side, border])));
+}
+
+function paragraphAppearanceStyle(shadingValue: unknown, bordersValue: unknown) {
+  const styles: string[] = [];
+  try {
+    const shading = JSON.parse(normalizeParagraphShading(shadingValue) || "{}");
+    if (shading.fill) styles.push(`background-color: ${shading.fill}`);
+  } catch {
+    // 中文注解：历史底纹数据损坏时不渲染该属性，避免影响正文编辑。
+  }
+  try {
+    const borders = JSON.parse(normalizeParagraphBorders(bordersValue) || "{}");
+    for (const side of ["top", "right", "bottom", "left"]) {
+      const border = borders[side];
+      if (!border) continue;
+      if (["none", "nil"].includes(border.style) || border.size <= 0) styles.push(`border-${side}: none`);
+      else {
+        const cssStyle = border.style === "double" ? "double" : border.style === "dotted" ? "dotted" : border.style.includes("dash") || border.style.startsWith("dot") ? "dashed" : "solid";
+        styles.push(`border-${side}: ${Math.round(border.size / 6 * 100) / 100}px ${cssStyle} ${border.color}`);
+      }
+      if (border.space > 0) styles.push(`padding-${side}: ${Math.round(border.space * 96 / 72 * 100) / 100}px`);
+    }
+  } catch {
+    // 中文注解：历史边框数据损坏时忽略外观，语义字段可由用户重新设置。
+  }
+  return styles.length ? styles.join("; ") : null;
+}
+
 const ImportedTextStyle = Mark.create({
   name: "importedTextStyle",
   addAttributes() {
@@ -1279,6 +1364,25 @@ const ParagraphIndent = Extension.create({
               const tabStops = normalizeParagraphTabStops(attributes.tabStops);
               return tabStops ? { "data-tab-stops": tabStops } : {};
             }
+          },
+          paragraphShading: {
+            default: null,
+            parseHTML: (element) => normalizeParagraphShading(element.getAttribute("data-paragraph-shading")),
+            renderHTML: (attributes) => {
+              const shading = normalizeParagraphShading(attributes.paragraphShading);
+              const style = paragraphAppearanceStyle(shading, null);
+              return shading ? { "data-paragraph-shading": shading, ...(style ? { style } : {}) } : {};
+            }
+          },
+          paragraphBorders: {
+            default: null,
+            parseHTML: (element) => normalizeParagraphBorders(element.getAttribute("data-paragraph-borders")),
+            renderHTML: (attributes) => {
+              const borders = normalizeParagraphBorders(attributes.paragraphBorders);
+              const style = paragraphAppearanceStyle(null, borders);
+              // 中文注解：语义 JSON 供 DOCX 导出使用，CSS 供编辑视图和分页预览使用，两者同时更新。
+              return borders ? { "data-paragraph-borders": borders, ...(style ? { style } : {}) } : {};
+            }
           }
         }
       }
@@ -1373,6 +1477,12 @@ const ParagraphIndent = Extension.create({
           const importedStyle = mergeStyleText(String(node.attrs.importedStyle || ""), styles, importedBlockStyleNames);
           return { importedStyle };
         }),
+      setParagraphAppearance:
+        (patch) =>
+        ({ state, tr, dispatch }: CommandProps) => updateSelectedTextblocks(state, tr, dispatch, (node) => ({
+          paragraphShading: patch.shading === undefined ? node.attrs.paragraphShading : normalizeParagraphShading(patch.shading),
+          paragraphBorders: patch.borders === undefined ? node.attrs.paragraphBorders : normalizeParagraphBorders(patch.borders)
+        })),
       toggleParagraphPagination:
         (attribute) =>
         ({ state, tr, dispatch }: CommandProps) => {
@@ -3066,6 +3176,12 @@ function Editor(props: {
     setSelectionHint(applied ? `已设置${label}。` : "请把光标放到段落或标题中，再设置段落间距。");
   };
 
+  const applyParagraphAppearance = (patch: ParagraphAppearancePatch, label: string) => {
+    if (!editor) return;
+    const applied = editor.chain().focus().setParagraphAppearance(patch).run();
+    setSelectionHint(applied ? `已设置${label}。` : "请把光标放到段落或标题中，再设置段落外观。");
+  };
+
   const toggleParagraphPagination = (attribute: ParagraphPaginationAttribute, label: string) => {
     if (!editor) return;
     const applied = editor.chain().focus().toggleParagraphPagination(attribute).run();
@@ -3514,6 +3630,8 @@ function Editor(props: {
             <FormatSelect title="设置当前段落或选区的行距" placeholder="行距" options={lineSpacingOptions} icon={<Rows3 size={16} />} onSelect={(value, label) => applyParagraphSpacing({ "line-height": value, "--word-line-rule": "auto" }, `${label}行距`)} />
             <FormatSelect title="设置当前段落或选区的段前间距" placeholder="段前" options={paragraphSpacingOptions} onSelect={(value) => applyParagraphSpacing({ "margin-top": value }, `段前 ${value}`)} />
             <FormatSelect title="设置当前段落或选区的段后间距" placeholder="段后" options={paragraphSpacingOptions} onSelect={(value) => applyParagraphSpacing({ "margin-bottom": value }, `段后 ${value}`)} />
+            <FormatSelect title="设置当前段落或选区的底纹" placeholder="段落底纹" options={paragraphShadingOptions} onSelect={(value, label) => applyParagraphAppearance({ shading: value === "none" ? null : JSON.stringify({ fill: value, color: "#000000", type: "clear" }) }, `段落${label}`)} />
+            <FormatSelect title="设置当前段落或选区的边框" placeholder="段落边框" options={paragraphBorderOptions} onSelect={(value, label) => applyParagraphAppearance({ borders: paragraphBorderPreset(value) }, `段落${label}`)} />
             <button className={editor?.getAttributes("paragraph").keepNext || editor?.getAttributes("heading").keepNext ? "active-format" : ""} onClick={() => toggleParagraphPagination("keepNext", "与下段同页")} title="保持当前段落与下一段在同一页">与下段同页</button>
             <button className={editor?.getAttributes("paragraph").keepLines || editor?.getAttributes("heading").keepLines ? "active-format" : ""} onClick={() => toggleParagraphPagination("keepLines", "段中不分页")} title="避免当前段落被拆到两页">段中不分页</button>
             <button className={editor?.getAttributes("paragraph").pageBreakBefore || editor?.getAttributes("heading").pageBreakBefore ? "active-format" : ""} onClick={() => toggleParagraphPagination("pageBreakBefore", "段前分页")} title="让当前段落从新页开始">段前分页</button>

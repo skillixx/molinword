@@ -340,11 +340,11 @@ function sanitizeImportedHtml(value = "") {
   return sanitizeHtml(String(value), {
     allowedTags: ["h1", "h2", "h3", "p", "span", "strong", "b", "em", "i", "u", "s", "mark", "sup", "sub", "a", "ul", "ol", "li", "blockquote", "br", "table", "tbody", "thead", "tr", "th", "td", "img", "div"],
     allowedAttributes: {
-      h1: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops"],
-      h2: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops"],
-      h3: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops"],
-      p: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops"],
-      li: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops"],
+      h1: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
+      h2: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
+      h3: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
+      p: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
+      li: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
       span: ["style", "class", "data-docx-tab", "data-tab-position", "data-tab-alignment"],
       mark: ["data-highlight", "style"],
       a: ["href", "target", "rel"],
@@ -370,7 +370,15 @@ function sanitizeImportedHtml(value = "") {
         "--word-line-rule": [/^(?:auto|exact|atLeast)$/],
         "margin-left": [/^\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
         "margin-top": [/^\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
-        "margin-bottom": [/^\d+(?:\.\d+)?(?:px|pt|em|rem)$/]
+        "margin-bottom": [/^\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
+        "padding-top": [/^\d+(?:\.\d+)?px$/],
+        "padding-right": [/^\d+(?:\.\d+)?px$/],
+        "padding-bottom": [/^\d+(?:\.\d+)?px$/],
+        "padding-left": [/^\d+(?:\.\d+)?px$/],
+        "border-top": [/^(?:none|\d+(?:\.\d+)?px (?:solid|dashed|dotted|double) #[0-9a-f]{6})$/i],
+        "border-right": [/^(?:none|\d+(?:\.\d+)?px (?:solid|dashed|dotted|double) #[0-9a-f]{6})$/i],
+        "border-bottom": [/^(?:none|\d+(?:\.\d+)?px (?:solid|dashed|dotted|double) #[0-9a-f]{6})$/i],
+        "border-left": [/^(?:none|\d+(?:\.\d+)?px (?:solid|dashed|dotted|double) #[0-9a-f]{6})$/i]
       },
       img: {
         width: [/^\d+(?:\.\d+)?(?:px|%)$/],
@@ -679,7 +687,7 @@ function splitWordTextByScript(text = "", styles = {}) {
   return segments;
 }
 
-function parseParagraphProperties(pPr) {
+function parseParagraphProperties(pPr, themeColors = {}) {
   const styles = {};
   const align = xmlVal(xmlChild(pPr, "w:jc"));
   if (["left", "center", "right", "both", "justify"].includes(align)) styles["text-align"] = align === "both" ? "justify" : align;
@@ -712,6 +720,10 @@ function parseParagraphProperties(pPr) {
     position: Math.round(Number(firstValue(tab.attribs, ["w:pos", "pos"])))
   })).filter((tab) => ["left", "center", "right", "decimal", "bar"].includes(tab.alignment) && Number.isFinite(tab.position) && tab.position >= 0 && tab.position <= 31680);
   if (tabStops.length) styles.$tabStops = JSON.stringify(tabStops);
+  const shading = parseDocxParagraphShading(xmlChild(pPr, "w:shd"), themeColors);
+  const borders = parseDocxBorders(xmlChild(pPr, "w:pBdr"), themeColors, false);
+  if (shading) styles.$paragraphShading = JSON.stringify(shading);
+  if (Object.keys(borders).length) styles.$paragraphBorders = JSON.stringify(borders);
   // 中文注解：段落间距及行距规则都进入安全样式，后续编辑和再次导出才能保持同一分页语义。
   return styles;
 }
@@ -723,7 +735,7 @@ function parseDocxStyles(stylesXml = "", themeXml = "") {
   if (!stylesXml.trim()) return emptyContext;
   const document = parseDocument(stylesXml, { xmlMode: true });
   const docDefaults = xmlDescendants(document, "w:docDefaults")[0];
-  const defaultParagraph = parseParagraphProperties(xmlChild(xmlChild(docDefaults, "w:pPrDefault"), "w:pPr"));
+  const defaultParagraph = parseParagraphProperties(xmlChild(xmlChild(docDefaults, "w:pPrDefault"), "w:pPr"), themeColors);
   const defaultRun = parseRunProperties(xmlChild(xmlChild(docDefaults, "w:rPrDefault"), "w:rPr"), themeFonts, themeColors);
   const rawStyles = new Map();
   let defaultParagraphStyleId = "";
@@ -739,7 +751,7 @@ function parseDocxStyles(stylesXml = "", themeXml = "") {
       type,
       name: xmlVal(xmlChild(styleNode, "w:name")) || styleId,
       basedOn: xmlVal(xmlChild(styleNode, "w:basedOn")),
-      paragraph: parseParagraphProperties(pPr),
+      paragraph: parseParagraphProperties(pPr, themeColors),
       run: parseRunProperties(rPr, themeFonts, themeColors)
     });
   }
@@ -1151,7 +1163,7 @@ async function parseStyledDocxParagraph(paragraphNode, context) {
   const styleId = xmlVal(xmlChild(pPr, "w:pStyle"));
   const effectiveStyleId = styleId || defaultParagraphStyleId;
   const style = { id: effectiveStyleId, ...(styleMap.get(effectiveStyleId) || defaultParagraphStyle) };
-  const paragraphStyles = { ...(style.paragraph || {}), ...parseParagraphProperties(pPr) };
+  const paragraphStyles = { ...(style.paragraph || {}), ...parseParagraphProperties(pPr, context.themeColors || {}) };
   const inheritedRunStyles = style.run || {};
   const tabState = { stops: normalizeDocxTabStops(paragraphStyles.$tabStops), index: 0 };
   const bodyParts = [];
@@ -1174,7 +1186,8 @@ async function parseStyledDocxParagraph(paragraphNode, context) {
   const list = docxListInfo(pPr, style, numbering);
   const indentLevel = wordTwipToIndentLevel(firstValue(xmlChild(pPr, "w:ind")?.attribs, ["w:firstLine", "firstLine"]));
   const attrs = [];
-  const styleText = cssText(paragraphStyles);
+  const appearanceStyle = paragraphAppearanceCss(paragraphStyles.$paragraphShading, paragraphStyles.$paragraphBorders);
+  const styleText = [cssText(paragraphStyles), appearanceStyle].filter(Boolean).join("; ");
   if (styleText) attrs.push(`style="${escapeHtml(styleText)}"`);
   if (indentLevel) attrs.push(`data-indent="${indentLevel}"`);
   if (paragraphStyles.$keepNext === "1") attrs.push('data-keep-next="true"');
@@ -1182,6 +1195,8 @@ async function parseStyledDocxParagraph(paragraphNode, context) {
   if (paragraphStyles.$pageBreakBefore === "1") attrs.push('data-page-break-before="true"');
   if (paragraphStyles.$widowControl) attrs.push(`data-widow-control="${paragraphStyles.$widowControl === "1" ? "true" : "false"}"`);
   if (tabState.stops.length) attrs.push(`data-tab-stops="${escapeHtml(JSON.stringify(tabState.stops))}"`);
+  if (paragraphStyles.$paragraphShading) attrs.push(`data-paragraph-shading="${escapeHtml(paragraphStyles.$paragraphShading)}"`);
+  if (paragraphStyles.$paragraphBorders) attrs.push(`data-paragraph-borders="${escapeHtml(paragraphStyles.$paragraphBorders)}"`);
   if (body.includes(pageBreakHtml())) {
     // 中文注解：分页符是块级语义，导入时拆出段落外层，避免保存为非法的 p > div 结构。
     const chunks = body.split(pageBreakHtml());
@@ -1251,13 +1266,23 @@ function docxShadingColor(shadingNode, themeColors = {}) {
   );
 }
 
+function parseDocxParagraphShading(shadingNode, themeColors = {}) {
+  const fill = docxShadingColor(shadingNode, themeColors);
+  if (!fill) return null;
+  const rawColor = firstValue(shadingNode?.attribs, ["w:color", "color"]);
+  const color = /^[0-9a-f]{6}$/i.test(rawColor) ? `#${rawColor.toUpperCase()}` : "#000000";
+  const rawType = firstValue(shadingNode?.attribs, ["w:val", "val"]);
+  const type = /^[A-Za-z0-9]+$/.test(rawType) ? rawType : "clear";
+  return { fill, color, type };
+}
+
 const supportedDocxBorderStyles = new Set(["single", "dashed", "dashSmallGap", "dotted", "dotDash", "dotDotDash", "double", "thick", "none", "nil"]);
 
 function parseDocxBorders(container, themeColors = {}, includeInside = true) {
   const borders = {};
   const names = {
     top: ["w:top"], right: ["w:right", "w:end"], bottom: ["w:bottom"], left: ["w:left", "w:start"],
-    insideHorizontal: ["w:insideH"], insideVertical: ["w:insideV"]
+    between: ["w:between"], insideHorizontal: ["w:insideH"], insideVertical: ["w:insideV"]
   };
   for (const [side, elementNames] of Object.entries(names)) {
     if (!includeInside && side.startsWith("inside")) continue;
@@ -1270,7 +1295,9 @@ function parseDocxBorders(container, themeColors = {}, includeInside = true) {
     const color = /^[0-9a-f]{6}$/i.test(rawColor) ? `#${rawColor.toUpperCase()}` : (themeColor ? transformDocxThemeColor(themeColor, firstValue(element.attribs, ["w:themeTint", "themeTint"]), firstValue(element.attribs, ["w:themeShade", "themeShade"])) : "#000000");
     const rawSize = Number(firstValue(element.attribs, ["w:sz", "sz"]));
     const size = ["none", "nil"].includes(style) ? 0 : Math.max(1, Math.min(96, Number.isFinite(rawSize) && rawSize > 0 ? Math.round(rawSize) : 4));
-    borders[side] = { style, size, color };
+    const rawSpace = firstValue(element.attribs, ["w:space", "space"]);
+    const space = rawSpace === "" ? undefined : Math.max(0, Math.min(31, Math.round(Number(rawSpace) || 0)));
+    borders[side] = { style, size, color, ...(space === undefined ? {} : { space }) };
   }
   return borders;
 }
@@ -1279,6 +1306,28 @@ function docxBorderCss(border) {
   if (!border || ["none", "nil"].includes(border.style) || border.size <= 0) return "none";
   const cssStyle = border.style === "double" ? "double" : border.style === "dotted" ? "dotted" : border.style.includes("dash") || border.style.startsWith("dot") ? "dashed" : "solid";
   return `${Math.round(border.size / 6 * 100) / 100}px ${cssStyle} ${border.color}`;
+}
+
+function paragraphAppearanceCss(shadingValue, bordersValue) {
+  const styles = [];
+  try {
+    const shading = JSON.parse(String(shadingValue || ""));
+    if (/^#[0-9a-f]{6}$/i.test(String(shading?.fill || ""))) styles.push(`background-color: ${String(shading.fill).toUpperCase()}`);
+  } catch {
+    // 中文注解：损坏的历史段落外观属性只忽略该项，正文仍可继续打开和编辑。
+  }
+  try {
+    const borders = JSON.parse(String(bordersValue || ""));
+    for (const side of ["top", "right", "bottom", "left"]) {
+      const border = borders?.[side];
+      if (!border) continue;
+      styles.push(`border-${side}: ${docxBorderCss(border)}`);
+      if (Number(border.space) > 0) styles.push(`padding-${side}: ${Math.round(Number(border.space) * 96 / 72 * 100) / 100}px`);
+    }
+  } catch {
+    // 中文注解：边框 JSON 解析失败时不生成不受控 CSS，避免污染分页预览。
+  }
+  return styles.join("; ");
 }
 
 async function parseStyledDocxTable(tableNode, context) {
@@ -1985,6 +2034,19 @@ function textRunStyleFromNode(node) {
   return runStyle;
 }
 
+function docxParagraphShadingFromNode(node) {
+  try {
+    const source = JSON.parse(String(node?.attribs?.["data-paragraph-shading"] || ""));
+    const fill = /^#[0-9a-f]{6}$/i.test(String(source?.fill || "")) ? String(source.fill).slice(1).toUpperCase() : "";
+    if (!fill) return undefined;
+    const color = /^#[0-9a-f]{6}$/i.test(String(source?.color || "")) ? String(source.color).slice(1).toUpperCase() : "000000";
+    const type = /^[A-Za-z0-9]+$/.test(String(source?.type || "")) ? String(source.type) : "clear";
+    return { fill, color, type };
+  } catch {
+    return undefined;
+  }
+}
+
 function paragraphStyleFromNode(node) {
   const styles = parseStyleMap(node?.attribs?.style);
   const paragraphStyle = {};
@@ -2016,6 +2078,10 @@ function paragraphStyleFromNode(node) {
   }
   // 中文注解：只有 HTML 明确携带段落间距时才覆盖模板默认值，避免普通段落丢失既有样式。
   if (Object.keys(spacing).length) paragraphStyle.spacing = spacing;
+  const shading = docxParagraphShadingFromNode(node);
+  const border = docxBordersFromNode(node, "data-paragraph-borders", false, true);
+  if (shading) paragraphStyle.shading = shading;
+  if (border) paragraphStyle.border = border;
   if (node?.attribs?.["data-keep-next"] === "true") paragraphStyle.keepNext = true;
   if (node?.attribs?.["data-keep-lines"] === "true") paragraphStyle.keepLines = true;
   if (node?.attribs?.["data-page-break-before"] === "true") paragraphStyle.pageBreakBefore = true;
@@ -2281,10 +2347,12 @@ function tableFromNode(tableNode, listState) {
   });
 }
 
-function docxBordersFromNode(node, attributeName, includeInside) {
+function docxBordersFromNode(node, attributeName, includeInside, includeBetween = false) {
   try {
     const source = JSON.parse(String(node.attribs?.[attributeName] || ""));
-    const names = includeInside ? ["top", "right", "bottom", "left", "insideHorizontal", "insideVertical"] : ["top", "right", "bottom", "left"];
+    const names = includeInside
+      ? ["top", "right", "bottom", "left", "insideHorizontal", "insideVertical"]
+      : ["top", "right", "bottom", "left", ...(includeBetween ? ["between"] : [])];
     const borders = {};
     const styleMap = {
       single: BorderStyle.SINGLE, dashed: BorderStyle.DASHED, dashSmallGap: BorderStyle.DASH_SMALL_GAP,
@@ -2296,7 +2364,9 @@ function docxBordersFromNode(node, attributeName, includeInside) {
       if (!border || !styleMap[border.style]) continue;
       const size = Math.max(0, Math.min(96, Math.round(Number(border.size) || 0)));
       const color = /^#[0-9a-f]{6}$/i.test(String(border.color || "")) ? String(border.color).slice(1).toUpperCase() : "000000";
-      borders[side] = { style: styleMap[border.style], size, color };
+      const hasSpace = border.space !== undefined && border.space !== null && border.space !== "";
+      const space = Math.max(0, Math.min(31, Math.round(Number(border.space) || 0)));
+      borders[side] = { style: styleMap[border.style], size, color, ...(hasSpace ? { space } : {}) };
     }
     return Object.keys(borders).length ? borders : undefined;
   } catch {

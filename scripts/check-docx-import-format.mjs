@@ -129,6 +129,7 @@ async function buildFormattedDocxFixture() {
     <w:p><w:pPr><w:spacing w:line="360" w:lineRule="atLeast"/></w:pPr><w:r><w:t>At least spacing</w:t></w:r></w:p>
     <w:p><w:pPr><w:keepNext/><w:keepLines/><w:pageBreakBefore/><w:widowControl/></w:pPr><w:r><w:t>Pagination controlled paragraph</w:t></w:r></w:p>
     <w:p><w:pPr><w:widowControl w:val="false"/></w:pPr><w:r><w:t>Widow control disabled paragraph</w:t></w:r></w:p>
+    <w:p><w:pPr><w:shd w:val="clear" w:color="000000" w:fill="FFF2CC"/><w:pBdr><w:top w:val="single" w:sz="8" w:space="4" w:color="FF0000"/><w:right w:val="dashed" w:sz="6" w:space="3" w:color="00AA00"/><w:bottom w:val="double" w:sz="12" w:space="2" w:color="0000FF"/><w:left w:val="nil" w:sz="0" w:space="0" w:color="000000"/><w:between w:val="dotted" w:sz="4" w:space="1" w:color="888888"/></w:pBdr></w:pPr><w:r><w:t>Paragraph appearance</w:t></w:r></w:p>
     <w:p>
       <w:pPr><w:tabs><w:tab w:val="left" w:pos="1440"/><w:tab w:val="right" w:pos="5760"/></w:tabs></w:pPr>
       <w:r><w:t>Tab project</w:t><w:tab/><w:t>Tab amount</w:t><w:tab/><w:t>100.00</w:t></w:r>
@@ -394,6 +395,11 @@ assert.match(imported.content, /<s><em><u>斜体下划线删除线文本<\/u><\/
 assert.match(imported.content, /<mark data-highlight="yellow" style="background-color:\s*#FFFF00">Highlighted text<\/mark>/);
 assert.match(imported.content, /<sup>Superscript text<\/sup>/);
 assert.match(imported.content, /<sub>Subscript text<\/sub>/);
+assert.match(imported.content, /data-paragraph-shading="[^\"]*(?:&quot;fill&quot;|fill)[^\"]*FFF2CC[^\"]*"/);
+assert.match(imported.content, /data-paragraph-borders="[^\"]*(?:&quot;top&quot;|top)[^\"]*FF0000[^\"]*"/);
+assert.match(imported.content, /background-color:\s*#FFF2CC/i);
+assert.match(imported.content, /border-top:\s*1\.33px solid #FF0000/i);
+assert.match(imported.content, /padding-top:\s*5\.33px/i);
 assert.match(imported.content, /链接前 <a href="https:\/\/platform\.openai\.com\/docs" target="_blank" rel="noopener noreferrer">[\s\S]*OpenAI documentation[\s\S]*<\/a> 链接后/);
 // 中文注解：链接不仅要在导入时可见，再次导出和重开也必须保留外部关系及文字顺序。
 const hyperlinkRoundTripBuffer = await createDocxBuffer({ title: "Hyperlink round trip", content: imported.content, pageLayout: imported.pageLayout });
@@ -402,6 +408,10 @@ const hyperlinkRoundTripXml = await hyperlinkRoundTripZip.file("word/document.xm
 const hyperlinkRoundTripRels = await hyperlinkRoundTripZip.file("word/_rels/document.xml.rels")?.async("string") || "";
 assert.match(hyperlinkRoundTripXml, /<w:hyperlink[^>]+r:id="[^"]+"[^>]*>[\s\S]*OpenAI documentation[\s\S]*<\/w:hyperlink>/);
 assert.match(hyperlinkRoundTripRels, /Target="https:\/\/platform\.openai\.com\/docs" TargetMode="External"/);
+const appearanceRoundTripParagraph = (hyperlinkRoundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Paragraph appearance")) || "";
+assert.match(appearanceRoundTripParagraph, /<w:shd[^>]+w:fill="FFF2CC"/);
+assert.match(appearanceRoundTripParagraph, /<w:pBdr>[\s\S]*<w:top[^>]+w:val="single"[^>]+w:color="FF0000"[^>]+w:sz="8"[^>]+w:space="4"/);
+assert.match(appearanceRoundTripParagraph, /<w:between[^>]+w:val="dotted"[^>]+w:color="888888"[^>]+w:sz="4"[^>]+w:space="1"/);
 assert.match(hyperlinkRoundTripXml, /<w:drawing>/);
 assert.ok(hyperlinkRoundTripZip.file(/^word\/media\/.+\.png$/).length > 0, "正文图片再次导出后必须保留媒体文件");
 assert.ok((hyperlinkRoundTripXml.match(/<w:drawing>/g) || []).length >= 2, "纯图片段落和图文混排中的图片都必须再次导出");
@@ -414,6 +424,8 @@ assert.match(roundTripMixedImageParagraph, /<wp:positionV relativeFrom="paragrap
 assert.match(roundTripMixedImageParagraph, /<wp:wrapSquare wrapText="bothSides"/);
 const hyperlinkReimported = await parseImportedDocument({ originalname: "hyperlink-round-trip.docx", buffer: hyperlinkRoundTripBuffer, mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: hyperlinkRoundTripBuffer.length });
 assert.match(hyperlinkReimported.content, /<a href="https:\/\/platform\.openai\.com\/docs"[^>]*>[\s\S]*OpenAI documentation[\s\S]*<\/a>/);
+assert.match(hyperlinkReimported.content, /data-paragraph-shading="[^\"]*(?:&quot;fill&quot;|fill)[^\"]*FFF2CC[^\"]*"/);
+assert.match(hyperlinkReimported.content, /data-paragraph-borders="[^\"]*(?:&quot;between&quot;|between)[^\"]*888888[^\"]*"/);
 const roundTripBodyImage = hyperlinkReimported.content.match(/<img[^>]+src="data:image\/png;base64,[^>]*>/)?.[0] || "";
 assert.ok(roundTripBodyImage, "正文图片再次导入后必须恢复为可编辑图片");
 assert.match(roundTripBodyImage, /alt="正文流程图"/);

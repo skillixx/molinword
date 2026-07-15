@@ -32,7 +32,7 @@ const fixtureDocument = {
   tone: "正式",
   templateId: 3,
   outline: ["超长结构分页"],
-  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table data-table-width-type="dxa" data-table-width-value="7200" data-table-grid-width="7200" data-table-layout="fixed" style="width:480px;table-layout:fixed"><tbody><tr><th colwidth="120">审批阶段</th><th colwidth="360">状态</th></tr><tr><td colwidth="120">商务评审</td><td colwidth="360">通过</td></tr><tr><td colwidth="120">归档确认</td><td colwidth="360">完成</td></tr></tbody></table><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p><p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab workflow<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p><p>Tab keyboard</p><p>${widowText}</p>`,
+  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table data-table-width-type="dxa" data-table-width-value="7200" data-table-grid-width="7200" data-table-layout="fixed" style="width:480px;table-layout:fixed"><tbody><tr><th colwidth="120">审批阶段</th><th colwidth="360">状态</th></tr><tr><td colwidth="120">商务评审</td><td colwidth="360">通过</td></tr><tr><td colwidth="120">归档确认</td><td colwidth="360">完成</td></tr></tbody></table><p>段落外观工具</p><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p><p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab workflow<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p><p>Tab keyboard</p><p>${widowText}</p>`,
   // 中文注解：模拟升级前数据库里的旧页面设置，确保真实历史文档开启高级页眉时不会崩溃。
   pageLayout: { headerText: "", footerText: "", pageNumberEnabled: false },
   status: "draft",
@@ -281,6 +281,34 @@ try {
   const paginationControlHtml = await editor.innerHTML();
   assert.match(paginationControlHtml, /<p[^>]+data-keep-next="true"[^>]+data-keep-lines="true"[^>]+data-page-break-before="true"[^>]+data-widow-control="true"[^>]*>[\s\S]*?分页控制段落[\s\S]*?<\/p>/);
 
+  const paragraphAppearance = editor.locator("p").filter({ hasText: "段落外观工具" });
+  await paragraphAppearance.click();
+  await page.locator('label[title="设置当前段落或选区的底纹"] select').selectOption("#DDEBF7");
+  await page.locator('label[title="设置当前段落或选区的边框"] select').selectOption("dashed");
+  const sourceParagraphAppearance = await paragraphAppearance.evaluate((paragraph) => {
+    const style = getComputedStyle(paragraph);
+    return {
+      shading: paragraph.getAttribute("data-paragraph-shading"),
+      borders: paragraph.getAttribute("data-paragraph-borders"),
+      backgroundColor: style.backgroundColor,
+      borderTopStyle: style.borderTopStyle,
+      borderTopWidth: style.borderTopWidth,
+      borderTopColor: style.borderTopColor,
+      paddingTop: style.paddingTop
+    };
+  });
+  assert.deepEqual(JSON.parse(sourceParagraphAppearance.shading || "{}"), { fill: "#DDEBF7", color: "#000000", type: "clear" });
+  assert.deepEqual(JSON.parse(sourceParagraphAppearance.borders || "{}"), Object.fromEntries(["top", "right", "bottom", "left"].map((side) => [side, { style: "dashed", size: 6, color: "#6B7280", space: 3 }])));
+  assert.deepEqual({ ...sourceParagraphAppearance, shading: undefined, borders: undefined }, {
+    shading: undefined,
+    borders: undefined,
+    backgroundColor: "rgb(221, 235, 247)",
+    borderTopStyle: "dashed",
+    borderTopWidth: "1px",
+    borderTopColor: "rgb(107, 114, 128)",
+    paddingTop: "4px"
+  });
+
   const sourceTables = editor.locator("table");
   assert.equal(await sourceTables.count(), 2);
   const sourceGeometry = await sourceTables.last().evaluate((table) => ({
@@ -335,6 +363,7 @@ try {
   const headerCells = firstTable.locator("th");
   assert.equal(await headerCells.count(), 2);
   await headerCells.first().click();
+  await page.waitForTimeout(50);
   await page.locator('label[title="设置当前表格行高度"] select').selectOption("850");
   await page.locator('label[title="设置当前表格行高度规则"] select').selectOption("exact");
   await page.getByRole("button", { name: "整行同页", exact: true }).click();
@@ -410,7 +439,9 @@ try {
   await page.getByText("页面设置", { exact: true }).click();
   await page.setViewportSize({ width: 1440, height: 900 });
 
-  await editor.click();
+  // 中文注解：派发正文点击关闭页面设置浮层，再聚焦文末；工具栏换行时不依赖易被遮挡的坐标点击。
+  await editor.evaluate((element) => element.click());
+  await editor.focus();
   await editor.press("Control+End");
   await page.getByRole("button", { name: "分节符", exact: true }).click();
   await editor.type("第二节横向内容");
@@ -454,6 +485,7 @@ try {
   assert.match(storedDocument.content, /<h2[^>]*>.*保留小号红字.*<\/h2>/);
   assert.match(storedDocument.content, /font-family:\s*SimSun/);
   assert.match(storedDocument.content, /font-size:\s*12pt/);
+  assert.match(storedDocument.content, /<p[^>]+data-paragraph-shading="[^\"]*DDEBF7[^\"]*"[^>]+data-paragraph-borders="[^\"]*dashed[^\"]*"[^>]*>[\s\S]*?段落外观工具[\s\S]*?<\/p>/);
   assert.match(storedDocument.content, /data-section-break="nextPage"/);
   assert.match(storedDocument.content, /rowspan="2"/);
   assert.match(storedDocument.content, /第二节横向内容/);
@@ -518,6 +550,7 @@ try {
   assert.equal(await reopenedFloatingImage.getAttribute("width"), "56");
   assert.equal(await reopenedFloatingImage.getAttribute("data-docx-float-align"), "left");
   assert.match(reopenedHtml, /<a[^>]+href="https:\/\/example\.com\/office"[^>]*>[\s\S]*链接工具[\s\S]*<\/a>/);
+  assert.match(reopenedHtml, /<p[^>]+data-paragraph-shading="[^\"]*DDEBF7[^\"]*"[^>]+data-paragraph-borders="[^\"]*dashed[^\"]*"[^>]*>[\s\S]*?段落外观工具[\s\S]*?<\/p>/);
   assert.match(reopenedHtml, /data-section-break="nextPage"/);
   assert.match(reopenedHtml, /第二节横向内容/);
   assert.equal((reopenedHtml.match(/data-docx-tab="true"/g) || []).length, 4);
@@ -597,6 +630,11 @@ try {
   assert.match(paginationParagraph, /<w:keepLines\/>/);
   assert.match(paginationParagraph, /<w:pageBreakBefore\/>/);
   assert.match(paginationParagraph, /<w:widowControl\/>/);
+  const appearanceParagraph = (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("段落外观工具")) || "";
+  assert.match(appearanceParagraph, /<w:shd[^>]+w:fill="DDEBF7"/);
+  for (const side of ["top", "right", "bottom", "left"]) {
+    assert.match(appearanceParagraph, new RegExp(`<w:${side} w:val="dashed" w:color="6B7280" w:sz="6" w:space="3"\\/>`));
+  }
   assert.ok(headerXmlParts.some((xml) => xml.includes("首页项目封面")));
   assert.ok(headerXmlParts.some((xml) => xml.includes("奇数页项目页眉")));
   assert.ok(headerXmlParts.some((xml) => xml.includes("奇数页项目页眉") && /<w:jc w:val="left"\/>/.test(xml) && /<w:rFonts[^>]+SimSun/.test(xml) && /<w:sz w:val="24"\/>/.test(xml) && /<w:color w:val="C00000"\/>/.test(xml) && /<w:b\/>/.test(xml)));
@@ -637,6 +675,12 @@ try {
   const previewFloatingImage = page.locator('.page-body img[alt="浮动审批标识"]').first();
   await previewFloatingImage.waitFor();
   assert.equal(await previewFloatingImage.evaluate((image) => getComputedStyle(image).float), "left");
+  const previewParagraphAppearance = page.locator(".page-body p").filter({ hasText: "段落外观工具" }).first();
+  await previewParagraphAppearance.waitFor();
+  assert.deepEqual(await previewParagraphAppearance.evaluate((paragraph) => {
+    const style = getComputedStyle(paragraph);
+    return { backgroundColor: style.backgroundColor, borderTopStyle: style.borderTopStyle, borderTopWidth: style.borderTopWidth, paddingTop: style.paddingTop };
+  }), { backgroundColor: "rgb(221, 235, 247)", borderTopStyle: "dashed", borderTopWidth: "1px", paddingTop: "4px" });
 
   const result = await page.evaluate(() => {
     const pages = Array.from(document.querySelectorAll(".page-sheet"));
