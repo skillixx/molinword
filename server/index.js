@@ -1,9 +1,11 @@
 ﻿import "dotenv/config";
 import crypto from "node:crypto";
 import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 import express from "express";
-import { Document, HeadingLevel, Packer, Paragraph, TextRun } from "docx";
+import { AlignmentType, Document, HeadingLevel, ImageRun, Packer, Paragraph, Table, TableCell, TableRow, TextRun, WidthType } from "docx";
 import { parseDocument } from "htmlparser2";
+import JSZip from "jszip";
 import mammoth from "mammoth";
 import { Client as MinioClient } from "minio";
 import multer from "multer";
@@ -13,6 +15,12 @@ const require = createRequire(import.meta.url);
 const pdf = require("pdf-parse");
 const WordExtractor = require("word-extractor");
 const wordExtractor = new WordExtractor();
+const docxPage = {
+  // 中文注解：导出和前端分页预览共用 A4 + 1 英寸页边距，减少在线显示与 Word 文件的版式偏差。
+  widthTwip: 11906,
+  heightTwip: 16838,
+  marginTwip: 1440
+};
 
 const app = express();
 const port = Number(process.env.LOCAL_API_PORT || process.env.APP_PORT || process.env.PORT || 3001);
@@ -145,11 +153,304 @@ function importedTextToHtml(value = "") {
 }
 
 function sanitizeImportedHtml(value = "") {
-  // 中文注解：只保留 Tiptap 当前支持的正文标签，所有属性、链接、脚本和内嵌媒体都不进入编辑器。
-  return sanitizeHtml(String(value).replace(/<img\b[^>]*>/gi, "<p>[图片内容暂未导入]</p>"), {
-    allowedTags: ["h1", "h2", "h3", "p", "strong", "b", "em", "i", "u", "s", "ul", "ol", "li", "blockquote", "br"],
-    allowedAttributes: {}
+  // 中文注解：导入内容只放行编辑器可承载的安全样式，避免脚本、外链和存储细节进入前端。
+  return sanitizeHtml(String(value), {
+    allowedTags: ["h1", "h2", "h3", "p", "span", "strong", "b", "em", "i", "u", "s", "ul", "ol", "li", "blockquote", "br", "table", "tbody", "thead", "tr", "th", "td", "img"],
+    allowedAttributes: {
+      h1: ["style", "data-indent"],
+      h2: ["style", "data-indent"],
+      h3: ["style", "data-indent"],
+      p: ["style", "data-indent"],
+      li: ["style", "data-indent"],
+      span: ["style"],
+      th: ["colspan", "rowspan"],
+      td: ["colspan", "rowspan"],
+      img: ["src", "alt", "style"]
+    },
+    allowedSchemes: ["data"],
+    allowedStyles: {
+      "*": {
+        color: [/^#[0-9a-f]{6}$/i, /^rgb\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*\)$/i],
+        "font-family": [/^[\w\s"',.-\u4e00-\u9fa5]+$/],
+        "font-size": [/^\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
+        "font-weight": [/^(?:bold|[1-9]00)$/],
+        "font-style": [/^italic$/],
+        "text-align": [/^(?:left|center|right|justify)$/],
+        "text-indent": [/^-?\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
+        "line-height": [/^\d+(?:\.\d+)?(?:px|pt|em|rem|%)?$/],
+        "margin-left": [/^\d+(?:\.\d+)?(?:px|pt|em|rem)$/]
+      },
+      img: {
+        width: [/^\d+(?:\.\d+)?(?:px|%)$/],
+        height: [/^auto$/, /^\d+(?:\.\d+)?px$/],
+        "max-width": [/^100%$/],
+        display: [/^block$/],
+        margin: [/^0 auto$/]
+      }
+    }
   });
+}
+
+function firstValue(attributes = {}, names = []) {
+  for (const name of names) {
+    if (attributes[name] != null) return attributes[name];
+  }
+  return "";
+}
+
+function xmlChildren(node, name = "") {
+  return (node?.children || []).filter((child) => child.type === "tag" && (!name || child.name === name));
+}
+
+function xmlChild(node, name) {
+  return xmlChildren(node, name)[0] || null;
+}
+
+function xmlDescendants(node, name, result = []) {
+  for (const child of node?.children || []) {
+    if (child.type === "tag" && child.name === name) result.push(child);
+    if (child.children?.length) xmlDescendants(child, name, result);
+  }
+  return result;
+}
+
+function xmlVal(node) {
+  return firstValue(node?.attribs, ["w:val", "val"]);
+}
+
+function escapeCssString(value = "") {
+  return String(value).replace(/[;"<>]/g, "").trim();
+}
+
+function wordColor(value = "") {
+  if (!value || value === "auto") return "";
+  return /^[0-9a-f]{6}$/i.test(value) ? `#${value}` : "";
+}
+
+function wordHalfPointToPt(value = "") {
+  const size = Number.parseFloat(value);
+  return Number.isFinite(size) && size > 0 ? `${size / 2}pt` : "";
+}
+
+function wordTwipToPt(value = "") {
+  const twip = Number.parseFloat(value);
+  return Number.isFinite(twip) && twip > 0 ? `${Math.round((twip / 20) * 10) / 10}pt` : "";
+}
+
+function wordTwipToIndentLevel(value = "") {
+  const twip = Number.parseFloat(value);
+  return Number.isFinite(twip) && twip > 0 ? Math.max(1, Math.min(Math.round(twip / 240), 6)) : 0;
+}
+
+function cssText(styles = {}) {
+  return Object.entries(styles)
+    .filter(([, value]) => Boolean(value))
+    .map(([name, value]) => `${name}: ${value}`)
+    .join("; ");
+}
+
+function parseRunProperties(rPr) {
+  const styles = {};
+  if (!rPr) return styles;
+  const fonts = xmlChild(rPr, "w:rFonts");
+  const fontFamily = escapeCssString(firstValue(fonts?.attribs, ["w:eastAsia", "w:ascii", "w:hAnsi", "eastAsia", "ascii", "hAnsi"]));
+  if (fontFamily) styles["font-family"] = `"${fontFamily}"`;
+  const size = wordHalfPointToPt(xmlVal(xmlChild(rPr, "w:sz")));
+  if (size) styles["font-size"] = size;
+  const color = wordColor(xmlVal(xmlChild(rPr, "w:color")));
+  if (color) styles.color = color;
+  if (xmlChild(rPr, "w:b")) styles["font-weight"] = "bold";
+  if (xmlChild(rPr, "w:i")) styles["font-style"] = "italic";
+  return styles;
+}
+
+function parseParagraphProperties(pPr) {
+  const styles = {};
+  const align = xmlVal(xmlChild(pPr, "w:jc"));
+  if (["left", "center", "right", "both", "justify"].includes(align)) styles["text-align"] = align === "both" ? "justify" : align;
+  const indent = xmlChild(pPr, "w:ind");
+  const firstLine = firstValue(indent?.attribs, ["w:firstLine", "firstLine"]);
+  const left = firstValue(indent?.attribs, ["w:left", "left"]);
+  if (firstLine) styles["text-indent"] = wordTwipToPt(firstLine);
+  if (left) styles["margin-left"] = wordTwipToPt(left);
+  return styles;
+}
+
+function parseDocxStyles(stylesXml = "") {
+  const styles = new Map();
+  if (!stylesXml.trim()) return styles;
+  const document = parseDocument(stylesXml, { xmlMode: true });
+  for (const styleNode of xmlDescendants(document, "w:style")) {
+    const styleId = firstValue(styleNode.attribs, ["w:styleId", "styleId"]);
+    if (!styleId) continue;
+    const pPr = xmlChild(styleNode, "w:pPr");
+    const rPr = xmlChild(styleNode, "w:rPr");
+    styles.set(styleId, {
+      type: firstValue(styleNode.attribs, ["w:type", "type"]),
+      name: xmlVal(xmlChild(styleNode, "w:name")) || styleId,
+      paragraph: parseParagraphProperties(pPr),
+      run: parseRunProperties(rPr)
+    });
+  }
+  return styles;
+}
+
+function docxTextFromRun(runNode) {
+  return (runNode.children || [])
+    .map((child) => {
+      if (child.type === "tag" && child.name === "w:t") return child.children?.map((textNode) => textNode.data || "").join("") || "";
+      if (child.type === "tag" && child.name === "w:tab") return "\t";
+      if (child.type === "tag" && child.name === "w:br") return "\n";
+      return "";
+    })
+    .join("");
+}
+
+function imageMimeFromPath(value = "") {
+  const extension = String(value).toLowerCase().split(".").pop();
+  if (extension === "jpg" || extension === "jpeg") return "image/jpeg";
+  if (extension === "gif") return "image/gif";
+  if (extension === "webp") return "image/webp";
+  return "image/png";
+}
+
+function parseDocxRelationships(relsXml = "") {
+  const relationships = new Map();
+  if (!relsXml.trim()) return relationships;
+  const document = parseDocument(relsXml, { xmlMode: true });
+  for (const relationship of xmlDescendants(document, "Relationship")) {
+    const id = relationship.attribs?.Id;
+    const target = relationship.attribs?.Target;
+    if (id && target) relationships.set(id, target);
+  }
+  return relationships;
+}
+
+async function readDocxImageDataUrl(zip, relationships, embedId) {
+  const target = relationships.get(embedId);
+  if (!target) return "";
+  const normalizedPath = target.startsWith("/") ? target.slice(1) : `word/${target.replace(/^\.?\//, "")}`;
+  const file = zip.file(normalizedPath);
+  if (!file) return "";
+  const data = await file.async("base64");
+  return `data:${imageMimeFromPath(normalizedPath)};base64,${data}`;
+}
+
+async function docxImagesFromRun(runNode, zip, relationships) {
+  const images = [];
+  for (const blip of xmlDescendants(runNode, "a:blip")) {
+    const embedId = firstValue(blip.attribs, ["r:embed", "embed"]);
+    const dataUrl = await readDocxImageDataUrl(zip, relationships, embedId);
+    if (dataUrl) images.push(`<img src="${dataUrl}" alt="导入图片" style="max-width: 100%; height: auto;" />`);
+  }
+  return images;
+}
+
+function docxParagraphTag(style = {}) {
+  const name = `${style.name || ""} ${style.id || ""}`.toLowerCase();
+  if (name.includes("title") || name.includes("标题 1") || name.includes("heading 1")) return "h1";
+  if (name.includes("标题 2") || name.includes("heading 2")) return "h2";
+  if (name.includes("标题 3") || name.includes("heading 3")) return "h3";
+  return "p";
+}
+
+async function docxRunToHtml(runNode, inheritedRunStyles = {}, zip = null, relationships = new Map()) {
+  const text = docxTextFromRun(runNode);
+  const imageHtml = zip ? (await docxImagesFromRun(runNode, zip, relationships)).join("") : "";
+  if (!text && !imageHtml) return "";
+  const runStyles = { ...inheritedRunStyles, ...parseRunProperties(xmlChild(runNode, "w:rPr")) };
+  let html = escapeHtml(text).replace(/\n/g, "<br>");
+  if (xmlChild(xmlChild(runNode, "w:rPr"), "w:u")) html = `<u>${html}</u>`;
+  if (xmlChild(xmlChild(runNode, "w:rPr"), "w:i") || runStyles["font-style"] === "italic") html = `<em>${html}</em>`;
+  if (xmlChild(xmlChild(runNode, "w:rPr"), "w:b") || runStyles["font-weight"] === "bold") html = `<strong>${html}</strong>`;
+  const style = cssText(runStyles);
+  const textHtml = style && html ? `<span style="${escapeHtml(style)}">${html}</span>` : html;
+  return `${textHtml}${imageHtml}`;
+}
+
+async function parseStyledDocxParagraph(paragraphNode, styleMap, zip = null, relationships = new Map()) {
+  const pPr = xmlChild(paragraphNode, "w:pPr");
+  const styleId = xmlVal(xmlChild(pPr, "w:pStyle"));
+  const style = { id: styleId, ...(styleMap.get(styleId) || {}) };
+  const paragraphStyles = { ...(style.paragraph || {}), ...parseParagraphProperties(pPr) };
+  const inheritedRunStyles = style.run || {};
+  const body = (await Promise.all(xmlChildren(paragraphNode, "w:r").map((run) => docxRunToHtml(run, inheritedRunStyles, zip, relationships)))).join("") || "<br>";
+  const tag = docxParagraphTag(style);
+  const isList = Boolean(xmlChild(pPr, "w:numPr")) || /list|列表/i.test(`${style.name || ""} ${styleId || ""}`);
+  const indentLevel = wordTwipToIndentLevel(firstValue(xmlChild(pPr, "w:ind")?.attribs, ["w:firstLine", "firstLine"]));
+  const attrs = [];
+  const styleText = cssText(paragraphStyles);
+  if (styleText) attrs.push(`style="${escapeHtml(styleText)}"`);
+  if (indentLevel) attrs.push(`data-indent="${indentLevel}"`);
+  return { html: `<${tag}${attrs.length ? ` ${attrs.join(" ")}` : ""}>${body}</${tag}>`, listItem: isList ? body : "", ordered: /number|编号/i.test(`${style.name || ""} ${styleId || ""}`) };
+}
+
+async function parseStyledDocxTableCell(cellNode, styleMap, tagName, zip, relationships) {
+  const tcPr = xmlChild(cellNode, "w:tcPr");
+  const gridSpan = xmlVal(xmlChild(tcPr, "w:gridSpan"));
+  const attrs = [];
+  if (Number(gridSpan) > 1) attrs.push(`colspan="${Number(gridSpan)}"`);
+
+  const paragraphs = (await Promise.all(xmlChildren(cellNode, "w:p")
+    .map((paragraph) => parseStyledDocxParagraph(paragraph, styleMap, zip, relationships))))
+    .map((paragraph) => paragraph.html)
+    .join("") || "<p><br></p>";
+  return `<${tagName}${attrs.length ? ` ${attrs.join(" ")}` : ""}>${paragraphs}</${tagName}>`;
+}
+
+async function parseStyledDocxTable(tableNode, styleMap, zip, relationships) {
+  const rows = await Promise.all(xmlChildren(tableNode, "w:tr").map(async (rowNode, rowIndex) => {
+    const cellTag = rowIndex === 0 ? "th" : "td";
+    const cells = (await Promise.all(xmlChildren(rowNode, "w:tc").map((cellNode) => parseStyledDocxTableCell(cellNode, styleMap, cellTag, zip, relationships)))).join("");
+    return cells ? `<tr>${cells}</tr>` : "";
+  }));
+  const filteredRows = rows.filter(Boolean);
+  return filteredRows.length ? `<table><tbody>${filteredRows.join("")}</tbody></table>` : "";
+}
+
+async function parseStyledDocxToHtml(buffer) {
+  const zip = await JSZip.loadAsync(buffer);
+  const documentXml = await zip.file("word/document.xml")?.async("string");
+  if (!documentXml) return "";
+  const stylesXml = await zip.file("word/styles.xml")?.async("string");
+  const relsXml = await zip.file("word/_rels/document.xml.rels")?.async("string");
+  const styleMap = parseDocxStyles(stylesXml || "");
+  const relationships = parseDocxRelationships(relsXml || "");
+  const document = parseDocument(documentXml, { xmlMode: true });
+  const body = xmlDescendants(document, "w:body")[0];
+  const chunks = [];
+  let openList = null;
+  const flushList = () => {
+    if (!openList) return;
+    chunks.push(`<${openList.tag}>${openList.items.join("")}</${openList.tag}>`);
+    openList = null;
+  };
+
+  for (const block of xmlChildren(body)) {
+    if (block.name === "w:tbl") {
+      flushList();
+      const table = await parseStyledDocxTable(block, styleMap, zip, relationships);
+      if (table) chunks.push(table);
+      continue;
+    }
+
+    if (block.name === "w:p") {
+      const parsed = await parseStyledDocxParagraph(block, styleMap, zip, relationships);
+      if (parsed.listItem) {
+        const tag = parsed.ordered ? "ol" : "ul";
+        if (!openList || openList.tag !== tag) {
+          flushList();
+          openList = { tag, items: [] };
+        }
+        openList.items.push(`<li>${parsed.listItem}</li>`);
+      } else {
+        flushList();
+        chunks.push(parsed.html);
+      }
+    }
+  }
+  flushList();
+  return chunks.join("");
 }
 
 function extractImportedOutline(html = "") {
@@ -194,8 +495,18 @@ async function parseImportedDocument(file) {
     return { content: legacyDocTextToHtml(text), outline: extractPlainTextOutline(text), documentType: "Word 文档" };
   }
   if (extension === "docx") {
-    const result = await mammoth.convertToHtml({ buffer: file.buffer });
-    const content = sanitizeImportedHtml(result.value);
+    let rawHtml = "";
+    try {
+      rawHtml = await parseStyledDocxToHtml(file.buffer);
+    } catch (error) {
+      // 中文注解：少数 DOCX 结构异常时回退 Mammoth，优先保证用户能导入并继续编辑。
+      console.error("Styled DOCX import fallback to mammoth", error);
+    }
+    if (!rawHtml.trim()) {
+      const result = await mammoth.convertToHtml({ buffer: file.buffer });
+      rawHtml = result.value;
+    }
+    const content = sanitizeImportedHtml(rawHtml);
     return { content: content || "<p></p>", outline: extractImportedOutline(content), documentType: "Word 文档" };
   }
   if (extension === "pdf") {
@@ -247,16 +558,93 @@ function collectText(node) {
   return node.children.map(collectText).join("");
 }
 
+function normalizeDocxColor(value = "") {
+  const hex = String(value).trim().replace("#", "");
+  const rgb = String(value).match(/rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)/i);
+  if (rgb) {
+    return rgb.slice(1).map((part) => Math.max(0, Math.min(Number(part), 255)).toString(16).padStart(2, "0")).join("").toUpperCase();
+  }
+  return /^[0-9a-f]{6}$/i.test(hex) ? hex.toUpperCase() : "";
+}
+
+function cssSizeToHalfPoints(value = "") {
+  const text = String(value).trim();
+  const pt = text.match(/^([\d.]+)pt$/i);
+  if (pt) return Math.round(Number(pt[1]) * 2);
+  const px = text.match(/^([\d.]+)px$/i);
+  if (px) return Math.round((Number(px[1]) * 72 / 96) * 2);
+  return undefined;
+}
+
+function cssLengthToTwip(value = "") {
+  const text = String(value).trim();
+  const pt = text.match(/^([\d.]+)pt$/i);
+  if (pt) return Math.round(Number(pt[1]) * 20);
+  const px = text.match(/^([\d.]+)px$/i);
+  if (px) return Math.round((Number(px[1]) * 72 / 96) * 20);
+  const em = text.match(/^([\d.]+)em$/i);
+  if (em) return Math.round(Number(em[1]) * 11 * 20);
+  return undefined;
+}
+
+function fontFamilyFromCss(value = "") {
+  return String(value).split(",")[0]?.replace(/^['"]|['"]$/g, "").trim() || "";
+}
+
+function textRunStyleFromNode(node) {
+  const styles = parseStyleMap(node?.attribs?.style);
+  const runStyle = {};
+  const color = normalizeDocxColor(styles.color);
+  const size = cssSizeToHalfPoints(styles["font-size"]);
+  const font = fontFamilyFromCss(styles["font-family"]);
+  if (color) runStyle.color = color;
+  if (size) runStyle.size = size;
+  if (font) runStyle.font = font;
+  if (styles["font-weight"] === "bold" || Number(styles["font-weight"]) >= 600) runStyle.bold = true;
+  if (styles["font-style"] === "italic") runStyle.italics = true;
+  return runStyle;
+}
+
+function paragraphStyleFromNode(node) {
+  const styles = parseStyleMap(node?.attribs?.style);
+  const paragraphStyle = {};
+  const alignmentMap = {
+    left: AlignmentType.LEFT,
+    center: AlignmentType.CENTER,
+    right: AlignmentType.RIGHT,
+    justify: AlignmentType.JUSTIFIED
+  };
+  if (alignmentMap[styles["text-align"]]) paragraphStyle.alignment = alignmentMap[styles["text-align"]];
+  const firstLine = cssLengthToTwip(styles["text-indent"]);
+  const left = cssLengthToTwip(styles["margin-left"]);
+  if (firstLine || left) paragraphStyle.indent = { ...(paragraphStyle.indent || {}), ...(firstLine ? { firstLine } : {}), ...(left ? { left } : {}) };
+  return paragraphStyle;
+}
+
 function textRunsFromNode(node, marks = {}) {
   if (!node) return [];
   if (node.type === "text") {
     const text = (node.data || "").replace(/\s+/g, " ");
-    return text ? [new TextRun({ text, bold: marks.bold, italics: marks.italics })] : [];
+    return text ? [new TextRun({
+      text,
+      bold: marks.bold,
+      italics: marks.italics,
+      underline: marks.underline ? {} : undefined,
+      strike: marks.strike,
+      color: marks.color,
+      size: marks.size,
+      font: marks.font
+    })] : [];
   }
 
+  const nodeRunStyle = textRunStyleFromNode(node);
   const nextMarks = {
-    bold: marks.bold || ["strong", "b"].includes(node.name),
-    italics: marks.italics || ["em", "i"].includes(node.name)
+    ...marks,
+    ...nodeRunStyle,
+    bold: marks.bold || nodeRunStyle.bold || ["strong", "b"].includes(node.name),
+    italics: marks.italics || nodeRunStyle.italics || ["em", "i"].includes(node.name),
+    underline: marks.underline || node.name === "u",
+    strike: marks.strike || ["s", "strike", "del"].includes(node.name)
   };
 
   return (node.children || []).flatMap((child) => textRunsFromNode(child, nextMarks));
@@ -297,21 +685,33 @@ function paragraphIndentFromNode(node) {
   return { indent: { firstLine: level * 440 } };
 }
 
+function mergeParagraphOptions(...options) {
+  return options.reduce((merged, option) => {
+    if (!option) return merged;
+    return {
+      ...merged,
+      ...option,
+      indent: option.indent ? { ...(merged.indent || {}), ...option.indent } : merged.indent
+    };
+  }, {});
+}
+
 function paragraphFromNode(node) {
   const tagName = node.name;
   const text = collectText(node).replace(/\s+/g, " ").trim();
   if (!text) return null;
+  const paragraphStyle = mergeParagraphOptions(paragraphStyleFromNode(node), paragraphIndentFromNode(node));
 
   if (tagName === "h1") {
-    return new Paragraph({ text, heading: HeadingLevel.HEADING_1, spacing: { after: 160 } });
+    return new Paragraph({ children: textRunsFromNode(node), heading: HeadingLevel.HEADING_1, spacing: { after: 160 }, ...paragraphStyle });
   }
 
   if (tagName === "h2") {
-    return new Paragraph({ text, heading: HeadingLevel.HEADING_2, spacing: { before: 180, after: 120 } });
+    return new Paragraph({ children: textRunsFromNode(node), heading: HeadingLevel.HEADING_2, spacing: { before: 180, after: 120 }, ...paragraphStyle });
   }
 
   if (tagName === "h3") {
-    return new Paragraph({ text, heading: HeadingLevel.HEADING_3, spacing: { before: 140, after: 100 } });
+    return new Paragraph({ children: textRunsFromNode(node), heading: HeadingLevel.HEADING_3, spacing: { before: 140, after: 100 }, ...paragraphStyle });
   }
 
   // 中文注解：列表先按普通项目符号导出，后续可以继续扩展多级编号和缩进样式。
@@ -319,25 +719,103 @@ function paragraphFromNode(node) {
     return new Paragraph({
       children: textRunsFromNode(node),
       bullet: { level: 0 },
-      spacing: { after: 80 }
+      spacing: { after: 80 },
+      ...paragraphStyle
     });
   }
 
   return new Paragraph({
     children: textRunsFromNode(node),
     spacing: { after: 120 },
-    ...paragraphIndentFromNode(node)
+    ...paragraphStyle
   });
 }
 
-function extractDocxParagraphsFromHtml(html = "") {
+function tableCellChildrenFromNode(cellNode) {
+  const children = [];
+  for (const child of cellNode.children || []) {
+    if (["h1", "h2", "h3", "p", "li"].includes(child.name)) {
+      const paragraph = paragraphFromNode(child);
+      if (paragraph) children.push(paragraph);
+    } else if (child.name === "img") {
+      const paragraph = imageParagraphFromNode(child);
+      if (paragraph) children.push(paragraph);
+    }
+  }
+  if (children.length) return children;
+  return [new Paragraph({ children: textRunsFromNode(cellNode), spacing: { after: 0 } })];
+}
+
+function tableFromNode(tableNode) {
+  const rowNodes = (tableNode.children || []).flatMap((child) => child.name === "tbody" || child.name === "thead" ? child.children || [] : [child]).filter((child) => child.name === "tr");
+  const rows = rowNodes.map((rowNode) => {
+    const cellNodes = (rowNode.children || []).filter((child) => ["td", "th"].includes(child.name));
+    if (!cellNodes.length) return null;
+    return new TableRow({
+      children: cellNodes.map((cellNode) => new TableCell({
+        children: tableCellChildrenFromNode(cellNode),
+        shading: cellNode.name === "th" ? { fill: "F3F6F8" } : undefined
+      }))
+    });
+  }).filter(Boolean);
+  if (!rows.length) return null;
+
+  // 中文注解：表格按页面内容宽度铺满，保留在线编辑里的行列结构，避免导出后变成散段落。
+  return new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows
+  });
+}
+
+function dataUrlToImage(value = "") {
+  const match = String(value).match(/^data:(image\/(?:png|jpeg|jpg|gif|webp));base64,([\s\S]+)$/i);
+  if (!match) return null;
+  const mimeType = match[1].toLowerCase().replace("image/jpg", "image/jpeg");
+  const extension = mimeType.split("/")[1] === "jpeg" ? "jpg" : mimeType.split("/")[1];
+  return { data: Buffer.from(match[2], "base64"), extension };
+}
+
+function imageSizeFromNode(node) {
+  const styles = parseStyleMap(node?.attribs?.style);
+  const width = cssLengthToTwip(styles.width) ? Math.round(cssLengthToTwip(styles.width) / 15) : 420;
+  return { width: Math.max(80, Math.min(width, 560)), height: Math.round(Math.max(80, Math.min(width, 560)) * 0.62) };
+}
+
+function imageParagraphFromNode(node) {
+  const image = dataUrlToImage(node?.attribs?.src);
+  if (!image) return new Paragraph({ text: "[图片内容暂未导出]", spacing: { after: 120 } });
+  // 中文注解：在线编辑里的 data URL 图片直接写入 DOCX，避免导出后出现空白占位。
+  return new Paragraph({
+    children: [
+      new ImageRun({
+        data: image.data,
+        type: image.extension,
+        transformation: imageSizeFromNode(node)
+      })
+    ],
+    spacing: { after: 120 }
+  });
+}
+
+function extractDocxBlocksFromHtml(html = "") {
   const parsed = parseDocument(html, { decodeEntities: true });
-  const paragraphs = [];
+  const blocks = [];
 
   function walk(node) {
+    if (node.name === "table") {
+      const table = tableFromNode(node);
+      if (table) blocks.push(table);
+      return;
+    }
+
+    if (node.name === "img") {
+      blocks.push(imageParagraphFromNode(node));
+      return;
+    }
+
     if (["h1", "h2", "h3", "p", "li"].includes(node.name)) {
       const paragraph = paragraphFromNode(node);
-      if (paragraph) paragraphs.push(paragraph);
+      if (paragraph) blocks.push(paragraph);
       return;
     }
 
@@ -350,8 +828,8 @@ function extractDocxParagraphsFromHtml(html = "") {
     walk(child);
   }
 
-  return paragraphs.length
-    ? paragraphs
+  return blocks.length
+    ? blocks
     : [new Paragraph({ text: stripHtml(html) || "空白文档", spacing: { after: 120 } })];
 }
 
@@ -402,6 +880,15 @@ function createDocxStyles(templateStyle = {}) {
         quickFormat: true,
         run: { font: fontFamily, size: Math.max(headingSize - 2, bodySize), bold: true, color: headingColor },
         paragraph: { spacing: { before: 180, after: 100 } }
+      },
+      {
+        id: "Heading3",
+        name: "Heading 3",
+        basedOn: "Normal",
+        next: "Normal",
+        quickFormat: true,
+        run: { font: fontFamily, size: Math.max(headingSize - 4, bodySize), bold: true, color: headingColor },
+        paragraph: { spacing: { before: 140, after: 100 } }
       }
     ]
   };
@@ -412,14 +899,24 @@ async function createDocxBuffer({ title, content, templateStyle = null }) {
     styles: createDocxStyles(templateStyle || {}),
     sections: [
       {
-        properties: {},
+        properties: {
+          page: {
+            size: { width: docxPage.widthTwip, height: docxPage.heightTwip },
+            margin: {
+              top: docxPage.marginTwip,
+              right: docxPage.marginTwip,
+              bottom: docxPage.marginTwip,
+              left: docxPage.marginTwip
+            }
+          }
+        },
         children: [
           new Paragraph({
             text: title || "未命名文档",
             heading: HeadingLevel.TITLE,
             spacing: { after: 260 }
           }),
-          ...extractDocxParagraphsFromHtml(content)
+          ...extractDocxBlocksFromHtml(content)
         ]
       }
     ]
@@ -1700,9 +2197,13 @@ app.post("/api/ai/polish", async (request, response) => {
     });
   }
 });
-app.listen(port, "127.0.0.1", () => {
-  console.log(`Local API server running at http://127.0.0.1:${port}`);
-});
+export { createDocxBuffer, parseImportedDocument, parseStyledDocxToHtml, sanitizeImportedHtml };
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  app.listen(port, "127.0.0.1", () => {
+    console.log(`Local API server running at http://127.0.0.1:${port}`);
+  });
+}
 
 
 

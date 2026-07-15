@@ -1,11 +1,20 @@
 ﻿import React from "react";
 import { createRoot } from "react-dom/client";
-import { Extension, type CommandProps } from "@tiptap/core";
+import { Extension, Mark, type CommandProps } from "@tiptap/core";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import { EditorContent, useEditor, type Editor as TiptapEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
+import { Table } from "@tiptap/extension-table";
+import { TableCell } from "@tiptap/extension-table-cell";
+import { TableHeader } from "@tiptap/extension-table-header";
+import { TableRow } from "@tiptap/extension-table-row";
+import ImageExtension from "@tiptap/extension-image";
+import UnderlineExtension from "@tiptap/extension-underline";
 import {
+  AlignCenter,
+  AlignJustify,
   AlignLeft,
+  AlignRight,
   Bold,
   Bot,
   CheckCircle2,
@@ -17,6 +26,7 @@ import {
   FileText,
   FileUp,
   FolderOpen,
+  Image as ImageIcon,
   IndentDecrease,
   IndentIncrease,
   LayoutTemplate,
@@ -30,7 +40,9 @@ import {
   Save,
   Search,
   Sparkles,
+  Table as TableIcon,
   Type,
+  Underline as UnderlineIcon,
   Wand2,
   XCircle
 } from "lucide-react";
@@ -40,6 +52,7 @@ import { documentTemplates as fallbackDocumentTemplates, documentTypes, type Doc
 type AiAction = "continue" | "expand" | "shorten" | "correct" | "polish" | "format";
 type AiApplyMode = "replace" | "insert";
 type TextCaseMode = "upper" | "lower" | "title";
+type EditorViewMode = "edit" | "page";
 
 type RecentDocument = {
   id: number;
@@ -142,6 +155,81 @@ const defaultContent = `AI Word 文档助手是一款面向个人用户的智能
 核心功能包括 AI 大纲生成、AI 正文生成、富文本编辑、选中文本润色、自动保存、文档管理和 Word 导出。`;
 
 const maxIndentLevel = 6;
+const docxPagePreview = {
+  widthPx: 794,
+  heightPx: 1123,
+  marginPx: 96
+};
+const textColorOptions = [
+  { label: "黑", value: "#17212B" },
+  { label: "红", value: "#C00000" },
+  { label: "蓝", value: "#1F4E79" },
+  { label: "绿", value: "#245F55" }
+];
+const fontSizeOptions = [
+  { label: "小四", value: "12pt" },
+  { label: "四号", value: "14pt" },
+  { label: "小三", value: "15pt" },
+  { label: "三号", value: "16pt" },
+  { label: "二号", value: "22pt" }
+];
+const importedInlineStyleNames = ["font-family", "font-size", "color", "font-weight", "font-style"];
+const importedBlockStyleNames = ["text-align", "text-indent", "margin-left", "line-height"];
+
+function pickImportedStyles(styleText: string | null, allowedNames: string[]) {
+  const allowed = new Set(allowedNames);
+  return String(styleText || "")
+    .split(";")
+    .map((item) => item.trim())
+    .map((item) => {
+      const separator = item.indexOf(":");
+      if (separator === -1) return null;
+      const name = item.slice(0, separator).trim().toLowerCase();
+      const value = item.slice(separator + 1).trim().replace(/[;"<>]/g, "");
+      return allowed.has(name) && value ? `${name}: ${value}` : null;
+    })
+    .filter(Boolean)
+    .join("; ");
+}
+
+function mergeStyleText(styleText: string | null, nextStyles: Record<string, string>, allowedNames: string[]) {
+  const styles = new Map<string, string>();
+  pickImportedStyles(styleText, allowedNames).split(";").forEach((item) => {
+    const separator = item.indexOf(":");
+    if (separator === -1) return;
+    const name = item.slice(0, separator).trim();
+    const value = item.slice(separator + 1).trim();
+    if (name && value) styles.set(name, value);
+  });
+  Object.entries(nextStyles).forEach(([name, value]) => {
+    if (value) styles.set(name, value);
+    else styles.delete(name);
+  });
+  return Array.from(styles.entries()).map(([name, value]) => `${name}: ${value}`).join("; ");
+}
+
+const ImportedTextStyle = Mark.create({
+  name: "importedTextStyle",
+  addAttributes() {
+    return {
+      style: {
+        default: null,
+        parseHTML: (element) => pickImportedStyles(element.getAttribute("style"), importedInlineStyleNames) || null,
+        renderHTML: (attributes) => {
+          // 中文注解：只把导入文档的字体类样式写回 HTML，避免保存时夹带任意内联 CSS。
+          const style = pickImportedStyles(attributes.style, importedInlineStyleNames);
+          return style ? { style } : {};
+        }
+      }
+    };
+  },
+  parseHTML() {
+    return [{ tag: "span[style]" }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ["span", HTMLAttributes, 0];
+  }
+});
 
 const ParagraphIndent = Extension.create({
   name: "paragraphIndent",
@@ -150,6 +238,15 @@ const ParagraphIndent = Extension.create({
       {
         types: ["paragraph", "heading"],
         attributes: {
+          importedStyle: {
+            default: null,
+            parseHTML: (element) => pickImportedStyles(element.getAttribute("style"), importedBlockStyleNames) || null,
+            renderHTML: (attributes) => {
+              // 中文注解：段落级样式用于恢复 Word 对齐、缩进和行距，不参与普通编辑按钮状态。
+              const style = pickImportedStyles(attributes.importedStyle, importedBlockStyleNames);
+              return style ? { style } : {};
+            }
+          },
           indent: {
             default: 0,
             parseHTML: (element) => {
@@ -170,6 +267,36 @@ const ParagraphIndent = Extension.create({
     ];
   },
   addCommands() {
+    const updateSelectedTextblocks = (
+      state: CommandProps["state"],
+      tr: CommandProps["tr"],
+      dispatch: CommandProps["dispatch"],
+      updateAttributes: (node: ProseMirrorNode) => Record<string, unknown> | null
+    ) => {
+      let changed = false;
+      const { from, to, empty, $from } = state.selection;
+      const updateNode = (node: ProseMirrorNode, position: number) => {
+        if (!["paragraph", "heading"].includes(node.type.name)) return;
+        const nextAttributes = updateAttributes(node);
+        if (!nextAttributes) return;
+        tr.setNodeMarkup(position, undefined, { ...node.attrs, ...nextAttributes });
+        changed = true;
+      };
+
+      state.doc.nodesBetween(from, to, updateNode);
+      if (!changed && empty) {
+        for (let depth = $from.depth; depth > 0; depth -= 1) {
+          const node = $from.node(depth);
+          if (!["paragraph", "heading"].includes(node.type.name)) continue;
+          updateNode(node, $from.before(depth));
+          break;
+        }
+      }
+
+      if (changed && dispatch) dispatch(tr);
+      return changed;
+    };
+
     const updateSelectedParagraphIndent = (
       state: CommandProps["state"],
       tr: CommandProps["tr"],
@@ -213,7 +340,14 @@ const ParagraphIndent = Extension.create({
         ({ state, tr, dispatch }) => updateSelectedParagraphIndent(state, tr, dispatch, (current) => current - 1),
       setFirstLineIndent:
         (level = 1) =>
-        ({ state, tr, dispatch }) => updateSelectedParagraphIndent(state, tr, dispatch, () => level)
+        ({ state, tr, dispatch }) => updateSelectedParagraphIndent(state, tr, dispatch, () => level),
+      setParagraphAlignment:
+        (alignment = "left") =>
+        ({ state, tr, dispatch }: CommandProps) => updateSelectedTextblocks(state, tr, dispatch, (node) => {
+          // 中文注解：对齐写入段落级安全样式，分页预览和 DOCX 导出会复用同一份格式。
+          const importedStyle = mergeStyleText(String(node.attrs.importedStyle || ""), { "text-align": alignment }, importedBlockStyleNames);
+          return { importedStyle };
+        })
     };
   }
 });
@@ -248,6 +382,15 @@ function textToParagraphHtml(text: string) {
 function aiResultToHtml(text: string) {
   // 中文注解：AI 常返回多行文本，应用到编辑器时必须转成段落，否则保存和导出会丢失段落结构。
   return text.includes("\n") ? textToParagraphHtml(text) : escapeHtml(text);
+}
+
+function buildExportPreviewHtml(title: string, content: string) {
+  // 中文注解：后端导出会把文档标题作为 Word 标题段落写入，这里同步显示，避免预览少一段。
+  return `<h1 class="export-title">${escapeHtml(title || "未命名文档")}</h1>${content || "<p></p>"}`;
+}
+
+function blockOuterHtml(element: Element) {
+  return element.outerHTML || `<p>${escapeHtml(element.textContent || "")}</p>`;
 }
 
 function getSelectedText(editor: TiptapEditor | null) {
@@ -977,6 +1120,10 @@ function Editor(props: {
   const [aiResult, setAiResult] = React.useState<AiEditResult | null>(null);
   const [selectionHint, setSelectionHint] = React.useState("请先选中文本，再使用局部 AI 操作。");
   const [hasSelection, setHasSelection] = React.useState(false);
+  const [viewMode, setViewMode] = React.useState<EditorViewMode>("page");
+  const [previewPages, setPreviewPages] = React.useState<string[][]>([[buildExportPreviewHtml(props.currentTitle, props.content)]]);
+  const paginationMeasureRef = React.useRef<HTMLDivElement | null>(null);
+  const imageInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const updateOutlineFromEditor = React.useCallback((editor: TiptapEditor) => {
     const nextOutline: OutlineItem[] = [];
@@ -990,7 +1137,7 @@ function Editor(props: {
   }, [props]);
 
   const editor = useEditor({
-    extensions: [StarterKit, ParagraphIndent],
+    extensions: [StarterKit, UnderlineExtension, ImageExtension.configure({ inline: false, allowBase64: true }), ImportedTextStyle, ParagraphIndent, Table.configure({ resizable: true }), TableRow, TableHeader, TableCell],
     content: props.content,
     editorProps: { attributes: { class: "word-editor" } },
     onCreate({ editor }) { updateOutlineFromEditor(editor); },
@@ -1007,6 +1154,31 @@ function Editor(props: {
     editor.commands.setContent(props.content);
     updateOutlineFromEditor(editor);
   }, [editor, props.content, updateOutlineFromEditor]);
+
+  React.useLayoutEffect(() => {
+    const measureElement = paginationMeasureRef.current;
+    if (!measureElement) return;
+
+    const sourceHtml = buildExportPreviewHtml(props.currentTitle, props.content);
+    measureElement.innerHTML = sourceHtml;
+    const pageContentHeight = docxPagePreview.heightPx - docxPagePreview.marginPx * 2;
+    const nextPages: string[][] = [[]];
+    let currentHeight = 0;
+
+    Array.from(measureElement.children).forEach((child) => {
+      const styles = window.getComputedStyle(child);
+      const blockHeight = child.getBoundingClientRect().height + Number.parseFloat(styles.marginTop || "0") + Number.parseFloat(styles.marginBottom || "0");
+      // 中文注解：分页按块级内容切页，尽量模拟 Word 的自然分页；超长单块保留在当前页，避免截断用户内容。
+      if (currentHeight > 0 && currentHeight + blockHeight > pageContentHeight) {
+        nextPages.push([]);
+        currentHeight = 0;
+      }
+      nextPages[nextPages.length - 1].push(blockOuterHtml(child));
+      currentHeight += Math.min(blockHeight || 0, pageContentHeight);
+    });
+
+    setPreviewPages(nextPages.filter((page) => page.length));
+  }, [props.content, props.currentTitle]);
 
   const runSelectionAi = async (action: AiAction) => {
     const selectedText = getSelectedText(editor);
@@ -1034,6 +1206,40 @@ function Editor(props: {
     if (!editor) return;
     // 中文注解：清除格式只作用于当前光标或选区，避免影响整篇文档的排版。
     editor.chain().focus().unsetAllMarks().clearNodes().run();
+  };
+
+  const applySelectedTextStyle = (styles: Record<string, string>, label: string) => {
+    if (!editor) return;
+    const currentStyle = String(editor.getAttributes("importedTextStyle").style || "");
+    const style = mergeStyleText(currentStyle, styles, importedInlineStyleNames);
+    const applied = editor.chain().focus().setMark("importedTextStyle", { style }).run();
+    setSelectionHint(applied ? `已应用${label}。` : "请先选中文本，或把光标放到要继续输入的位置。");
+  };
+
+  const applyParagraphAlignment = (alignment: "left" | "center" | "right" | "justify", label: string) => {
+    if (!editor) return;
+    const applied = (editor.chain().focus() as unknown as { setParagraphAlignment: (value: string) => { run: () => boolean } }).setParagraphAlignment(alignment).run();
+    setSelectionHint(applied ? `已设置${label}。` : "请把光标放到段落或标题中，再设置对齐方式。");
+  };
+
+  const insertImageFile = (file: File | null) => {
+    if (!editor || !file) return;
+    if (!file.type.startsWith("image/")) {
+      setSelectionHint("请选择 PNG、JPG、GIF 或 WebP 图片。");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const src = String(reader.result || "");
+      if (!src.startsWith("data:image/")) {
+        setSelectionHint("图片读取失败，请重新选择。");
+        return;
+      }
+      // 中文注解：图片以内嵌 data URL 进入文档，分页预览和 DOCX 导出共享同一份内容。
+      editor.chain().focus().setImage({ src, alt: file.name }).run();
+      setSelectionHint("已插入图片。");
+    };
+    reader.readAsDataURL(file);
   };
 
   const applyAiFirstLineIndent = (level: number) => {
@@ -1114,7 +1320,72 @@ function Editor(props: {
       </header>
       <div className={`editor-layout${props.isOutlineCollapsed ? " outline-collapsed" : ""}`}>
         <aside className="outline-panel"><div className="section-title"><ListTree size={18} /><h2>文档大纲</h2><button className="panel-collapse-button" onClick={() => props.setIsOutlineCollapsed(!props.isOutlineCollapsed)} title={props.isOutlineCollapsed ? "展开文档大纲" : "收起文档大纲"} aria-label={props.isOutlineCollapsed ? "展开文档大纲" : "收起文档大纲"}>{props.isOutlineCollapsed ? <ChevronsRight size={17} /> : <ChevronsLeft size={17} />}</button></div><div className="outline-content">{props.outline.length === 0 ? <div className="empty-state">暂无大纲，请先生成或在正文中添加标题。</div> : props.outline.map((item) => <button key={item.id} className={item.level === 3 ? "outline-child" : ""} onMouseDown={(event) => event.preventDefault()} onClick={() => jumpToOutline(item)}>{item.title}</button>)}</div></aside>
-        <section className="paper-panel"><div className="format-bar"><button className={editor?.isActive("paragraph") ? "active-format" : ""} onClick={() => editor?.chain().focus().setParagraph().run()} title="设置为正文"><AlignLeft size={16} />正文</button><button className={editor?.isActive("heading", { level: 2 }) ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()} title="设置为标题">标题</button><button className={editor?.isActive("bold") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleBold().run()} title="加粗"><Bold size={16} />加粗</button><button className={editor?.isActive("bulletList") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleBulletList().run()} title="项目符号列表"><List size={16} />列表</button><button className={editor?.isActive("orderedList") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleOrderedList().run()} title="编号列表"><ListOrdered size={16} />编号</button><span className="format-divider" /><button onClick={() => editor?.chain().focus().decreaseIndent().run()} title="减少首行缩进"><IndentDecrease size={16} />减少首行</button><button onClick={() => editor?.chain().focus().increaseIndent().run()} title="增加首行缩进"><IndentIncrease size={16} />首行缩进</button><span className="format-divider" /><button onClick={() => changeSelectedTextCase("upper")} title="将选中文字转为大写"><Type size={16} />大写</button><button onClick={() => changeSelectedTextCase("lower")} title="将选中文字转为小写"><Type size={16} />小写</button><button onClick={() => changeSelectedTextCase("title")} title="将选中英文转为首字母大写"><Type size={16} />首字母</button><button onClick={clearSelectionFormat} title="清除当前选区格式"><Eraser size={16} />清除格式</button></div>{props.aiLoading === "正在生成正文" ? <div className="paper-loading"><LoadingProcess label={props.aiLoading} /></div> : null}<EditorContent editor={editor} /></section>
+        <section className="paper-panel">
+          <div className="format-bar">
+            <button className={viewMode === "edit" ? "active-format" : ""} onClick={() => setViewMode("edit")} title="切换到可编辑的连续视图">编辑视图</button>
+            <button className={viewMode === "page" ? "active-format" : ""} onClick={() => setViewMode("page")} title="按导出 Word 的页面尺寸预览分页">分页预览</button>
+            <span className="format-divider" />
+            <button className={editor?.isActive("paragraph") ? "active-format" : ""} onClick={() => editor?.chain().focus().setParagraph().run()} title="设置为正文"><AlignLeft size={16} />正文</button>
+            <button className={editor?.isActive("heading", { level: 2 }) ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()} title="设置为标题">标题</button>
+            <button className={editor?.isActive("bold") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleBold().run()} title="加粗"><Bold size={16} />加粗</button>
+            <button className={editor?.isActive("underline") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleUnderline().run()} title="下划线"><UnderlineIcon size={16} />下划线</button>
+            <label className="format-select" title="设置选中文字字号">
+              <Type size={16} />
+              <select defaultValue="" onChange={(event) => { if (event.target.value) applySelectedTextStyle({ "font-size": event.target.value }, "字号"); event.target.value = ""; }}>
+                <option value="">字号</option>
+                {fontSizeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+            <label className="format-select" title="设置选中文字颜色">
+              <Type size={16} />
+              <select defaultValue="" onChange={(event) => { if (event.target.value) applySelectedTextStyle({ color: event.target.value }, "颜色"); event.target.value = ""; }}>
+                <option value="">颜色</option>
+                {textColorOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+            <button className={editor?.isActive("bulletList") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleBulletList().run()} title="项目符号列表"><List size={16} />列表</button>
+            <button className={editor?.isActive("orderedList") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleOrderedList().run()} title="编号列表"><ListOrdered size={16} />编号</button>
+            <span className="format-divider" />
+            <button onClick={() => editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()} title="插入 3x3 表格"><TableIcon size={16} />表格</button>
+            <button onClick={() => editor?.chain().focus().addRowAfter().run()} disabled={!editor?.isActive("table")} title="下方插入行">加行</button>
+            <button onClick={() => editor?.chain().focus().addColumnAfter().run()} disabled={!editor?.isActive("table")} title="右侧插入列">加列</button>
+            <button onClick={() => editor?.chain().focus().deleteRow().run()} disabled={!editor?.isActive("table")} title="删除当前行">删行</button>
+            <button onClick={() => editor?.chain().focus().deleteColumn().run()} disabled={!editor?.isActive("table")} title="删除当前列">删列</button>
+            <button onClick={() => editor?.chain().focus().deleteTable().run()} disabled={!editor?.isActive("table")} title="删除表格">删表</button>
+            <button onClick={() => imageInputRef.current?.click()} title="插入图片"><ImageIcon size={16} />图片</button>
+            <input ref={imageInputRef} className="hidden-file-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={(event) => { insertImageFile(event.target.files?.[0] || null); event.currentTarget.value = ""; }} />
+            <span className="format-divider" />
+            <button onClick={() => applyParagraphAlignment("left", "左对齐")} title="左对齐"><AlignLeft size={16} /></button>
+            <button onClick={() => applyParagraphAlignment("center", "居中对齐")} title="居中对齐"><AlignCenter size={16} /></button>
+            <button onClick={() => applyParagraphAlignment("right", "右对齐")} title="右对齐"><AlignRight size={16} /></button>
+            <button onClick={() => applyParagraphAlignment("justify", "两端对齐")} title="两端对齐"><AlignJustify size={16} /></button>
+            <span className="format-divider" />
+            <button onClick={() => editor?.chain().focus().decreaseIndent().run()} title="减少首行缩进"><IndentDecrease size={16} />减少首行</button>
+            <button onClick={() => editor?.chain().focus().increaseIndent().run()} title="增加首行缩进"><IndentIncrease size={16} />首行缩进</button>
+            <span className="format-divider" />
+            <button onClick={() => changeSelectedTextCase("upper")} title="将选中文字转为大写"><Type size={16} />大写</button>
+            <button onClick={() => changeSelectedTextCase("lower")} title="将选中文字转为小写"><Type size={16} />小写</button>
+            <button onClick={() => changeSelectedTextCase("title")} title="将选中英文转为首字母大写"><Type size={16} />首字母</button>
+            <button onClick={clearSelectionFormat} title="清除当前选区格式"><Eraser size={16} />清除格式</button>
+          </div>
+          {props.aiLoading === "正在生成正文" ? <div className="paper-loading"><LoadingProcess label={props.aiLoading} /></div> : null}
+          <div className="editor-scroll">
+            <div className={viewMode === "edit" ? "editor-source" : "editor-source is-hidden"}><EditorContent editor={editor} /></div>
+            {viewMode === "page" ? (
+              <div className="paged-preview" aria-label="分页预览">
+                {previewPages.map((page, index) => (
+                  <article className="page-sheet" key={index}>
+                    <div className="page-body">
+                      {page.map((html, blockIndex) => <div className="page-block" key={`${index}-${blockIndex}`} dangerouslySetInnerHTML={{ __html: html }} />)}
+                    </div>
+                    <div className="page-number">第 {index + 1} 页 / 共 {previewPages.length} 页</div>
+                  </article>
+                ))}
+              </div>
+            ) : null}
+            <div className="pagination-measurer" ref={paginationMeasureRef} aria-hidden="true" />
+          </div>
+        </section>
         <aside className="ai-panel"><div className="section-title"><Bot size={18} /><h2>AI 助手</h2></div><div className="points-cost">生成大纲 {usageCosts.outline} 积分 · 生成正文 {usageCosts.body} 积分 · 局部编辑 {usageCosts.edit} 积分 · 导出 {usageCosts.exportDocx} 积分</div>{props.pointsEnabled ? <div className="selection-hint">当前剩余积分：{props.pointsRemaining ?? "未知"}</div> : null}<div className="selection-hint">{selectionHint}</div><button onClick={() => runSelectionAi("polish")} disabled={Boolean(props.aiLoading) || !hasSelection}><Sparkles size={17} />润色选中文本</button><button onClick={() => runSelectionAi("format")} disabled={Boolean(props.aiLoading) || !hasSelection}><ListTree size={17} />格式优化选中</button><button onClick={optimizeTitleFormat} disabled={Boolean(props.aiLoading)}><PenLine size={17} />AI标题优化</button><button onClick={() => applyAiFirstLineIndent(1)} disabled={Boolean(props.aiLoading)}><IndentIncrease size={17} />AI首行缩进</button><button onClick={() => applyAiFirstLineIndent(0)} disabled={Boolean(props.aiLoading)}><IndentDecrease size={17} />取消首行缩进</button><button onClick={() => runSelectionAi("continue")} disabled={Boolean(props.aiLoading) || !hasSelection}><Wand2 size={17} />续写选中文本</button><button onClick={() => runSelectionAi("expand")} disabled={Boolean(props.aiLoading) || !hasSelection}><AlignLeft size={17} />扩写选中文本</button><button onClick={() => runSelectionAi("shorten")} disabled={Boolean(props.aiLoading) || !hasSelection}><AlignLeft size={17} />缩写选中文本</button><button onClick={() => runSelectionAi("correct")} disabled={Boolean(props.aiLoading) || !hasSelection}><CheckCircle2 size={17} />纠错选中文本</button><button onClick={props.generateBody} disabled={Boolean(props.aiLoading)}><ListTree size={17} />根据大纲生成正文</button>{props.aiLoading ? <LoadingProcess label={props.aiLoading} compact /> : null}{props.exportStatus === "导出中" ? <LoadingProcess label="正在导出 Word" compact /> : null}{props.aiError ? <div className="ai-message error"><XCircle size={16} /><span>{props.aiError}</span></div> : null}{aiResult ? <div className="ai-result"><strong>AI 处理结果</strong><p>{aiResult.content}</p><div className="ai-result-actions"><button onClick={() => applyAiResult("replace")}>替换原文</button><button onClick={() => applyAiResult("insert")}>插入下方</button><button onClick={copyAiResult}>复制结果</button><button onClick={() => setAiResult(null)}>取消结果</button></div></div> : null}<div className="assistant-note"><strong>{props.aiStatus}</strong><span>AI 密钥仅保存在服务端；墨灵积分只会在动作成功后扣减。</span></div></aside>
       </div>
     </section>

@@ -5,12 +5,19 @@
   line-height: 1.5;
 }
 
+html,
+body,
+#root {
+  height: 100%;
+}
+
 * {
   box-sizing: border-box;
 }
 
 body {
   margin: 0;
+  overflow: hidden;
 }
 
 button,
@@ -32,7 +39,9 @@ button:disabled {
 
 .app-shell {
   display: grid;
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
   grid-template-columns: 248px 1fr;
   transition: grid-template-columns 0.18s ease;
 }
@@ -89,6 +98,10 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 28px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
   padding: 24px 18px;
   background: #ffffff;
   border-right: 1px solid #dfe5eb;
@@ -252,6 +265,19 @@ button:disabled {
 .workspace,
 .editor-page {
   padding: 28px;
+  min-width: 0;
+}
+
+.workspace {
+  height: 100vh;
+  overflow: auto;
+}
+
+.editor-page {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .topbar,
@@ -625,7 +651,9 @@ textarea {
   display: grid;
   grid-template-columns: 260px minmax(420px, 1fr) 280px;
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
   transition: grid-template-columns 0.18s ease;
 }
 
@@ -634,6 +662,7 @@ textarea {
 }
 
 .editor-toolbar {
+  flex-shrink: 0;
   margin-bottom: 16px;
 }
 
@@ -649,11 +678,19 @@ textarea {
 
 .outline-panel,
 .ai-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 100%;
   padding: 16px;
 }
 
 .outline-panel {
   overflow: hidden;
+}
+
+.ai-panel {
+  overflow-y: auto;
 }
 
 .outline-collapsed .outline-panel {
@@ -673,6 +710,12 @@ textarea {
   display: none;
 }
 
+.outline-content {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
 .outline-panel button,
 .ai-panel button {
   width: 100%;
@@ -690,6 +733,10 @@ textarea {
 }
 
 .paper-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
   position: relative;
   overflow: hidden;
 }
@@ -705,11 +752,183 @@ textarea {
 
 .format-bar {
   display: flex;
+  flex-shrink: 0;
   flex-wrap: wrap;
   gap: 8px;
   padding: 12px;
   border-bottom: 1px solid #dfe5eb;
   background: #f8fafb;
+}
+
+.editor-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.editor-source.is-hidden {
+  display: none;
+}
+
+.paged-preview {
+  display: grid;
+  justify-content: center;
+  gap: 24px;
+  min-width: max-content;
+  padding: 24px;
+  background: #e9edf1;
+}
+
+.page-sheet {
+  position: relative;
+  width: 794px;
+  min-height: 1123px;
+  background: #ffffff;
+  box-shadow: 0 12px 30px rgba(23, 33, 43, 0.18);
+}
+
+.page-body,
+.pagination-measurer {
+  width: 602px;
+  color: #17212b;
+  font-size: 14.67px;
+  line-height: 24px;
+}
+
+.page-body {
+  min-height: 931px;
+  margin: 96px;
+}
+
+.page-number {
+  position: absolute;
+  left: 96px;
+  right: 96px;
+  bottom: 34px;
+  border-top: 1px solid #edf1f4;
+  padding-top: 10px;
+  color: #87929d;
+  text-align: center;
+  font-size: 12px;
+}
+
+.page-block {
+  display: contents;
+}
+
+.page-block > * {
+  max-width: 100%;
+}
+
+.page-body .export-title,
+.pagination-measurer .export-title {
+  margin: 0 0 17.33px;
+  color: #17212b;
+  text-align: center;
+  font-size: 24px;
+  line-height: 32px;
+}
+
+.page-body p,
+.pagination-measurer p {
+  margin: 0 0 8px;
+}
+
+.page-body p[data-indent],
+.pagination-measurer p[data-indent] {
+  text-indent: calc(var(--indent-level, 0) * 2em);
+}
+
+.page-body h1,
+.page-body h2,
+.page-body h3,
+.pagination-measurer h1,
+.pagination-measurer h2,
+.pagination-measurer h3 {
+  margin: 22px 0 10px;
+  color: #17212b;
+  letter-spacing: 0;
+  line-height: 24px;
+}
+
+.page-body h1,
+.pagination-measurer h1 {
+  margin: 16px 0 8px;
+  font-size: 18.67px;
+}
+
+.page-body h2,
+.pagination-measurer h2 {
+  margin: 12px 0 6.67px;
+  font-size: 17.33px;
+}
+
+.page-body h3,
+.pagination-measurer h3 {
+  margin: 9.33px 0 6.67px;
+  font-size: 16px;
+}
+
+.page-body ul,
+.page-body ol,
+.pagination-measurer ul,
+.pagination-measurer ol {
+  margin: 0 0 8px 24px;
+  padding: 0;
+}
+
+.word-editor table,
+.page-body table,
+.pagination-measurer table {
+  width: 100%;
+  margin: 0 0 12px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.word-editor th,
+.word-editor td,
+.page-body th,
+.page-body td,
+.pagination-measurer th,
+.pagination-measurer td {
+  min-width: 72px;
+  border: 1px solid #9aa6b2;
+  padding: 6px 8px;
+  vertical-align: top;
+}
+
+.word-editor th,
+.page-body th,
+.pagination-measurer th {
+  background: #f3f6f8;
+  font-weight: 700;
+}
+
+.word-editor img,
+.page-body img,
+.pagination-measurer img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 8px auto 12px;
+}
+
+.word-editor td p,
+.word-editor th p,
+.page-body td p,
+.page-body th p,
+.pagination-measurer td p,
+.pagination-measurer th p {
+  margin-bottom: 0;
+}
+
+.pagination-measurer {
+  position: fixed;
+  left: -10000px;
+  top: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .format-divider {
@@ -724,6 +943,31 @@ textarea {
   background: #ffffff;
 }
 
+.format-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  border: 1px solid #dfe5eb;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 0 8px;
+  color: #245f55;
+  font-size: 13px;
+}
+
+.format-select select {
+  min-height: 30px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  outline: none;
+}
+
+.hidden-file-input {
+  display: none;
+}
+
 .format-bar button.active-format {
   border-color: #8dbdb2;
   color: #164f45;
@@ -731,7 +975,7 @@ textarea {
 }
 
 .word-editor {
-  min-height: calc(100vh - 158px);
+  min-height: 100%;
   border: 0;
   border-radius: 0;
   padding: 30px 42px;
@@ -967,13 +1211,29 @@ textarea {
 }
 
 @media (max-width: 980px) {
+  body {
+    overflow: auto;
+  }
+
   .app-shell {
     grid-template-columns: 1fr;
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
   }
 
   .sidebar {
     position: static;
+    height: auto;
+    overflow: visible;
     gap: 16px;
+  }
+
+  .workspace,
+  .editor-page {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
   }
 
   .side-nav {
@@ -988,6 +1248,15 @@ textarea {
   .workspace-grid,
   .editor-layout {
     grid-template-columns: 1fr;
+    overflow: visible;
+  }
+
+  .outline-panel,
+  .ai-panel,
+  .paper-panel,
+  .editor-scroll {
+    max-height: none;
+    overflow: visible;
   }
 
   .word-editor {
