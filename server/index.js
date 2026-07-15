@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import express from "express";
-import { AlignmentType, Document, Footer, Header, HeadingLevel, ImageRun, LevelFormat, LineRuleType, Packer, PageBreak as DocxPageBreak, PageNumber, PageOrientation, Paragraph, SectionType, Table, TableCell, TableRow, TextRun, WidthType } from "docx";
+import { AlignmentType, Document, Footer, Header, HeadingLevel, ImageRun, LevelFormat, LineRuleType, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, Table, TableCell, TableRow, TextRun, WidthType } from "docx";
 import { imageSize } from "image-size";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
@@ -22,7 +22,18 @@ const docxPage = {
   heightTwip: 16838
 };
 const orderedListReference = "online-ordered-list";
-const defaultPageVariant = Object.freeze({ headerText: "", footerText: "", pageNumberEnabled: false });
+const defaultPageTextStyle = Object.freeze({ alignment: "center", fontFamily: "Microsoft YaHei", fontSizePt: 9, color: "#6B7280", bold: false, italic: false });
+const defaultPageNumberTemplate = "第 {PAGE} 页 / 共 {NUMPAGES} 页";
+const defaultPageVariant = Object.freeze({
+  headerText: "",
+  headerStyle: defaultPageTextStyle,
+  footerText: "",
+  footerStyle: defaultPageTextStyle,
+  headerPageNumberTemplate: "",
+  footerPageNumberTemplate: "",
+  pageNumberEnabled: false,
+  pageNumberPosition: "footer"
+});
 const defaultPageMargins = Object.freeze({ top: 1440, right: 1440, bottom: 1440, left: 1440 });
 const defaultPageLayout = Object.freeze({
   ...defaultPageVariant,
@@ -31,6 +42,10 @@ const defaultPageLayout = Object.freeze({
   oddEvenDifferent: false,
   evenPage: defaultPageVariant,
   orientation: "portrait",
+  pageNumberFormat: "decimal",
+  pageNumberStart: null,
+  headerDistance: 708,
+  footerDistance: 708,
   margins: defaultPageMargins
 });
 
@@ -38,13 +53,48 @@ function normalizePageText(value) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, 500);
 }
 
+function normalizePageNumberTemplate(value) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, 500);
+}
+
+function normalizePageTextStyle(value, fallback = defaultPageTextStyle) {
+  const source = value && typeof value === "object" ? value : {};
+  const base = fallback && typeof fallback === "object" ? fallback : defaultPageTextStyle;
+  const fontSizePt = Number(source.fontSizePt ?? base.fontSizePt);
+  const rawColor = String(source.color ?? base.color).trim();
+  const fallbackColor = /^#?[0-9a-f]{6}$/i.test(String(base.color || "")) ? `#${String(base.color).replace("#", "").toUpperCase()}` : defaultPageTextStyle.color;
+  const fallbackFontSize = Number.isFinite(Number(base.fontSizePt)) ? Math.max(6, Math.min(Math.round(Number(base.fontSizePt) * 2) / 2, 72)) : defaultPageTextStyle.fontSizePt;
+  return {
+    alignment: ["left", "center", "right"].includes(source.alignment) ? source.alignment : (["left", "center", "right"].includes(base.alignment) ? base.alignment : "center"),
+    fontFamily: String(source.fontFamily ?? base.fontFamily ?? "Microsoft YaHei").replace(/["\\]/g, "").trim().slice(0, 100) || "Microsoft YaHei",
+    fontSizePt: Number.isFinite(fontSizePt) ? Math.max(6, Math.min(Math.round(fontSizePt * 2) / 2, 72)) : fallbackFontSize,
+    color: /^#?[0-9a-f]{6}$/i.test(rawColor) ? `#${rawColor.replace("#", "").toUpperCase()}` : fallbackColor,
+    bold: source.bold === undefined ? Boolean(base.bold) : Boolean(source.bold),
+    italic: source.italic === undefined ? Boolean(base.italic) : Boolean(source.italic)
+  };
+}
+
 function normalizePageVariant(value, fallback = defaultPageVariant) {
   const source = value && typeof value === "object" ? value : {};
   const base = fallback && typeof fallback === "object" ? fallback : defaultPageVariant;
+  const hasHeaderTemplate = Object.prototype.hasOwnProperty.call(source, "headerPageNumberTemplate");
+  const hasFooterTemplate = Object.prototype.hasOwnProperty.call(source, "footerPageNumberTemplate");
+  let headerPageNumberTemplate = hasHeaderTemplate ? normalizePageNumberTemplate(source.headerPageNumberTemplate) : normalizePageNumberTemplate(base.headerPageNumberTemplate);
+  let footerPageNumberTemplate = hasFooterTemplate ? normalizePageNumberTemplate(source.footerPageNumberTemplate) : normalizePageNumberTemplate(base.footerPageNumberTemplate);
+  if (!hasHeaderTemplate && !hasFooterTemplate && source.pageNumberEnabled !== undefined) {
+    headerPageNumberTemplate = source.pageNumberEnabled && source.pageNumberPosition === "header" ? defaultPageNumberTemplate : "";
+    footerPageNumberTemplate = source.pageNumberEnabled && source.pageNumberPosition !== "header" ? defaultPageNumberTemplate : "";
+  }
+  const pageNumberEnabled = Boolean(headerPageNumberTemplate || footerPageNumberTemplate);
   return {
     headerText: normalizePageText(source.headerText ?? base.headerText),
+    headerStyle: normalizePageTextStyle(source.headerStyle, base.headerStyle || defaultPageTextStyle),
     footerText: normalizePageText(source.footerText ?? base.footerText),
-    pageNumberEnabled: source.pageNumberEnabled === undefined ? Boolean(base.pageNumberEnabled) : Boolean(source.pageNumberEnabled)
+    footerStyle: normalizePageTextStyle(source.footerStyle, base.footerStyle || defaultPageTextStyle),
+    headerPageNumberTemplate,
+    footerPageNumberTemplate,
+    pageNumberEnabled,
+    pageNumberPosition: headerPageNumberTemplate && !footerPageNumberTemplate ? "header" : "footer"
   };
 }
 
@@ -81,6 +131,9 @@ function normalizePageLayout(value, fallback = defaultPageLayout) {
   const base = fallback && typeof fallback === "object" ? fallback : defaultPageLayout;
   const normalizedDefault = normalizePageVariant(source, base);
   const orientation = source.orientation === "landscape" ? "landscape" : (base.orientation === "landscape" ? "landscape" : "portrait");
+  const pageNumberFormats = ["decimal", "upperRoman", "lowerRoman", "upperLetter", "lowerLetter"];
+  const rawPageNumberStart = source.pageNumberStart === undefined ? base.pageNumberStart : source.pageNumberStart;
+  const pageNumberStartValue = Number(rawPageNumberStart);
   return {
     ...normalizedDefault,
     firstPageDifferent: source.firstPageDifferent === undefined ? Boolean(base.firstPageDifferent) : Boolean(source.firstPageDifferent),
@@ -88,6 +141,10 @@ function normalizePageLayout(value, fallback = defaultPageLayout) {
     oddEvenDifferent: source.oddEvenDifferent === undefined ? Boolean(base.oddEvenDifferent) : Boolean(source.oddEvenDifferent),
     evenPage: normalizePageVariant(source.evenPage, base.evenPage || defaultPageVariant),
     orientation,
+    pageNumberFormat: pageNumberFormats.includes(source.pageNumberFormat) ? source.pageNumberFormat : (pageNumberFormats.includes(base.pageNumberFormat) ? base.pageNumberFormat : "decimal"),
+    pageNumberStart: rawPageNumberStart === null || rawPageNumberStart === "" || !Number.isFinite(pageNumberStartValue) ? null : Math.max(0, Math.min(Math.round(pageNumberStartValue), 999999)),
+    headerDistance: normalizePageMargin(source.headerDistance, normalizePageMargin(base.headerDistance, 708)),
+    footerDistance: normalizePageMargin(source.footerDistance, normalizePageMargin(base.footerDistance, 708)),
     margins: normalizePageMargins(source.margins, base.margins || defaultPageMargins, orientation)
   };
 }
@@ -342,15 +399,104 @@ function wordToggleEnabled(node) {
   return !["0", "false", "none", "off"].includes(String(xmlVal(node) || "").toLowerCase());
 }
 
-function parseRunProperties(rPr) {
+function parseDocxThemeFonts(themeXml = "") {
+  if (!themeXml.trim()) return {};
+  const document = parseDocument(themeXml, { xmlMode: true });
+  const family = (name) => {
+    const node = xmlDescendants(document, name)[0];
+    const latin = firstValue(xmlChild(node, "a:latin")?.attribs, ["typeface", "a:typeface"]);
+    const eastAsia = firstValue(xmlChild(node, "a:ea")?.attribs, ["typeface", "a:typeface"]);
+    const scriptFonts = new Map(xmlChildren(node, "a:font").map((font) => [firstValue(font.attribs, ["script", "a:script"]), firstValue(font.attribs, ["typeface", "a:typeface"])]));
+    return {
+      latin,
+      eastAsia: eastAsia || scriptFonts.get("Hans") || scriptFonts.get("Hant") || scriptFonts.get("Jpan") || scriptFonts.get("Hang") || latin,
+      hans: scriptFonts.get("Hans") || eastAsia || latin,
+      hant: scriptFonts.get("Hant") || eastAsia || scriptFonts.get("Hans") || latin,
+      jpan: scriptFonts.get("Jpan") || eastAsia || latin,
+      hang: scriptFonts.get("Hang") || eastAsia || latin
+    };
+  };
+  const major = family("a:majorFont");
+  const minor = family("a:minorFont");
+  return {
+    majorAscii: major.latin,
+    majorHAnsi: major.latin,
+    majorEastAsia: major.eastAsia,
+    majorHans: major.hans,
+    majorHant: major.hant,
+    majorJpan: major.jpan,
+    majorHang: major.hang,
+    minorAscii: minor.latin,
+    minorHAnsi: minor.latin,
+    minorEastAsia: minor.eastAsia,
+    minorHans: minor.hans,
+    minorHant: minor.hant,
+    minorJpan: minor.jpan,
+    minorHang: minor.hang
+  };
+}
+
+function parseDocxThemeColors(themeXml = "") {
+  if (!themeXml.trim()) return {};
+  const document = parseDocument(themeXml, { xmlMode: true });
+  const scheme = xmlDescendants(document, "a:clrScheme")[0];
+  const colors = {};
+  for (const item of xmlChildren(scheme)) {
+    const key = item.name.replace(/^a:/, "");
+    const colorNode = xmlChildren(item)[0];
+    const primary = firstValue(colorNode?.attribs, ["val", "a:val"]);
+    const value = /^[0-9a-f]{6}$/i.test(String(primary || "")) ? primary : firstValue(colorNode?.attribs, ["lastClr", "a:lastClr"]);
+    if (/^[0-9a-f]{6}$/i.test(String(value || ""))) colors[key] = `#${String(value).toUpperCase()}`;
+  }
+  return colors;
+}
+
+function transformDocxThemeColor(color, tintValue = "", shadeValue = "") {
+  if (!/^#[0-9a-f]{6}$/i.test(String(color || ""))) return color;
+  const tint = /^[0-9a-f]{2}$/i.test(String(tintValue || "")) ? Number.parseInt(tintValue, 16) / 255 : null;
+  const shade = /^[0-9a-f]{2}$/i.test(String(shadeValue || "")) ? Number.parseInt(shadeValue, 16) / 255 : null;
+  const channels = [1, 3, 5].map((start) => Number.parseInt(color.slice(start, start + 2), 16)).map((channel) => {
+    let value = channel;
+    if (shade !== null) value *= shade;
+    if (tint !== null) value += (255 - value) * tint;
+    return Math.max(0, Math.min(Math.round(value), 255));
+  });
+  return `#${channels.map((channel) => channel.toString(16).padStart(2, "0")).join("").toUpperCase()}`;
+}
+
+function parseRunProperties(rPr, themeFonts = {}, themeColors = {}) {
   const styles = {};
   if (!rPr) return styles;
   const fonts = xmlChild(rPr, "w:rFonts");
-  const fontFamily = escapeCssString(firstValue(fonts?.attribs, ["w:eastAsia", "w:ascii", "w:hAnsi", "eastAsia", "ascii", "hAnsi"]));
+  const eastAsiaTheme = firstValue(fonts?.attribs, ["w:eastAsiaTheme", "eastAsiaTheme"]);
+  const latinTheme = firstValue(fonts?.attribs, ["w:asciiTheme", "asciiTheme", "w:hAnsiTheme", "hAnsiTheme"]);
+  const eastAsiaFont = escapeCssString(firstValue(fonts?.attribs, ["w:eastAsia", "eastAsia"]) || themeFonts[eastAsiaTheme]);
+  const latinFont = escapeCssString(firstValue(fonts?.attribs, ["w:ascii", "ascii", "w:hAnsi", "hAnsi"]) || themeFonts[latinTheme]);
+  const fontFamily = eastAsiaFont || latinFont;
+  if (eastAsiaFont) styles.$fontEastAsia = eastAsiaFont;
+  const themePrefix = String(eastAsiaTheme || "").startsWith("major") ? "major" : String(eastAsiaTheme || "").startsWith("minor") ? "minor" : "";
+  if (themePrefix) {
+    styles.$fontHans = themeFonts[`${themePrefix}Hans`] || eastAsiaFont;
+    styles.$fontHant = themeFonts[`${themePrefix}Hant`] || eastAsiaFont;
+    styles.$fontJpan = themeFonts[`${themePrefix}Jpan`] || eastAsiaFont;
+    styles.$fontHang = themeFonts[`${themePrefix}Hang`] || eastAsiaFont;
+  } else if (eastAsiaFont) {
+    styles.$fontHans = eastAsiaFont;
+    styles.$fontHant = eastAsiaFont;
+    styles.$fontJpan = eastAsiaFont;
+    styles.$fontHang = eastAsiaFont;
+  }
+  if (latinFont) styles.$fontLatin = latinFont;
+  const language = firstValue(xmlChild(rPr, "w:lang")?.attribs, ["w:eastAsia", "eastAsia"]);
+  if (language) styles.$eastAsiaLanguage = language;
   if (fontFamily) styles["font-family"] = `"${fontFamily}"`;
   const size = wordHalfPointToPt(xmlVal(xmlChild(rPr, "w:sz")));
   if (size) styles["font-size"] = size;
-  const color = wordColor(xmlVal(xmlChild(rPr, "w:color")));
+  const colorNode = xmlChild(rPr, "w:color");
+  const themeColor = themeColors[firstValue(colorNode?.attribs, ["w:themeColor", "themeColor"])];
+  const color = themeColor
+    ? transformDocxThemeColor(themeColor, firstValue(colorNode?.attribs, ["w:themeTint", "themeTint"]), firstValue(colorNode?.attribs, ["w:themeShade", "themeShade"]))
+    : wordColor(xmlVal(colorNode));
   if (color) styles.color = color;
   const bold = xmlChild(rPr, "w:b");
   const italic = xmlChild(rPr, "w:i");
@@ -367,6 +513,44 @@ function parseRunProperties(rPr) {
   if (underline) styles.$underline = wordToggleEnabled(underline) ? "1" : "0";
   if (strike) styles.$strike = wordToggleEnabled(strike) ? "1" : "0";
   return styles;
+}
+
+function wordScriptForText(text = "", styles = {}) {
+  const value = String(text);
+  const language = String(styles.$eastAsiaLanguage || "").toLowerCase();
+  if (/^[\p{Script=Latin}\p{Number}]+$/u.test(value)) return "latin";
+  if (/[\u3040-\u30ff]/u.test(value)) return "jpan";
+  if (/[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]/u.test(value)) return "hang";
+  if (/[\u3400-\u9fff\uf900-\ufaff]/u.test(value)) {
+    if (/^ja/.test(language)) return "jpan";
+    if (/^ko/.test(language)) return "hang";
+    if (/^(?:zh-(?:tw|hk|mo)|zh-hant)/.test(language) || /[測試標題體臺灣龍門學國書會來時萬與專業頁發後這還讓開關實現為]/u.test(value)) return "hant";
+    return "hans";
+  }
+  return "latin";
+}
+
+function applyWordScriptFont(styles, text = "", explicitScript = "") {
+  const script = explicitScript || wordScriptForText(text, styles);
+  const fontFamily = script === "jpan" ? (styles.$fontJpan || styles.$fontEastAsia || styles.$fontLatin)
+    : script === "hang" ? (styles.$fontHang || styles.$fontEastAsia || styles.$fontLatin)
+      : script === "hant" ? (styles.$fontHant || styles.$fontEastAsia || styles.$fontLatin)
+        : script === "hans" ? (styles.$fontHans || styles.$fontEastAsia || styles.$fontLatin)
+          : (styles.$fontLatin || styles.$fontEastAsia);
+  if (fontFamily) styles["font-family"] = `"${fontFamily}"`;
+  return styles;
+}
+
+function splitWordTextByScript(text = "", styles = {}) {
+  const segments = [];
+  for (const character of Array.from(String(text))) {
+    const isNeutral = /[\s\p{P}\p{S}]/u.test(character);
+    const script = isNeutral && segments.length ? segments[segments.length - 1].script : wordScriptForText(character, styles);
+    const current = segments[segments.length - 1];
+    if (current?.script === script) current.text += character;
+    else segments.push({ script, text: character });
+  }
+  return segments;
 }
 
 function parseParagraphProperties(pPr) {
@@ -391,13 +575,15 @@ function parseParagraphProperties(pPr) {
   return styles;
 }
 
-function parseDocxStyles(stylesXml = "") {
-  const emptyContext = { styleMap: new Map(), defaultParagraphStyleId: "", defaultParagraphStyle: { paragraph: {}, run: {} } };
+function parseDocxStyles(stylesXml = "", themeXml = "") {
+  const themeFonts = parseDocxThemeFonts(themeXml);
+  const themeColors = parseDocxThemeColors(themeXml);
+  const emptyContext = { styleMap: new Map(), defaultParagraphStyleId: "", defaultParagraphStyle: { paragraph: {}, run: {} }, themeFonts, themeColors };
   if (!stylesXml.trim()) return emptyContext;
   const document = parseDocument(stylesXml, { xmlMode: true });
   const docDefaults = xmlDescendants(document, "w:docDefaults")[0];
   const defaultParagraph = parseParagraphProperties(xmlChild(xmlChild(docDefaults, "w:pPrDefault"), "w:pPr"));
-  const defaultRun = parseRunProperties(xmlChild(xmlChild(docDefaults, "w:rPrDefault"), "w:rPr"));
+  const defaultRun = parseRunProperties(xmlChild(xmlChild(docDefaults, "w:rPrDefault"), "w:rPr"), themeFonts, themeColors);
   const rawStyles = new Map();
   let defaultParagraphStyleId = "";
 
@@ -413,7 +599,7 @@ function parseDocxStyles(stylesXml = "") {
       name: xmlVal(xmlChild(styleNode, "w:name")) || styleId,
       basedOn: xmlVal(xmlChild(styleNode, "w:basedOn")),
       paragraph: parseParagraphProperties(pPr),
-      run: parseRunProperties(rPr)
+      run: parseRunProperties(rPr, themeFonts, themeColors)
     });
   }
 
@@ -439,7 +625,7 @@ function parseDocxStyles(stylesXml = "") {
   const defaultParagraphStyle = defaultParagraphStyleId
     ? resolveStyle(defaultParagraphStyleId)
     : { paragraph: defaultParagraph, run: defaultRun };
-  return { styleMap, defaultParagraphStyleId, defaultParagraphStyle };
+  return { styleMap, defaultParagraphStyleId, defaultParagraphStyle, themeFonts, themeColors };
 }
 
 function parseDocxNumbering(numberingXml = "") {
@@ -584,22 +770,29 @@ function docxParagraphTag(style = {}) {
   return "p";
 }
 
-async function docxRunToHtml(runNode, inheritedRunStyles = {}, zip = null, relationships = new Map()) {
+async function docxRunToHtml(runNode, inheritedRunStyles = {}, context = {}) {
+  const { zip = null, relationships = new Map(), styleMap = new Map(), themeFonts = {}, themeColors = {} } = context;
   const text = docxTextFromRun(runNode);
   const imageHtml = zip ? (await docxImagesFromRun(runNode, zip, relationships)).join("") : "";
   const pageBreaks = docxPageBreaksFromRun(runNode);
   if (!text && !imageHtml && !pageBreaks) return "";
-  const runStyles = { ...inheritedRunStyles, ...parseRunProperties(xmlChild(runNode, "w:rPr")) };
-  // 中文注解：Word 可在当前文本显式关闭继承样式，内部开关为 0 时要同步移除父样式的 CSS 表达。
-  if (runStyles.$bold === "0") delete runStyles["font-weight"];
-  if (runStyles.$italic === "0") delete runStyles["font-style"];
-  let html = escapeHtml(text).replace(/\n/g, "<br>");
-  if (runStyles.$underline === "1") html = `<u>${html}</u>`;
-  if (runStyles.$italic === "1" || runStyles["font-style"] === "italic") html = `<em>${html}</em>`;
-  if (runStyles.$bold === "1" || runStyles["font-weight"] === "bold") html = `<strong>${html}</strong>`;
-  if (runStyles.$strike === "1") html = `<s>${html}</s>`;
-  const style = cssText(runStyles);
-  const textHtml = style && html ? `<span style="${escapeHtml(style)}">${html}</span>` : html;
+  const runProperties = xmlChild(runNode, "w:rPr");
+  const characterStyleId = xmlVal(xmlChild(runProperties, "w:rStyle"));
+  const characterStyle = styleMap.get(characterStyleId) || { run: {} };
+  const baseRunStyles = { ...inheritedRunStyles, ...(characterStyle.run || {}), ...parseRunProperties(runProperties, themeFonts, themeColors) };
+  const textHtml = splitWordTextByScript(text, baseRunStyles).map((segment) => {
+    const runStyles = applyWordScriptFont({ ...baseRunStyles }, segment.text, segment.script);
+    // 中文注解：同一个 Word run 可同时定义西文和东亚字体，按脚本拆成相邻 span 后在线显示和再次导出才能保留混排。
+    if (runStyles.$bold === "0") delete runStyles["font-weight"];
+    if (runStyles.$italic === "0") delete runStyles["font-style"];
+    let html = escapeHtml(segment.text).replace(/\n/g, "<br>");
+    if (runStyles.$underline === "1") html = `<u>${html}</u>`;
+    if (runStyles.$italic === "1" || runStyles["font-style"] === "italic") html = `<em>${html}</em>`;
+    if (runStyles.$bold === "1" || runStyles["font-weight"] === "bold") html = `<strong>${html}</strong>`;
+    if (runStyles.$strike === "1") html = `<s>${html}</s>`;
+    const style = cssText(runStyles);
+    return style && html ? `<span style="${escapeHtml(style)}">${html}</span>` : html;
+  }).join("");
   return `${textHtml}${imageHtml}${pageBreaks}`;
 }
 
@@ -611,7 +804,7 @@ async function parseStyledDocxParagraph(paragraphNode, context) {
   const style = { id: effectiveStyleId, ...(styleMap.get(effectiveStyleId) || defaultParagraphStyle) };
   const paragraphStyles = { ...(style.paragraph || {}), ...parseParagraphProperties(pPr) };
   const inheritedRunStyles = style.run || {};
-  const body = (await Promise.all(xmlChildren(paragraphNode, "w:r").map((run) => docxRunToHtml(run, inheritedRunStyles, zip, relationships)))).join("") || "<br>";
+  const body = (await Promise.all(xmlChildren(paragraphNode, "w:r").map((run) => docxRunToHtml(run, inheritedRunStyles, context)))).join("") || "<br>";
   const tag = docxParagraphTag(style);
   const list = docxListInfo(pPr, style, numbering);
   const indentLevel = wordTwipToIndentLevel(firstValue(xmlChild(pPr, "w:ind")?.attribs, ["w:firstLine", "firstLine"]));
@@ -718,9 +911,10 @@ async function parseStyledDocxToHtml(buffer, sectionLayouts = [], sectionBreakTy
   const documentXml = await zip.file("word/document.xml")?.async("string");
   if (!documentXml) return "";
   const stylesXml = await zip.file("word/styles.xml")?.async("string");
+  const themeXml = await zip.file("word/theme/theme1.xml")?.async("string");
   const numberingXml = await zip.file("word/numbering.xml")?.async("string");
   const relsXml = await zip.file("word/_rels/document.xml.rels")?.async("string");
-  const styleContext = parseDocxStyles(stylesXml || "");
+  const styleContext = parseDocxStyles(stylesXml || "", themeXml || "");
   const numbering = parseDocxNumbering(numberingXml || "");
   const relationships = parseDocxRelationships(relsXml || "");
   const context = { ...styleContext, numbering, zip, relationships };
@@ -763,14 +957,108 @@ async function parseStyledDocxToHtml(buffer, sectionLayouts = [], sectionBreakTy
   return chunks.join("");
 }
 
-function docxPartPlainText(xml = "") {
+function docxPartTextTemplate(xml = "") {
   if (!xml.trim()) return "";
   const document = parseDocument(xml, { xmlMode: true });
+  const textWithFields = (node, state = { fields: [] }) => {
+    if (!node) return "";
+    if (node.type === "tag" && node.name === "w:fldSimple") {
+      const instruction = firstValue(node.attribs, ["w:instr", "instr"]);
+      const placeholder = pageFieldPlaceholder(instruction);
+      if (placeholder) return placeholder;
+      return xmlDescendants(node, "w:t").map((textNode) => (textNode.children || []).map((child) => child.data || "").join("")).join("");
+    }
+    if (node.type === "tag" && node.name === "w:fldChar") {
+      const type = firstValue(node.attribs, ["w:fldCharType", "fldCharType"]);
+      if (type === "begin") state.fields.push({ instruction: "", phase: "code", emitted: false });
+      if (type === "separate" && state.fields.length) {
+        const field = state.fields[state.fields.length - 1];
+        field.phase = "result";
+        const placeholder = pageFieldPlaceholder(field.instruction);
+        if (placeholder) {
+          field.emitted = true;
+          return placeholder;
+        }
+      }
+      if (type === "end" && state.fields.length) {
+        const field = state.fields.pop();
+        const placeholder = pageFieldPlaceholder(field.instruction);
+        if (!field.emitted && placeholder) return placeholder;
+      }
+      return "";
+    }
+    if (node.type === "tag" && node.name === "w:instrText") {
+      if (state.fields.length) state.fields[state.fields.length - 1].instruction += (node.children || []).map((child) => child.data || "").join("");
+      return "";
+    }
+    if (node.type === "tag" && node.name === "w:t") {
+      const text = (node.children || []).map((child) => child.data || "").join("");
+      if (!state.fields.length) return text;
+      const field = state.fields[state.fields.length - 1];
+      return field.phase === "result" && !isPageNumberFieldInstruction(field.instruction) ? text : "";
+    }
+    if (node.type === "tag" && node.name === "w:tab" && !state.fields.length) return "\t";
+    return (node.children || []).map((child) => textWithFields(child, state)).join("");
+  };
   return xmlDescendants(document, "w:p")
-    .map((paragraph) => xmlDescendants(paragraph, "w:r").map(docxTextFromRun).join(""))
-    .map(normalizePageText)
+    // 中文注解：页码域转换为稳定占位符，其他动态域保留缓存显示值，避免旧页码与新页码叠加。
+    .map((paragraph) => textWithFields(paragraph))
+    .map(normalizePageNumberTemplate)
     .filter(Boolean)
     .join(" ");
+}
+
+function docxPartPlainText(xml = "") {
+  return normalizePageText(docxPartTextTemplate(xml).replaceAll("{PAGE}", "").replaceAll("{NUMPAGES}", ""));
+}
+
+function resolvedDocxPageTextStyle(paragraph, run, styleContext, fallback = defaultPageTextStyle) {
+  const context = styleContext || { styleMap: new Map(), defaultParagraphStyle: { paragraph: {}, run: {} }, themeFonts: {} };
+  const paragraphStyleId = xmlVal(xmlChild(xmlChild(paragraph, "w:pPr"), "w:pStyle"));
+  const paragraphStyle = context.styleMap.get(paragraphStyleId) || context.defaultParagraphStyle || { paragraph: {}, run: {} };
+  const runStyleId = xmlVal(xmlChild(xmlChild(run, "w:rPr"), "w:rStyle"));
+  const characterStyle = context.styleMap.get(runStyleId) || { paragraph: {}, run: {} };
+  const paragraphProperties = {
+    ...(paragraphStyle.paragraph || {}),
+    ...parseParagraphProperties(xmlChild(paragraph, "w:pPr"))
+  };
+  const runProperties = {
+    ...(paragraphStyle.run || {}),
+    ...(characterStyle.run || {}),
+    ...parseRunProperties(xmlChild(run, "w:rPr"), context.themeFonts || {}, context.themeColors || {})
+  };
+  applyWordScriptFont(runProperties, docxTextFromRun(run));
+  const fontSizePt = Number.parseFloat(String(runProperties["font-size"] || ""));
+  return normalizePageTextStyle({
+    alignment: ["left", "center", "right"].includes(paragraphProperties["text-align"]) ? paragraphProperties["text-align"] : fallback.alignment,
+    fontFamily: String(runProperties["font-family"] || fallback.fontFamily).replace(/["']/g, ""),
+    fontSizePt: Number.isFinite(fontSizePt) ? fontSizePt : fallback.fontSizePt,
+    color: runProperties.color || fallback.color,
+    bold: runProperties.$bold === undefined ? fallback.bold : runProperties.$bold === "1",
+    italic: runProperties.$italic === undefined ? fallback.italic : runProperties.$italic === "1"
+  }, fallback);
+}
+
+function parseDocxPageTextStyle(xml = "", fallback = defaultPageTextStyle, styleContext = null) {
+  if (!xml.trim()) return normalizePageTextStyle(fallback);
+  const document = parseDocument(xml, { xmlMode: true });
+  const paragraph = xmlDescendants(document, "w:p")[0];
+  const styledRun = xmlDescendants(paragraph, "w:r").find((run) => docxTextFromRun(run).trim()) || xmlDescendants(paragraph, "w:r")[0];
+  return resolvedDocxPageTextStyle(paragraph, styledRun, styleContext, fallback);
+}
+
+function docxPartHasMixedTextStyles(xml = "", styleContext = null) {
+  if (!xml.trim()) return false;
+  const document = parseDocument(xml, { xmlMode: true });
+  const signatures = new Set();
+  for (const paragraph of xmlDescendants(document, "w:p")) {
+    const alignment = firstValue(xmlChild(xmlChild(paragraph, "w:pPr"), "w:jc")?.attribs, ["w:val", "val"]) || "center";
+    for (const run of xmlDescendants(paragraph, "w:r")) {
+      if (!docxTextFromRun(run).trim()) continue;
+      signatures.add(JSON.stringify(resolvedDocxPageTextStyle(paragraph, run, styleContext)));
+    }
+  }
+  return signatures.size > 1;
 }
 
 function wordOnOffEnabled(node) {
@@ -779,20 +1067,90 @@ function wordOnOffEnabled(node) {
   return !["0", "false", "off", "no"].includes(value);
 }
 
-function parseDocxPageVariant(headerXml = "", footerXml = "") {
-  const pageNumberEnabled = /(?:<w:instrText[^>]*>[^<]*(?:PAGE|NUMPAGES)|<w:fldSimple[^>]+w:instr="[^"]*(?:PAGE|NUMPAGES))/i.test(footerXml);
-  const footerText = docxPartPlainText(footerXml)
-    .replace(/(?:\s*[·|]\s*)?第\s*页\s*\/\s*共\s*页/gu, "")
-    .trim();
-  return normalizePageVariant({ headerText: docxPartPlainText(headerXml), footerText, pageNumberEnabled });
+function docxFieldInstructions(xml = "") {
+  if (!String(xml).trim()) return [];
+  const document = parseDocument(xml, { xmlMode: true });
+  const instructions = [];
+  const fields = [];
+  const walk = (node) => {
+    if (!node) return;
+    if (node.type === "tag" && node.name === "w:fldSimple") {
+      const instruction = firstValue(node.attribs, ["w:instr", "instr"]);
+      if (instruction) instructions.push(instruction);
+      return;
+    }
+    if (node.type === "tag" && node.name === "w:fldChar") {
+      const type = firstValue(node.attribs, ["w:fldCharType", "fldCharType"]);
+      if (type === "begin") fields.push({ instruction: "", emitted: false });
+      if (type === "separate" && fields.length) {
+        const field = fields[fields.length - 1];
+        if (!field.emitted && field.instruction.trim()) instructions.push(field.instruction);
+        field.emitted = true;
+      }
+      if (type === "end" && fields.length) {
+        const field = fields.pop();
+        if (!field.emitted && field.instruction.trim()) instructions.push(field.instruction);
+      }
+      return;
+    }
+    if (node.type === "tag" && node.name === "w:instrText") {
+      const value = (node.children || []).map((child) => child.data || "").join("");
+      if (fields.length) fields[fields.length - 1].instruction += value;
+      else if (value.trim()) instructions.push(value);
+      return;
+    }
+    for (const child of node.children || []) walk(child);
+  };
+  walk(document);
+  return instructions;
 }
 
-function parseDocxPageVariantParts(headerPart, footerPart, fallback = defaultPageVariant) {
-  const parsed = parseDocxPageVariant(headerPart.xml || "", footerPart.xml || "");
+function isPageNumberFieldInstruction(instruction = "") {
+  const command = String(instruction).trim().split(/\s+/)[0]?.toUpperCase();
+  return command === "PAGE" || command === "NUMPAGES";
+}
+
+function pageFieldPlaceholder(instruction = "") {
+  if (!isPageNumberFieldInstruction(instruction)) return "";
+  const command = String(instruction).trim().split(/\s+/)[0].toUpperCase();
+  const switchValue = String(instruction).match(/\\\*\s+(ROMAN|roman|ALPHABETIC|alphabetic|Arabic)\b/)?.[1] || "";
+  const formatMap = { ROMAN: "upperRoman", roman: "lowerRoman", ALPHABETIC: "upperLetter", alphabetic: "lowerLetter", Arabic: "decimal" };
+  return `{${command}${switchValue ? `:${formatMap[switchValue]}` : ""}}`;
+}
+
+function parseDocxPageVariant(headerXml = "", footerXml = "", styleContext = null) {
+  const headerPageNumberEnabled = docxFieldInstructions(headerXml).some(isPageNumberFieldInstruction);
+  const footerPageNumberEnabled = docxFieldInstructions(footerXml).some(isPageNumberFieldInstruction);
+  const headerTemplate = docxPartTextTemplate(headerXml);
+  const footerTemplate = docxPartTextTemplate(footerXml);
+  const splitGeneratedTemplate = (template, enabled) => {
+    if (!enabled) return { text: template, pageTemplate: "" };
+    const separatorIndex = template.lastIndexOf(" · ");
+    return separatorIndex > 0
+      ? { text: template.slice(0, separatorIndex).trim(), pageTemplate: template.slice(separatorIndex + 3).trim() }
+      : { text: "", pageTemplate: template };
+  };
+  const headerParts = splitGeneratedTemplate(headerTemplate, headerPageNumberEnabled);
+  const footerParts = splitGeneratedTemplate(footerTemplate, footerPageNumberEnabled);
+  return normalizePageVariant({
+    headerText: headerParts.text,
+    headerStyle: parseDocxPageTextStyle(headerXml, defaultPageTextStyle, styleContext),
+    footerText: footerParts.text,
+    footerStyle: parseDocxPageTextStyle(footerXml, defaultPageTextStyle, styleContext),
+    headerPageNumberTemplate: headerParts.pageTemplate,
+    footerPageNumberTemplate: footerParts.pageTemplate
+  });
+}
+
+function parseDocxPageVariantParts(headerPart, footerPart, fallback = defaultPageVariant, styleContext = null) {
+  const parsed = parseDocxPageVariant(headerPart.xml || "", footerPart.xml || "", styleContext);
   return normalizePageVariant({
     headerText: headerPart.present ? parsed.headerText : fallback.headerText,
+    headerStyle: headerPart.present ? parsed.headerStyle : fallback.headerStyle,
     footerText: footerPart.present ? parsed.footerText : fallback.footerText,
-    pageNumberEnabled: footerPart.present ? parsed.pageNumberEnabled : fallback.pageNumberEnabled
+    footerStyle: footerPart.present ? parsed.footerStyle : fallback.footerStyle,
+    headerPageNumberTemplate: headerPart.present ? parsed.headerPageNumberTemplate : fallback.headerPageNumberTemplate,
+    footerPageNumberTemplate: footerPart.present ? parsed.footerPageNumberTemplate : fallback.footerPageNumberTemplate
   }, fallback);
 }
 
@@ -802,6 +1160,9 @@ function parseDocxPageGeometry(section, fallback = defaultPageLayout) {
   const width = Number(firstValue(pageSize?.attribs, ["w:w", "w", "width"]));
   const height = Number(firstValue(pageSize?.attribs, ["w:h", "h", "height"]));
   const explicitOrientation = firstValue(pageSize?.attribs, ["w:orient", "orient"]);
+  const pageNumberType = xmlChild(section, "w:pgNumType");
+  const pageNumberFormat = firstValue(pageNumberType?.attribs, ["w:fmt", "fmt"]);
+  const pageNumberStart = firstValue(pageNumberType?.attribs, ["w:start", "start"]);
   const orientation = explicitOrientation === "landscape" || (!explicitOrientation && width > height)
     ? "landscape"
     : (pageSize ? "portrait" : fallback.orientation);
@@ -811,6 +1172,10 @@ function parseDocxPageGeometry(section, fallback = defaultPageLayout) {
   };
   return {
     orientation,
+    pageNumberFormat: ["decimal", "upperRoman", "lowerRoman", "upperLetter", "lowerLetter"].includes(pageNumberFormat) ? pageNumberFormat : fallback.pageNumberFormat,
+    pageNumberStart: pageNumberStart === "" ? null : Number(pageNumberStart),
+    headerDistance: normalizePageMargin(marginValue("header"), fallback.headerDistance ?? 708),
+    footerDistance: normalizePageMargin(marginValue("footer"), fallback.footerDistance ?? 708),
     margins: normalizePageMargins({
       top: marginValue("top"),
       right: marginValue("right"),
@@ -826,6 +1191,9 @@ async function parseDocxPageLayout(buffer) {
   const relationshipsXml = await zip.file("word/_rels/document.xml.rels")?.async("string");
   if (!documentXml) return { pageLayout: normalizePageLayout(defaultPageLayout), sectionLayouts: [normalizePageLayout(defaultPageLayout)], sectionBreakTypes: [], warnings: [] };
   const relationships = parseDocxRelationships(relationshipsXml || "");
+  const stylesXml = await zip.file("word/styles.xml")?.async("string") || "";
+  const themeXml = await zip.file("word/theme/theme1.xml")?.async("string") || "";
+  const styleContext = parseDocxStyles(stylesXml, themeXml);
   const document = parseDocument(documentXml, { xmlMode: true });
   const sections = xmlDescendants(document, "w:sectPr");
   const settingsXml = await zip.file("word/settings.xml")?.async("string") || "";
@@ -859,20 +1227,23 @@ async function parseDocxPageLayout(buffer) {
       readReferencedPart(section, "w:footerReference", "even")
     ]) : Array.from({ length: 6 }, () => ({ present: false, xml: "" }));
     pageParts.push(defaultHeader.xml, defaultFooter.xml, firstHeader.xml, firstFooter.xml, evenHeader.xml, evenFooter.xml);
-    const geometry = section ? parseDocxPageGeometry(section, fallback) : { orientation: fallback.orientation, margins: fallback.margins };
+    const geometry = section ? parseDocxPageGeometry(section, fallback) : { orientation: fallback.orientation, pageNumberFormat: fallback.pageNumberFormat, pageNumberStart: fallback.pageNumberStart, headerDistance: fallback.headerDistance, footerDistance: fallback.footerDistance, margins: fallback.margins };
     sectionLayouts.push(normalizePageLayout({
-      ...parseDocxPageVariantParts(defaultHeader, defaultFooter, fallback),
+      ...parseDocxPageVariantParts(defaultHeader, defaultFooter, fallback, styleContext),
       firstPageDifferent: section ? wordOnOffEnabled(xmlChild(section, "w:titlePg")) : fallback.firstPageDifferent,
-      firstPage: parseDocxPageVariantParts(firstHeader, firstFooter, fallback.firstPage),
+      firstPage: parseDocxPageVariantParts(firstHeader, firstFooter, fallback.firstPage, styleContext),
       oddEvenDifferent,
-      evenPage: parseDocxPageVariantParts(evenHeader, evenFooter, fallback.evenPage),
+      evenPage: parseDocxPageVariantParts(evenHeader, evenFooter, fallback.evenPage, styleContext),
       ...geometry
     }, fallback));
   }
 
   // 中文注解：当前页面模型只保存纯文本；只要发现字体、字号、颜色、对齐或其他富格式，就明确提示用户可能丢失样式。
-  const hasRichHeaderFooter = /<w:(?:drawing|pict|tbl|shd|tabs|rFonts|color|sz|jc|b|i|u|strike)\b/i.test(pageParts.join(""));
+  const hasUnsupportedHeaderFooter = /<w:(?:drawing|pict|tbl|shd|tabs|u|strike|vertAlign)\b/i.test(pageParts.join(""));
   const hasMultipleParagraphs = pageParts.some((xml) => (xml.match(/<w:p(?:\s|>)/g) || []).length > 1);
+  const hasMixedHeaderFooterStyles = pageParts.some((xml) => docxPartHasMixedTextStyles(xml, styleContext));
+  const dynamicFieldInstructions = pageParts.flatMap(docxFieldInstructions);
+  const hasFlattenedDynamicFields = dynamicFieldInstructions.some((instruction) => !isPageNumberFieldInstruction(instruction));
   const warnings = [];
   if (rawSectionBreakTypes.some((type) => !["nextPage", "continuous", "oddPage", "evenPage"].includes(type))) {
     warnings.push("文档包含暂不支持的分栏分节符，已按下一页分节符恢复；其他分节类型已保留。");
@@ -880,7 +1251,8 @@ async function parseDocxPageLayout(buffer) {
   if (rawSectionBreakTypes.includes("continuous")) {
     warnings.push("文档包含连续分节符；为确保在线分页与导出结果一致，已按下一页分节符恢复。");
   }
-  if (hasRichHeaderFooter || hasMultipleParagraphs) warnings.push("页眉页脚中的图片、多段落或富文本格式暂未恢复，已保留各页面类型的纯文本和页码。");
+  if (hasUnsupportedHeaderFooter || hasMultipleParagraphs || hasMixedHeaderFooterStyles) warnings.push("页眉页脚中的图片、多段落、混合字符样式或高级格式暂未完整恢复；基础字体、字号、颜色、加粗、斜体、对齐和页码已保留。");
+  if (hasFlattenedDynamicFields) warnings.push("页眉页脚中的日期、文件名或其他动态域已按当前显示值恢复为普通文字，再次导出后不会自动更新。");
   // 中文注解：首节保存在文档页面设置中，后续节由正文分节节点携带，编辑、预览和再次导出共用同一顺序。
   return {
     pageLayout: sectionLayouts[0] || normalizePageLayout(defaultPageLayout),
@@ -1473,18 +1845,48 @@ function createDocxStyles(templateStyle = {}) {
 
 function createDocxHeaderFooter(pageLayout, templateStyle = {}, forceDefault = false, forceEven = false) {
   const layout = normalizePageLayout(pageLayout);
-  const runStyle = { font: templateStyle.fontFamily || "Microsoft YaHei", size: 18, color: "6B7280" };
+  const alignmentMap = { left: AlignmentType.LEFT, center: AlignmentType.CENTER, right: AlignmentType.RIGHT };
+  const docxTextStyle = (style) => {
+    const normalized = normalizePageTextStyle(style, { ...defaultPageTextStyle, fontFamily: templateStyle.fontFamily || defaultPageTextStyle.fontFamily });
+    return {
+      alignment: alignmentMap[normalized.alignment] || AlignmentType.CENTER,
+      run: {
+        font: normalized.fontFamily,
+        size: Math.round(normalized.fontSizePt * 2),
+        color: normalized.color.slice(1),
+        bold: normalized.bold,
+        italics: normalized.italic
+      }
+    };
+  };
+  const pageNumberChildren = (template, runStyle) => String(template || "").split(/(\{(?:PAGE|NUMPAGES)(?::(?:decimal|upperRoman|lowerRoman|upperLetter|lowerLetter))?\})/g).filter(Boolean).map((part) => {
+    const field = part.match(/^\{(PAGE|NUMPAGES)(?::(decimal|upperRoman|lowerRoman|upperLetter|lowerLetter))?\}$/);
+    if (field) {
+      const switchMap = { decimal: "Arabic", upperRoman: "ROMAN", lowerRoman: "roman", upperLetter: "ALPHABETIC", lowerLetter: "alphabetic" };
+      const simpleField = new SimpleField(`${field[1]}${field[2] ? ` \\* ${switchMap[field[2]]}` : ""}`);
+      // 中文注解：字段必须与文本 run 同级；缓存 run 复用页眉页脚格式，确保 Word 更新域前后样式一致。
+      simpleField.addChildElement(new TextRun({ text: "1", ...runStyle }));
+      return simpleField;
+    }
+    return new TextRun({ text: part, ...runStyle });
+  });
   const createHeader = (variant, force = false) => {
-    if (!force && !variant.headerText) return undefined;
-    return new Header({ children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: variant.headerText, ...runStyle })] })] });
+    const style = docxTextStyle(variant.headerStyle);
+    const headerChildren = [];
+    if (variant.headerText) headerChildren.push(new TextRun({ text: variant.headerText, ...style.run }));
+    if (variant.headerText && variant.headerPageNumberTemplate) headerChildren.push(new TextRun({ text: " · ", ...style.run }));
+    headerChildren.push(...pageNumberChildren(variant.headerPageNumberTemplate, style.run));
+    if (!force && !headerChildren.length) return undefined;
+    return new Header({ children: [new Paragraph({ alignment: style.alignment, children: headerChildren })] });
   };
   const createFooter = (variant, force = false) => {
+    const style = docxTextStyle(variant.footerStyle);
     const footerChildren = [];
-    if (variant.footerText) footerChildren.push(variant.footerText);
-    if (variant.footerText && variant.pageNumberEnabled) footerChildren.push(" · ");
-    if (variant.pageNumberEnabled) footerChildren.push("第 ", PageNumber.CURRENT, " 页 / 共 ", PageNumber.TOTAL_PAGES, " 页");
+    if (variant.footerText) footerChildren.push(new TextRun({ text: variant.footerText, ...style.run }));
+    if (variant.footerText && variant.footerPageNumberTemplate) footerChildren.push(new TextRun({ text: " · ", ...style.run }));
+    footerChildren.push(...pageNumberChildren(variant.footerPageNumberTemplate, style.run));
     if (!force && !footerChildren.length) return undefined;
-    return new Footer({ children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ children: footerChildren, ...runStyle })] })] });
+    return new Footer({ children: [new Paragraph({ alignment: style.alignment, children: footerChildren })] });
   };
 
   const headers = {
@@ -1522,7 +1924,11 @@ function createDocxSectionProperties(pageLayout, isFirstSection, breakType = "ne
         height: docxPage.heightTwip,
         orientation: layout.orientation === "landscape" ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT
       },
-      margin: layout.margins
+      margin: { ...layout.margins, header: layout.headerDistance, footer: layout.footerDistance },
+      pageNumbers: {
+        ...(layout.pageNumberStart !== null ? { start: layout.pageNumberStart } : {}),
+        formatType: layout.pageNumberFormat
+      }
     }
   };
 }

@@ -60,7 +60,24 @@ type EditorViewMode = "edit" | "page";
 type ParagraphSpacingProperty = "line-height" | "margin-top" | "margin-bottom" | "--word-line-rule";
 type ParagraphSpacingStyles = Partial<Record<ParagraphSpacingProperty, string>>;
 type FormatSelectOption = { label: string; value: string };
-type DocumentPageVariant = { headerText: string; footerText: string; pageNumberEnabled: boolean };
+type DocumentPageTextStyle = {
+  alignment: "left" | "center" | "right";
+  fontFamily: string;
+  fontSizePt: number;
+  color: string;
+  bold: boolean;
+  italic: boolean;
+};
+type DocumentPageVariant = {
+  headerText: string;
+  headerStyle: DocumentPageTextStyle;
+  footerText: string;
+  footerStyle: DocumentPageTextStyle;
+  headerPageNumberTemplate: string;
+  footerPageNumberTemplate: string;
+  pageNumberEnabled: boolean;
+  pageNumberPosition: "header" | "footer";
+};
 type DocumentPageMargins = { top: number; right: number; bottom: number; left: number };
 type SectionBreakType = "nextPage" | "oddPage" | "evenPage";
 type DocumentPageLayout = DocumentPageVariant & {
@@ -69,9 +86,24 @@ type DocumentPageLayout = DocumentPageVariant & {
   oddEvenDifferent: boolean;
   evenPage: DocumentPageVariant;
   orientation: "portrait" | "landscape";
+  pageNumberFormat: "decimal" | "upperRoman" | "lowerRoman" | "upperLetter" | "lowerLetter";
+  pageNumberStart: number | null;
+  headerDistance: number;
+  footerDistance: number;
   margins: DocumentPageMargins;
 };
-const defaultDocumentPageVariant: DocumentPageVariant = { headerText: "", footerText: "", pageNumberEnabled: false };
+const defaultDocumentPageTextStyle: DocumentPageTextStyle = { alignment: "center", fontFamily: "Microsoft YaHei", fontSizePt: 9, color: "#6B7280", bold: false, italic: false };
+const defaultDocumentPageNumberTemplate = "第 {PAGE} 页 / 共 {NUMPAGES} 页";
+const defaultDocumentPageVariant: DocumentPageVariant = {
+  headerText: "",
+  headerStyle: { ...defaultDocumentPageTextStyle },
+  footerText: "",
+  footerStyle: { ...defaultDocumentPageTextStyle },
+  headerPageNumberTemplate: "",
+  footerPageNumberTemplate: "",
+  pageNumberEnabled: false,
+  pageNumberPosition: "footer"
+};
 const defaultDocumentPageMargins: DocumentPageMargins = { top: 1440, right: 1440, bottom: 1440, left: 1440 };
 const a4PageTwip = { width: 11906, height: 16838 };
 const defaultDocumentPageLayout: DocumentPageLayout = {
@@ -81,14 +113,46 @@ const defaultDocumentPageLayout: DocumentPageLayout = {
   oddEvenDifferent: false,
   evenPage: { ...defaultDocumentPageVariant },
   orientation: "portrait",
+  pageNumberFormat: "decimal",
+  pageNumberStart: null,
+  headerDistance: 708,
+  footerDistance: 708,
   margins: { ...defaultDocumentPageMargins }
 };
 
-function normalizeDocumentPageVariant(value: Partial<DocumentPageVariant> | null | undefined): DocumentPageVariant {
+function normalizeDocumentPageTextStyle(value: Partial<DocumentPageTextStyle> | null | undefined, fallback = defaultDocumentPageTextStyle): DocumentPageTextStyle {
+  const fontSizePt = Number(value?.fontSizePt ?? fallback.fontSizePt);
+  const color = String(value?.color ?? fallback.color);
   return {
-    headerText: String(value?.headerText || ""),
-    footerText: String(value?.footerText || ""),
-    pageNumberEnabled: Boolean(value?.pageNumberEnabled)
+    alignment: ["left", "center", "right"].includes(String(value?.alignment)) ? value!.alignment! : fallback.alignment,
+    fontFamily: String(value?.fontFamily ?? fallback.fontFamily).replace(/["\\]/g, "").trim().slice(0, 100) || defaultDocumentPageTextStyle.fontFamily,
+    fontSizePt: Number.isFinite(fontSizePt) ? Math.max(6, Math.min(Math.round(fontSizePt * 2) / 2, 72)) : fallback.fontSizePt,
+    color: /^#?[0-9a-f]{6}$/i.test(color) ? `#${color.replace("#", "").toUpperCase()}` : fallback.color,
+    bold: value?.bold === undefined ? fallback.bold : Boolean(value.bold),
+    italic: value?.italic === undefined ? fallback.italic : Boolean(value.italic)
+  };
+}
+
+function normalizeDocumentPageVariant(value: Partial<DocumentPageVariant> | null | undefined, fallback = defaultDocumentPageVariant): DocumentPageVariant {
+  const source = value || {};
+  const hasHeaderTemplate = Object.prototype.hasOwnProperty.call(source, "headerPageNumberTemplate");
+  const hasFooterTemplate = Object.prototype.hasOwnProperty.call(source, "footerPageNumberTemplate");
+  let headerPageNumberTemplate = hasHeaderTemplate ? String(source.headerPageNumberTemplate || "").replace(/\s+/g, " ").trim().slice(0, 500) : fallback.headerPageNumberTemplate;
+  let footerPageNumberTemplate = hasFooterTemplate ? String(source.footerPageNumberTemplate || "").replace(/\s+/g, " ").trim().slice(0, 500) : fallback.footerPageNumberTemplate;
+  if (!hasHeaderTemplate && !hasFooterTemplate && source.pageNumberEnabled !== undefined) {
+    headerPageNumberTemplate = source.pageNumberEnabled && source.pageNumberPosition === "header" ? defaultDocumentPageNumberTemplate : "";
+    footerPageNumberTemplate = source.pageNumberEnabled && source.pageNumberPosition !== "header" ? defaultDocumentPageNumberTemplate : "";
+  }
+  const pageNumberEnabled = Boolean(headerPageNumberTemplate || footerPageNumberTemplate);
+  return {
+    headerText: String(value?.headerText ?? fallback.headerText ?? ""),
+    headerStyle: normalizeDocumentPageTextStyle(value?.headerStyle, fallback.headerStyle),
+    footerText: String(value?.footerText ?? fallback.footerText ?? ""),
+    footerStyle: normalizeDocumentPageTextStyle(value?.footerStyle, fallback.footerStyle),
+    headerPageNumberTemplate,
+    footerPageNumberTemplate,
+    pageNumberEnabled,
+    pageNumberPosition: headerPageNumberTemplate && !footerPageNumberTemplate ? "header" : "footer"
   };
 }
 
@@ -99,6 +163,8 @@ function normalizeDocumentPageLayout(value: Partial<DocumentPageLayout> | null |
     return Number.isFinite(number) ? Math.max(0, Math.min(Math.round(number), 7200)) : defaultDocumentPageMargins[side];
   };
   const margins = { top: normalizeMargin("top"), right: normalizeMargin("right"), bottom: normalizeMargin("bottom"), left: normalizeMargin("left") };
+  const pageNumberFormats: DocumentPageLayout["pageNumberFormat"][] = ["decimal", "upperRoman", "lowerRoman", "upperLetter", "lowerLetter"];
+  const pageNumberStartValue = Number(value?.pageNumberStart);
   const pageWidth = orientation === "landscape" ? a4PageTwip.height : a4PageTwip.width;
   const pageHeight = orientation === "landscape" ? a4PageTwip.width : a4PageTwip.height;
   const fitPair = (first: number, second: number, maximum: number) => {
@@ -117,6 +183,10 @@ function normalizeDocumentPageLayout(value: Partial<DocumentPageLayout> | null |
     oddEvenDifferent: Boolean(value?.oddEvenDifferent),
     evenPage: normalizeDocumentPageVariant(value?.evenPage),
     orientation,
+    pageNumberFormat: pageNumberFormats.includes(value?.pageNumberFormat as DocumentPageLayout["pageNumberFormat"]) ? value!.pageNumberFormat! : "decimal",
+    pageNumberStart: value?.pageNumberStart === null || value?.pageNumberStart === undefined || !Number.isFinite(pageNumberStartValue) ? null : Math.max(0, Math.min(Math.round(pageNumberStartValue), 999999)),
+    headerDistance: Number.isFinite(Number(value?.headerDistance)) ? Math.max(0, Math.min(Math.round(Number(value?.headerDistance)), 7200)) : 708,
+    footerDistance: Number.isFinite(Number(value?.footerDistance)) ? Math.max(0, Math.min(Math.round(Number(value?.footerDistance)), 7200)) : 708,
     margins
   };
 }
@@ -130,11 +200,29 @@ function pageVariantForPage(layout: DocumentPageLayout, globalPageIndex: number,
 function parseSectionPageLayout(value: unknown, fallback: DocumentPageLayout): DocumentPageLayout {
   try {
     const parsed = (typeof value === "string" ? JSON.parse(value) : value) as Partial<DocumentPageLayout> | null;
+    const mergeLegacyVariant = (base: DocumentPageVariant, override: Partial<DocumentPageVariant> | null | undefined): DocumentPageVariant => {
+      const merged: Partial<DocumentPageVariant> = {
+        ...base,
+        ...(override || {}),
+        headerStyle: { ...base.headerStyle, ...(override?.headerStyle || {}) },
+        footerStyle: { ...base.footerStyle, ...(override?.footerStyle || {}) }
+      };
+      // 中文注解：旧节节点只有 pageNumberEnabled/pageNumberPosition；显式旧开关必须先迁移，不能被前一节的新模板字段遮蔽。
+      if (override && Object.prototype.hasOwnProperty.call(override, "pageNumberEnabled")
+        && !Object.prototype.hasOwnProperty.call(override, "headerPageNumberTemplate")
+        && !Object.prototype.hasOwnProperty.call(override, "footerPageNumberTemplate")) {
+        merged.headerPageNumberTemplate = override.pageNumberEnabled && override.pageNumberPosition === "header" ? defaultDocumentPageNumberTemplate : "";
+        merged.footerPageNumberTemplate = override.pageNumberEnabled && override.pageNumberPosition !== "header" ? defaultDocumentPageNumberTemplate : "";
+      }
+      return merged as DocumentPageVariant;
+    };
+    const mergedDefault = mergeLegacyVariant(fallback, parsed);
     return normalizeDocumentPageLayout({
       ...fallback,
       ...(parsed || {}),
-      firstPage: { ...fallback.firstPage, ...(parsed?.firstPage || {}) },
-      evenPage: { ...fallback.evenPage, ...(parsed?.evenPage || {}) },
+      ...mergedDefault,
+      firstPage: mergeLegacyVariant(fallback.firstPage, parsed?.firstPage),
+      evenPage: mergeLegacyVariant(fallback.evenPage, parsed?.evenPage),
       margins: { ...fallback.margins, ...(parsed?.margins || {}) }
     });
   } catch {
@@ -290,6 +378,8 @@ function pageGeometryStyle(layout: DocumentPageLayout): React.CSSProperties {
     "--page-margin-right": `${geometry.margins.right}px`,
     "--page-margin-bottom": `${geometry.margins.bottom}px`,
     "--page-margin-left": `${geometry.margins.left}px`,
+    "--page-header-distance": `${layout.headerDistance * docxPagePreview.twipToPx}px`,
+    "--page-footer-distance": `${layout.footerDistance * docxPagePreview.twipToPx}px`,
     "--page-content-width": `${geometry.contentWidthPx}px`,
     "--page-content-height": `${geometry.contentHeightPx}px`
   } as React.CSSProperties;
@@ -342,6 +432,90 @@ const lineSpacingOptions = [
   { label: "双倍", value: "2" }
 ];
 const paragraphSpacingOptions = ["0pt", "6pt", "12pt", "18pt", "24pt"].map((value) => ({ label: value, value }));
+
+function pageTextCssStyle(style: DocumentPageTextStyle): React.CSSProperties {
+  return {
+    color: style.color,
+    fontFamily: `"${style.fontFamily}", sans-serif`,
+    fontSize: `${style.fontSizePt * 96 / 72}px`,
+    fontWeight: style.bold ? 700 : 400,
+    fontStyle: style.italic ? "italic" : "normal",
+    textAlign: style.alignment,
+    justifyContent: style.alignment === "left" ? "flex-start" : style.alignment === "right" ? "flex-end" : "center"
+  };
+}
+
+function formatPageNumber(value: number, format: DocumentPageLayout["pageNumberFormat"] = "decimal") {
+  // 中文注解：Word 允许分节页码从 0 开始；罗马和字母体系没有零，按 Word 可见数字保留为 0。
+  if (value <= 0) return String(value);
+  const alphabetic = (number: number) => {
+    let result = "";
+    for (let current = Math.max(1, number); current > 0; current = Math.floor((current - 1) / 26)) result = String.fromCharCode(65 + ((current - 1) % 26)) + result;
+    return result;
+  };
+  const roman = (number: number) => {
+    const values: Array<[number, string]> = [[1000, "M"], [900, "CM"], [500, "D"], [400, "CD"], [100, "C"], [90, "XC"], [50, "L"], [40, "XL"], [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]];
+    let current = Math.max(1, number);
+    let result = "";
+    for (const [amount, label] of values) while (current >= amount) { result += label; current -= amount; }
+    return result;
+  };
+  if (format === "upperRoman") return roman(value);
+  if (format === "lowerRoman") return roman(value).toLowerCase();
+  if (format === "upperLetter") return alphabetic(value);
+  if (format === "lowerLetter") return alphabetic(value).toLowerCase();
+  return String(value);
+}
+
+function pageNumberTemplateText(template: string, pageNumber: number, totalPages: number, defaultFormat: DocumentPageLayout["pageNumberFormat"]) {
+  return String(template || "").replace(/\{(PAGE|NUMPAGES)(?::(decimal|upperRoman|lowerRoman|upperLetter|lowerLetter))?\}/g, (_match, field, explicitFormat) => {
+    const value = field === "PAGE" ? pageNumber : totalPages;
+    const format = explicitFormat || (field === "PAGE" ? defaultFormat : "decimal");
+    return formatPageNumber(value, format);
+  });
+}
+
+function PageTextFormatControls(props: {
+  label: string;
+  value: DocumentPageTextStyle;
+  onChange: (value: DocumentPageTextStyle) => void;
+}) {
+  const update = (patch: Partial<DocumentPageTextStyle>) => props.onChange(normalizeDocumentPageTextStyle({ ...props.value, ...patch }));
+  return <div className="page-text-format-controls" aria-label={`${props.label}格式`}>
+    <select aria-label={`${props.label}字体`} value={props.value.fontFamily} onChange={(event) => update({ fontFamily: event.target.value })}>
+      {!fontFamilyOptions.some((option) => option.value === props.value.fontFamily) ? <option value={props.value.fontFamily}>{props.value.fontFamily}</option> : null}
+      {fontFamilyOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+    </select>
+    <label className="page-text-size"><span>字号</span><input type="number" aria-label={`${props.label}字号`} min="6" max="72" step="0.5" value={props.value.fontSizePt} onChange={(event) => update({ fontSizePt: Number(event.target.value) })} /></label>
+    <label className="page-color-swatch" title={`${props.label}颜色`}><span>颜色</span><input type="color" aria-label={`${props.label}颜色`} value={props.value.color} onChange={(event) => update({ color: event.target.value })} /></label>
+    <button type="button" className={props.value.bold ? "active-format" : ""} onClick={() => update({ bold: !props.value.bold })} title={`${props.label}加粗`} aria-label={`${props.label}加粗`}><Bold size={14} /></button>
+    <button type="button" className={props.value.italic ? "active-format" : ""} onClick={() => update({ italic: !props.value.italic })} title={`${props.label}斜体`} aria-label={`${props.label}斜体`}><Italic size={14} /></button>
+    <select aria-label={`${props.label}对齐`} value={props.value.alignment} onChange={(event) => update({ alignment: event.target.value as DocumentPageTextStyle["alignment"] })}>
+      <option value="left">左对齐</option><option value="center">居中</option><option value="right">右对齐</option>
+    </select>
+  </div>;
+}
+
+function PageVariantSettings(props: {
+  title: string;
+  variant: DocumentPageVariant;
+  onChange: (variant: DocumentPageVariant) => void;
+}) {
+  const update = (patch: Partial<DocumentPageVariant>) => props.onChange(normalizeDocumentPageVariant({ ...props.variant, ...patch }, props.variant));
+  const ariaPrefix = props.title === "默认页" ? "默认" : props.title;
+  const pageNumberPrefix = props.title === "默认页" ? "默认" : props.title === "偶数页" ? "偶数" : props.title;
+  return <>
+    <strong>{props.title}</strong>
+    <label>页眉<input type="text" aria-label={`${ariaPrefix}页眉文字`} maxLength={500} value={props.variant.headerText} onChange={(event) => update({ headerText: event.target.value })} /></label>
+    <PageTextFormatControls label={`${ariaPrefix}页眉`} value={props.variant.headerStyle} onChange={(headerStyle) => update({ headerStyle })} />
+    <label className="page-number-toggle"><input type="checkbox" aria-label={`${pageNumberPrefix}页眉页码`} checked={Boolean(props.variant.headerPageNumberTemplate)} onChange={(event) => update({ headerPageNumberTemplate: event.target.checked ? defaultDocumentPageNumberTemplate : "" })} />页眉页码</label>
+    {props.variant.headerPageNumberTemplate ? <label>页眉页码格式<input type="text" aria-label={`${pageNumberPrefix}页眉页码格式`} maxLength={500} value={props.variant.headerPageNumberTemplate} onChange={(event) => update({ headerPageNumberTemplate: event.target.value })} /></label> : null}
+    <label>页脚<input type="text" aria-label={`${ariaPrefix}页脚文字`} maxLength={500} value={props.variant.footerText} onChange={(event) => update({ footerText: event.target.value })} /></label>
+    <PageTextFormatControls label={`${ariaPrefix}页脚`} value={props.variant.footerStyle} onChange={(footerStyle) => update({ footerStyle })} />
+    <label className="page-number-toggle"><input type="checkbox" aria-label={`${pageNumberPrefix}页脚页码`} checked={Boolean(props.variant.footerPageNumberTemplate)} onChange={(event) => update({ footerPageNumberTemplate: event.target.checked ? defaultDocumentPageNumberTemplate : "" })} />页脚页码</label>
+    {props.variant.footerPageNumberTemplate ? <label>页脚页码格式<input type="text" aria-label={`${pageNumberPrefix}页脚页码格式`} maxLength={500} value={props.variant.footerPageNumberTemplate} onChange={(event) => update({ footerPageNumberTemplate: event.target.value })} /></label> : null}
+  </>;
+}
 
 function FormatSelect(props: {
   title: string;
@@ -2197,6 +2371,14 @@ function Editor(props: {
   };
 
   const isSaving = manualSavePending || props.saveStatus === "保存中";
+  let currentDisplayPageNumber = 0;
+  let previousDisplaySection = -1;
+  const previewDisplayPageNumbers = previewPages.map((page) => {
+    if (page.sectionIndex !== previousDisplaySection && page.layout.pageNumberStart !== null) currentDisplayPageNumber = page.layout.pageNumberStart;
+    else currentDisplayPageNumber += 1;
+    previousDisplaySection = page.sectionIndex;
+    return currentDisplayPageNumber;
+  });
 
   return (
     <section className="editor-page">
@@ -2215,6 +2397,7 @@ function Editor(props: {
             <details className="page-layout-menu">
               <summary title="设置页眉、页脚和页码"><FileText size={16} />页面设置</summary>
               <div className="page-layout-popover">
+                <button type="button" className="page-layout-close" aria-label="关闭页面设置" title="关闭页面设置" onClick={(event) => { const details = event.currentTarget.closest("details"); if (details) details.open = false; }}><XCircle size={17} /></button>
                 <div className="page-layout-current-section">
                   <strong>第 {activeSectionIndex + 1} 节 / 共 {sectionCount} 节</strong>
                   <span>设置作用于光标所在节</span>
@@ -2228,26 +2411,25 @@ function Editor(props: {
                       return <label key={side}>{labels[side]}边距（厘米）<input type="number" aria-label={`当前节${labels[side]}边距`} min="0" max="12.7" step="0.1" value={twipToCentimeter(activeSectionLayout.margins[side])} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, margins: { ...current.margins, [side]: centimeterToTwip(event.target.value, current.margins[side]) } }))} /></label>;
                     })}
                   </div>
+                  <div className="page-margin-grid">
+                    <label>页眉距纸边（厘米）<input type="number" aria-label="当前节页眉距纸边" min="0" max="12.7" step="0.1" value={twipToCentimeter(activeSectionLayout.headerDistance)} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, headerDistance: centimeterToTwip(event.target.value, current.headerDistance) }))} /></label>
+                    <label>页脚距纸边（厘米）<input type="number" aria-label="当前节页脚距纸边" min="0" max="12.7" step="0.1" value={twipToCentimeter(activeSectionLayout.footerDistance)} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, footerDistance: centimeterToTwip(event.target.value, current.footerDistance) }))} /></label>
+                  </div>
+                  <div className="page-margin-grid">
+                    <label>页码格式<select aria-label="当前节页码格式" value={activeSectionLayout.pageNumberFormat} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, pageNumberFormat: event.target.value as DocumentPageLayout["pageNumberFormat"] }))}><option value="decimal">1, 2, 3</option><option value="upperRoman">I, II, III</option><option value="lowerRoman">i, ii, iii</option><option value="upperLetter">A, B, C</option><option value="lowerLetter">a, b, c</option></select></label>
+                    <label>起始页码<input type="number" aria-label="当前节起始页码" min="0" max="999999" placeholder="续前节" value={activeSectionLayout.pageNumberStart ?? ""} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, pageNumberStart: event.target.value === "" ? null : Math.max(0, Math.min(Math.round(Number(event.target.value)), 999999)) }))} /></label>
+                  </div>
                 </div>
                 <div className="page-layout-section">
-                  <strong>默认页</strong>
-                  <label>页眉<input type="text" aria-label="默认页眉文字" maxLength={500} value={activeSectionLayout.headerText} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, headerText: event.target.value }))} /></label>
-                  <label>页脚<input type="text" aria-label="默认页脚文字" maxLength={500} value={activeSectionLayout.footerText} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, footerText: event.target.value }))} /></label>
-                  <label className="page-number-toggle"><input type="checkbox" checked={activeSectionLayout.pageNumberEnabled} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, pageNumberEnabled: event.target.checked }))} />显示页码</label>
+                  <PageVariantSettings title="默认页" variant={activeSectionLayout} onChange={(variant) => updateCurrentSectionLayout((current) => ({ ...current, ...variant }))} />
                 </div>
                 <label className="page-number-toggle page-layout-switch"><input type="checkbox" checked={activeSectionLayout.firstPageDifferent} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, firstPageDifferent: event.target.checked }))} />首页不同</label>
                 {activeSectionLayout.firstPageDifferent ? <div className="page-layout-section page-layout-variant">
-                  <strong>首页</strong>
-                  <label>页眉<input type="text" aria-label="首页页眉文字" maxLength={500} value={activeSectionLayout.firstPage.headerText} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, firstPage: { ...current.firstPage, headerText: event.target.value } }))} /></label>
-                  <label>页脚<input type="text" aria-label="首页页脚文字" maxLength={500} value={activeSectionLayout.firstPage.footerText} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, firstPage: { ...current.firstPage, footerText: event.target.value } }))} /></label>
-                  <label className="page-number-toggle"><input type="checkbox" checked={activeSectionLayout.firstPage.pageNumberEnabled} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, firstPage: { ...current.firstPage, pageNumberEnabled: event.target.checked } }))} />显示页码</label>
+                  <PageVariantSettings title="首页" variant={activeSectionLayout.firstPage} onChange={(firstPage) => updateCurrentSectionLayout((current) => ({ ...current, firstPage }))} />
                 </div> : null}
                 <label className="page-number-toggle page-layout-switch"><input type="checkbox" checked={activeSectionLayout.oddEvenDifferent} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, oddEvenDifferent: event.target.checked }))} />奇偶页不同</label>
                 {activeSectionLayout.oddEvenDifferent ? <div className="page-layout-section page-layout-variant">
-                  <strong>偶数页</strong>
-                  <label>页眉<input type="text" aria-label="偶数页页眉文字" maxLength={500} value={activeSectionLayout.evenPage.headerText} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, evenPage: { ...current.evenPage, headerText: event.target.value } }))} /></label>
-                  <label>页脚<input type="text" aria-label="偶数页页脚文字" maxLength={500} value={activeSectionLayout.evenPage.footerText} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, evenPage: { ...current.evenPage, footerText: event.target.value } }))} /></label>
-                  <label className="page-number-toggle"><input type="checkbox" checked={activeSectionLayout.evenPage.pageNumberEnabled} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, evenPage: { ...current.evenPage, pageNumberEnabled: event.target.checked } }))} />显示页码</label>
+                  <PageVariantSettings title="偶数页" variant={activeSectionLayout.evenPage} onChange={(evenPage) => updateCurrentSectionLayout((current) => ({ ...current, evenPage }))} />
                 </div> : null}
               </div>
             </details>
@@ -2326,14 +2508,18 @@ function Editor(props: {
                 {previewPages.map((page, index) => {
                   const pageVariant = pageVariantForPage(page.layout, index, page.sectionPageIndex);
                   return <article className="page-sheet" data-section-index={page.sectionIndex} style={pageGeometryStyle(page.layout)} key={index}>
-                    {pageVariant.headerText ? <div className="page-header">{pageVariant.headerText}</div> : null}
+                    {pageVariant.headerText || pageVariant.headerPageNumberTemplate ? <div className="page-header" style={pageTextCssStyle(pageVariant.headerStyle)}>
+                      {pageVariant.headerText ? <span>{pageVariant.headerText}</span> : null}
+                      {pageVariant.headerText && pageVariant.headerPageNumberTemplate ? <span aria-hidden="true">·</span> : null}
+                      {pageVariant.headerPageNumberTemplate ? <span>{pageNumberTemplateText(pageVariant.headerPageNumberTemplate, previewDisplayPageNumbers[index], previewPages.length, page.layout.pageNumberFormat)}</span> : null}
+                    </div> : null}
                     <div className="page-body">
                       {page.blocks.map((html, blockIndex) => <div className="page-block" key={`${index}-${blockIndex}`} dangerouslySetInnerHTML={{ __html: html }} />)}
                     </div>
-                    {pageVariant.footerText || pageVariant.pageNumberEnabled ? <div className="page-footer">
+                    {pageVariant.footerText || pageVariant.footerPageNumberTemplate ? <div className="page-footer" style={pageTextCssStyle(pageVariant.footerStyle)}>
                       {pageVariant.footerText ? <span>{pageVariant.footerText}</span> : null}
-                      {pageVariant.footerText && pageVariant.pageNumberEnabled ? <span aria-hidden="true">·</span> : null}
-                      {pageVariant.pageNumberEnabled ? <span>第 {index + 1} 页 / 共 {previewPages.length} 页</span> : null}
+                      {pageVariant.footerText && pageVariant.footerPageNumberTemplate ? <span aria-hidden="true">·</span> : null}
+                      {pageVariant.footerPageNumberTemplate ? <span>{pageNumberTemplateText(pageVariant.footerPageNumberTemplate, previewDisplayPageNumbers[index], previewPages.length, page.layout.pageNumberFormat)}</span> : null}
                     </div> : null}
                   </article>;
                 })}

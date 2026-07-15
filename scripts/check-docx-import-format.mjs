@@ -3,7 +3,8 @@ import JSZip from "jszip";
 import { createDocxBuffer, parseImportedDocument } from "../server/index.js";
 
 const tinyPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lT3g6wAAAABJRU5ErkJggg==";
-const emptyPageVariant = { headerText: "", footerText: "", pageNumberEnabled: false };
+const defaultPageTextStyle = { alignment: "center", fontFamily: "Microsoft YaHei", fontSizePt: 9, color: "#6B7280", bold: false, italic: false };
+const emptyPageVariant = { headerText: "", headerStyle: defaultPageTextStyle, footerText: "", footerStyle: defaultPageTextStyle, headerPageNumberTemplate: "", footerPageNumberTemplate: "", pageNumberEnabled: false, pageNumberPosition: "footer" };
 
 async function buildFormattedDocxFixture() {
   const zip = new JSZip();
@@ -37,8 +38,8 @@ async function buildFormattedDocxFixture() {
   <Relationship Id="rIdFooter1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>
 </Relationships>`
   );
-  zip.folder("word").file("header1.xml", `<?xml version="1.0" encoding="UTF-8"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>导入页眉</w:t></w:r></w:p></w:hdr>`);
-  zip.folder("word").file("footer1.xml", `<?xml version="1.0" encoding="UTF-8"?><w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>导入页脚 · 第 </w:t><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="end"/><w:t> 页 / 共 </w:t><w:fldChar w:fldCharType="begin"/><w:instrText>NUMPAGES</w:instrText><w:fldChar w:fldCharType="end"/><w:t> 页</w:t></w:r></w:p></w:ftr>`);
+  zip.folder("word").file("header1.xml", `<?xml version="1.0" encoding="UTF-8"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:eastAsia="Microsoft YaHei"/><w:sz w:val="24"/><w:color w:val="1F4E79"/><w:b/><w:i/></w:rPr><w:t>导入页眉</w:t></w:r></w:p></w:hdr>`);
+  zip.folder("word").file("footer1.xml", `<?xml version="1.0" encoding="UTF-8"?><w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia="SimSun"/><w:sz w:val="21"/><w:color w:val="C00000"/></w:rPr><w:t>导入页脚 · 第 </w:t><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="end"/><w:t> 页 / 共 </w:t><w:fldChar w:fldCharType="begin"/><w:instrText>NUMPAGES</w:instrText><w:fldChar w:fldCharType="end"/><w:t> 页</w:t></w:r></w:p></w:ftr>`);
   zip.folder("word").folder("media").file("image1.png", tinyPngBase64, { base64: true });
   zip.folder("word").file(
     "numbering.xml",
@@ -159,7 +160,7 @@ async function buildFormattedDocxFixture() {
         </w:drawing>
       </w:r>
     </w:p>
-    <w:sectPr><w:headerReference w:type="default" r:id="rIdHeader1"/><w:footerReference w:type="default" r:id="rIdFooter1"/></w:sectPr>
+    <w:sectPr><w:headerReference w:type="default" r:id="rIdHeader1"/><w:footerReference w:type="default" r:id="rIdFooter1"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="360" w:footer="900"/></w:sectPr>
   </w:body>
 </w:document>`
   );
@@ -174,9 +175,121 @@ const imported = await parseImportedDocument({
   size: buffer.length
 });
 
+const inheritedStyleZip = await JSZip.loadAsync(buffer);
+const inheritedStylesXml = await inheritedStyleZip.file("word/styles.xml")?.async("string") || "";
+inheritedStyleZip.file("word/styles.xml", inheritedStylesXml.replace("</w:styles>", `
+  <w:style w:type="paragraph" w:styleId="HeaderBase"><w:name w:val="Header Base"/><w:pPr><w:jc w:val="left"/></w:pPr><w:rPr><w:rFonts w:asciiTheme="minorHAnsi" w:hAnsiTheme="minorHAnsi" w:eastAsiaTheme="minorEastAsia"/><w:sz w:val="26"/><w:color w:themeColor="accent2" w:themeTint="80"/><w:b/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Header"><w:name w:val="Header"/><w:basedOn w:val="HeaderBase"/><w:pPr><w:jc w:val="right"/></w:pPr><w:rPr><w:i/></w:rPr></w:style>
+</w:styles>`));
+inheritedStyleZip.folder("word").folder("theme").file("theme1.xml", `<?xml version="1.0" encoding="UTF-8"?><a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:themeElements><a:fontScheme name="Office"><a:majorFont><a:latin typeface="Major Latin"/><a:ea typeface=""/><a:font script="Hans" typeface="Major Hans"/><a:font script="Hant" typeface="Major Hant"/><a:font script="Jpan" typeface="Major Jpan"/><a:font script="Hang" typeface="Major Hang"/></a:majorFont><a:minorFont><a:latin typeface="Minor Latin"/><a:ea typeface=""/><a:font script="Hans" typeface="Minor Hans"/><a:font script="Hant" typeface="Minor Hant"/><a:font script="Jpan" typeface="Minor Jpan"/><a:font script="Hang" typeface="Minor Hang"/></a:minorFont></a:fontScheme><a:clrScheme name="Office"><a:dk1><a:sysClr val="windowText" lastClr="112233"/></a:dk1><a:accent2><a:srgbClr val="7030A0"/></a:accent2></a:clrScheme></a:themeElements></a:theme>`);
+inheritedStyleZip.file("word/header1.xml", `<?xml version="1.0" encoding="UTF-8"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:pStyle w:val="Header"/></w:pPr><w:r><w:t>继承页眉</w:t></w:r></w:p></w:hdr>`);
+const inheritedStyleBuffer = await inheritedStyleZip.generateAsync({ type: "nodebuffer" });
+const inheritedStyleImported = await parseImportedDocument({ originalname: "inherited-header.docx", buffer: inheritedStyleBuffer, mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: inheritedStyleBuffer.length });
+// 中文注解：真实 Word 页眉通常依赖段落样式、basedOn 和主题字体，不能只解析直接写在文本上的格式。
+assert.equal(inheritedStyleImported.pageLayout.headerText, "继承页眉");
+assert.deepEqual(inheritedStyleImported.pageLayout.headerStyle, { alignment: "right", fontFamily: "Minor Hans", fontSizePt: 13, color: "#B898D0", bold: true, italic: true });
+
+const inheritedEnglishZip = await JSZip.loadAsync(inheritedStyleBuffer);
+const inheritedEnglishHeaderXml = await inheritedEnglishZip.file("word/header1.xml")?.async("string") || "";
+inheritedEnglishZip.file("word/header1.xml", inheritedEnglishHeaderXml.replace("继承页眉", "English header"));
+const inheritedEnglishBuffer = await inheritedEnglishZip.generateAsync({ type: "nodebuffer" });
+const inheritedEnglishImported = await parseImportedDocument({ originalname: "english-themed-header.docx", buffer: inheritedEnglishBuffer, mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: inheritedEnglishBuffer.length });
+assert.equal(inheritedEnglishImported.pageLayout.headerStyle.fontFamily, "Minor Latin");
+
+for (const [text, expectedFont] of [["繁體頁眉", "Minor Hant"], ["日本語かな", "Minor Jpan"], ["한국어 머리글", "Minor Hang"]]) {
+  const scriptZip = await JSZip.loadAsync(inheritedStyleBuffer);
+  const scriptHeaderXml = await scriptZip.file("word/header1.xml")?.async("string") || "";
+  scriptZip.file("word/header1.xml", scriptHeaderXml.replace("继承页眉", text));
+  const scriptBuffer = await scriptZip.generateAsync({ type: "nodebuffer" });
+  const scriptImported = await parseImportedDocument({ originalname: `${expectedFont}.docx`, buffer: scriptBuffer, mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: scriptBuffer.length });
+  assert.equal(scriptImported.pageLayout.headerStyle.fontFamily, expectedFont);
+}
+
+const bodyThemeZip = await JSZip.loadAsync(inheritedStyleBuffer);
+const bodyThemeStylesXml = await bodyThemeZip.file("word/styles.xml")?.async("string") || "";
+bodyThemeZip.file("word/styles.xml", bodyThemeStylesXml.replace("</w:styles>", '<w:style w:type="character" w:styleId="AccentChar"><w:name w:val="Accent Char"/><w:rPr><w:rFonts w:asciiTheme="minorHAnsi" w:eastAsiaTheme="minorEastAsia"/><w:color w:themeColor="accent2" w:themeTint="80"/><w:i/></w:rPr></w:style></w:styles>'));
+const bodyThemeDocumentXml = await bodyThemeZip.file("word/document.xml")?.async("string") || "";
+bodyThemeZip.file("word/document.xml", bodyThemeDocumentXml.replace("<w:sectPr>", '<w:p><w:r><w:rPr><w:rStyle w:val="AccentChar"/></w:rPr><w:t>主题正文</w:t></w:r><w:r><w:rPr><w:rFonts w:asciiTheme="minorHAnsi"/><w:color w:themeColor="dk1"/></w:rPr><w:t>Direct theme</w:t></w:r></w:p><w:p><w:r><w:rPr><w:rFonts w:asciiTheme="minorHAnsi" w:eastAsiaTheme="minorEastAsia"/><w:lang w:eastAsia="zh-CN"/></w:rPr><w:t>AI Word 2026 项目</w:t></w:r></w:p><w:sectPr>'));
+const bodyThemeBuffer = await bodyThemeZip.generateAsync({ type: "nodebuffer" });
+const bodyThemeImported = await parseImportedDocument({ originalname: "body-theme-style.docx", buffer: bodyThemeBuffer, mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: bodyThemeBuffer.length });
+// 中文注解：正文直接主题格式和字符样式链必须与页眉页脚共用主题上下文，避免只修页面部件而正文继续丢格式。
+assert.match(bodyThemeImported.content, /font-family:\s*&quot;Minor Hans&quot;[^>]*color:\s*#B898D0[^>]*font-style:\s*italic[^>]*><em>主题正文<\/em>/);
+assert.match(bodyThemeImported.content, /font-family:\s*&quot;Minor Latin&quot;[^>]*color:\s*#112233[^>]*>Direct theme/);
+assert.match(bodyThemeImported.content, /font-family:\s*&quot;Minor Latin&quot;[^>]*>AI Word 2026 <\/span><span[^>]*font-family:\s*&quot;Minor Hans&quot;[^>]*>项目<\/span>/);
+
+const systemColorZip = await JSZip.loadAsync(inheritedStyleBuffer);
+const systemColorStylesXml = await systemColorZip.file("word/styles.xml")?.async("string") || "";
+systemColorZip.file("word/styles.xml", systemColorStylesXml.replace('w:themeColor="accent2" w:themeTint="80"', 'w:themeColor="dk1"'));
+const systemColorBuffer = await systemColorZip.generateAsync({ type: "nodebuffer" });
+const systemColorImported = await parseImportedDocument({ originalname: "system-theme-color.docx", buffer: systemColorBuffer, mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: systemColorBuffer.length });
+assert.equal(systemColorImported.pageLayout.headerStyle.color, "#112233");
+
+const cachedFieldZip = await JSZip.loadAsync(buffer);
+const cachedFooterXml = await cachedFieldZip.file("word/footer1.xml")?.async("string") || "";
+cachedFieldZip.file("word/footer1.xml", cachedFooterXml
+  .replace("<w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType=\"end\"/>", "<w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType=\"separate\"/><w:t>3</w:t><w:fldChar w:fldCharType=\"end\"/>")
+  .replace("<w:instrText>NUMPAGES</w:instrText><w:fldChar w:fldCharType=\"end\"/>", "<w:instrText>NUMPAGES</w:instrText><w:fldChar w:fldCharType=\"separate\"/><w:t>12</w:t><w:fldChar w:fldCharType=\"end\"/>"));
+const cachedFieldBuffer = await cachedFieldZip.generateAsync({ type: "nodebuffer" });
+const cachedFieldImported = await parseImportedDocument({ originalname: "cached-page-field.docx", buffer: cachedFieldBuffer, mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: cachedFieldBuffer.length });
+// 中文注解：域缓存数字不是页脚正文，导入后必须只保留动态页码开关，避免再次导出时出现两套页码。
+assert.equal(cachedFieldImported.pageLayout.footerText, "导入页脚");
+assert.equal(cachedFieldImported.pageLayout.pageNumberEnabled, true);
+assert.equal(cachedFieldImported.pageLayout.pageNumberPosition, "footer");
+assert.equal(cachedFieldImported.pageLayout.footerPageNumberTemplate, "第 {PAGE} 页 / 共 {NUMPAGES} 页");
+
+const dateFieldZip = await JSZip.loadAsync(buffer);
+dateFieldZip.file("word/footer1.xml", `<?xml version="1.0" encoding="UTF-8"?><w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>日期：</w:t><w:fldChar w:fldCharType="begin"/><w:instrText>DATE</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>2026-07-15</w:t><w:fldChar w:fldCharType="end"/></w:r></w:p></w:ftr>`);
+const dateFieldBuffer = await dateFieldZip.generateAsync({ type: "nodebuffer" });
+const dateFieldImported = await parseImportedDocument({ originalname: "date-field.docx", buffer: dateFieldBuffer, mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: dateFieldBuffer.length });
+assert.equal(dateFieldImported.pageLayout.footerText, "日期：2026-07-15");
+assert.equal(dateFieldImported.pageLayout.pageNumberEnabled, false);
+assert.match(dateFieldImported.warnings.join(" "), /动态域.*显示值/);
+
+const pageRefFieldZip = await JSZip.loadAsync(buffer);
+pageRefFieldZip.file("word/footer1.xml", `<?xml version="1.0" encoding="UTF-8"?><w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:fldChar w:fldCharType="begin"/><w:instrText>PAGEREF target</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>8</w:t><w:fldChar w:fldCharType="end"/></w:r></w:p></w:ftr>`);
+const pageRefFieldBuffer = await pageRefFieldZip.generateAsync({ type: "nodebuffer" });
+const pageRefFieldImported = await parseImportedDocument({ originalname: "pageref-field.docx", buffer: pageRefFieldBuffer, mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: pageRefFieldBuffer.length });
+assert.equal(pageRefFieldImported.pageLayout.footerText, "8");
+assert.equal(pageRefFieldImported.pageLayout.pageNumberEnabled, false);
+
+const headerPageZip = await JSZip.loadAsync(buffer);
+headerPageZip.file("word/header1.xml", `<?xml version="1.0" encoding="UTF-8"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>页眉页码 · 第 </w:t><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="end"/><w:t> 页 / 共 </w:t><w:fldChar w:fldCharType="begin"/><w:instrText>NUMPAGES</w:instrText><w:fldChar w:fldCharType="end"/><w:t> 页</w:t></w:r></w:p></w:hdr>`);
+headerPageZip.file("word/footer1.xml", `<?xml version="1.0" encoding="UTF-8"?><w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>普通页脚</w:t></w:r></w:p></w:ftr>`);
+const headerPageBuffer = await headerPageZip.generateAsync({ type: "nodebuffer" });
+const headerPageImported = await parseImportedDocument({ originalname: "header-page-number.docx", buffer: headerPageBuffer, mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: headerPageBuffer.length });
+assert.equal(headerPageImported.pageLayout.headerText, "页眉页码");
+assert.equal(headerPageImported.pageLayout.pageNumberEnabled, true);
+assert.equal(headerPageImported.pageLayout.pageNumberPosition, "header");
+assert.equal(headerPageImported.pageLayout.headerPageNumberTemplate, "第 {PAGE} 页 / 共 {NUMPAGES} 页");
+
+const splitPageFieldZip = await JSZip.loadAsync(buffer);
+splitPageFieldZip.file("word/footer1.xml", `<?xml version="1.0" encoding="UTF-8"?><w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>分片页码 · 第 </w:t><w:fldChar w:fldCharType="begin"/><w:instrText>PA</w:instrText></w:r><w:r><w:instrText>GE</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>4</w:t><w:fldChar w:fldCharType="end"/><w:t> 页 / 共 </w:t><w:fldChar w:fldCharType="begin"/><w:instrText>NUM</w:instrText></w:r><w:r><w:instrText>PAGES</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>20</w:t><w:fldChar w:fldCharType="end"/><w:t> 页</w:t></w:r></w:p></w:ftr>`);
+const splitPageFieldBuffer = await splitPageFieldZip.generateAsync({ type: "nodebuffer" });
+const splitPageFieldImported = await parseImportedDocument({ originalname: "split-page-field.docx", buffer: splitPageFieldBuffer, mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: splitPageFieldBuffer.length });
+// 中文注解：字段命令可跨多个 run 拆分，必须按 begin/separate/end 聚合后再识别 PAGE 与 NUMPAGES。
+assert.equal(splitPageFieldImported.pageLayout.footerText, "分片页码");
+assert.equal(splitPageFieldImported.pageLayout.pageNumberEnabled, true);
+assert.equal(splitPageFieldImported.pageLayout.footerPageNumberTemplate, "第 {PAGE} 页 / 共 {NUMPAGES} 页");
+
+const dualTemplateZip = await JSZip.loadAsync(buffer);
+dualTemplateZip.file("word/header1.xml", `<?xml version="1.0" encoding="UTF-8"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>Page </w:t><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE \\* ROMAN</w:instrText><w:fldChar w:fldCharType="end"/><w:t> of </w:t><w:fldChar w:fldCharType="begin"/><w:instrText>NUMPAGES</w:instrText><w:fldChar w:fldCharType="end"/></w:r></w:p></w:hdr>`);
+dualTemplateZip.file("word/footer1.xml", `<?xml version="1.0" encoding="UTF-8"?><w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>Total </w:t><w:fldChar w:fldCharType="begin"/><w:instrText>NUMPAGES</w:instrText><w:fldChar w:fldCharType="end"/></w:r></w:p></w:ftr>`);
+const dualTemplateBuffer = await dualTemplateZip.generateAsync({ type: "nodebuffer" });
+const dualTemplateImported = await parseImportedDocument({ originalname: "dual-page-template.docx", buffer: dualTemplateBuffer, mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: dualTemplateBuffer.length });
+assert.equal(dualTemplateImported.pageLayout.headerPageNumberTemplate, "Page {PAGE:upperRoman} of {NUMPAGES}");
+assert.equal(dualTemplateImported.pageLayout.footerPageNumberTemplate, "Total {NUMPAGES}");
+
+const restartedNumberingZip = await JSZip.loadAsync(buffer);
+const restartedNumberingXml = await restartedNumberingZip.file("word/document.xml")?.async("string") || "";
+restartedNumberingZip.file("word/document.xml", restartedNumberingXml.replace("<w:sectPr>", '<w:sectPr><w:pgNumType w:start="0" w:fmt="lowerRoman"/>'));
+const restartedNumberingBuffer = await restartedNumberingZip.generateAsync({ type: "nodebuffer" });
+const restartedNumberingImported = await parseImportedDocument({ originalname: "restarted-page-numbering.docx", buffer: restartedNumberingBuffer, mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: restartedNumberingBuffer.length });
+assert.equal(restartedNumberingImported.pageLayout.pageNumberStart, 0);
+assert.equal(restartedNumberingImported.pageLayout.pageNumberFormat, "lowerRoman");
+
 const complexLayoutZip = await JSZip.loadAsync(buffer);
 const complexHeaderXml = await complexLayoutZip.file("word/header1.xml")?.async("string") || "";
-complexLayoutZip.file("word/header1.xml", complexHeaderXml.replace("<w:r>", "<w:r><w:rPr><w:b/></w:rPr>"));
+complexLayoutZip.file("word/header1.xml", complexHeaderXml.replace("<w:b/>", "<w:b/><w:u w:val=\"single\"/>"));
 const complexLayoutBuffer = await complexLayoutZip.generateAsync({ type: "nodebuffer" });
 const complexLayoutImported = await parseImportedDocument({
   originalname: "complex-header-fixture.docx",
@@ -184,8 +297,25 @@ const complexLayoutImported = await parseImportedDocument({
   mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   size: complexLayoutBuffer.length
 });
-// 中文注解：当前模型无法完整承载多节和富格式页眉时必须明确提示，不能静默宣称完全恢复。
-assert.match(complexLayoutImported.warnings.join(" "), /富文本格式/);
+// 中文注解：下划线等尚未承载的高级页眉格式必须明确提示，不能静默宣称完全恢复。
+assert.match(complexLayoutImported.warnings.join(" "), /高级格式/);
+
+const mixedStyleZip = await JSZip.loadAsync(buffer);
+const mixedStyleHeaderXml = await mixedStyleZip.file("word/header1.xml")?.async("string") || "";
+mixedStyleZip.file("word/header1.xml", mixedStyleHeaderXml.replace("</w:p>", '<w:r><w:rPr><w:color w:val="00AA00"/></w:rPr><w:t>混合样式</w:t></w:r></w:p>'));
+const mixedStyleBuffer = await mixedStyleZip.generateAsync({ type: "nodebuffer" });
+const mixedStyleImported = await parseImportedDocument({
+  originalname: "mixed-header-style.docx",
+  buffer: mixedStyleBuffer,
+  mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  size: mixedStyleBuffer.length
+});
+// 中文注解：同一页眉内存在多套字符样式时当前模型只能采用首套格式，导入结果必须向用户说明限制。
+assert.match(mixedStyleImported.warnings.join(" "), /混合字符样式/);
+
+// 中文注解：Word 页眉页脚的常用格式应恢复到页面模型，供在线预览、编辑和再次导出共同使用。
+assert.deepEqual(imported.pageLayout.headerStyle, { alignment: "right", fontFamily: "Microsoft YaHei", fontSizePt: 12, color: "#1F4E79", bold: true, italic: true });
+assert.deepEqual(imported.pageLayout.footerStyle, { alignment: "left", fontFamily: "SimSun", fontSizePt: 10.5, color: "#C00000", bold: false, italic: false });
 
 // 中文注解：这个检查覆盖用户反馈的核心症状，导入后段落、字体、表格和图片不能被洗掉。
 assert.match(imported.content, /text-align:\s*center/);
@@ -214,13 +344,22 @@ assert.match(imported.content, /<ol><li>Override ordered item<\/li><\/ol><ol><li
 assert.match(imported.content, /<td><p[^>]*>Import Cell 1<\/p><ol><li>Table ordered item<\/li><\/ol><\/td>/);
 assert.deepEqual(imported.pageLayout, {
   headerText: "导入页眉",
+  headerStyle: { alignment: "right", fontFamily: "Microsoft YaHei", fontSizePt: 12, color: "#1F4E79", bold: true, italic: true },
   footerText: "导入页脚",
+  footerStyle: { alignment: "left", fontFamily: "SimSun", fontSizePt: 10.5, color: "#C00000", bold: false, italic: false },
+  headerPageNumberTemplate: "",
+  footerPageNumberTemplate: "第 {PAGE} 页 / 共 {NUMPAGES} 页",
   pageNumberEnabled: true,
+  pageNumberPosition: "footer",
   firstPageDifferent: false,
   firstPage: emptyPageVariant,
   oddEvenDifferent: false,
   evenPage: emptyPageVariant,
   orientation: "portrait",
+  pageNumberFormat: "decimal",
+  pageNumberStart: null,
+  headerDistance: 360,
+  footerDistance: 900,
   margins: { top: 1440, right: 1440, bottom: 1440, left: 1440 }
 });
 
@@ -257,13 +396,22 @@ assert.match(atLeastRoundTripXml, /<w:spacing[^>]+w:lineRule="atLeast"/);
 
 const variantPageLayout = {
   headerText: "奇数页页眉",
+  headerStyle: defaultPageTextStyle,
   footerText: "奇数页页脚",
+  footerStyle: defaultPageTextStyle,
+  headerPageNumberTemplate: "",
+  footerPageNumberTemplate: "第 {PAGE} 页 / 共 {NUMPAGES} 页",
   pageNumberEnabled: true,
+  pageNumberPosition: "footer",
   firstPageDifferent: true,
-  firstPage: { headerText: "首页页眉", footerText: "首页页脚", pageNumberEnabled: false },
+  firstPage: { ...emptyPageVariant, headerText: "首页页眉", footerText: "首页页脚" },
   oddEvenDifferent: true,
-  evenPage: { headerText: "偶数页页眉", footerText: "偶数页页脚", pageNumberEnabled: true },
+  evenPage: { ...emptyPageVariant, headerText: "偶数页页眉", footerText: "偶数页页脚", footerPageNumberTemplate: "第 {PAGE} 页 / 共 {NUMPAGES} 页", pageNumberEnabled: true },
   orientation: "portrait",
+  pageNumberFormat: "decimal",
+  pageNumberStart: null,
+  headerDistance: 708,
+  footerDistance: 708,
   margins: { top: 1440, right: 1440, bottom: 1440, left: 1440 }
 };
 const variantRoundTripBuffer = await createDocxBuffer({ title: "页面类型往返", content: "<p>正文</p>", pageLayout: variantPageLayout });

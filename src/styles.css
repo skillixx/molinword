@@ -823,7 +823,7 @@ textarea {
   transform: translateX(-50%);
   z-index: 10;
   display: grid;
-  width: 304px;
+  width: 360px;
   max-height: min(620px, calc(100vh - 150px));
   overflow-y: auto;
   gap: 10px;
@@ -832,6 +832,28 @@ textarea {
   border-radius: 6px;
   background: #ffffff;
   box-shadow: 0 10px 24px rgba(23, 33, 43, 0.16);
+}
+
+.page-layout-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #53616d;
+  cursor: pointer;
+}
+
+.page-layout-close:hover {
+  background: #eef2f5;
+  color: #17212b;
 }
 
 .page-layout-section {
@@ -901,6 +923,81 @@ textarea {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+.page-text-format-controls {
+  display: grid;
+  grid-template-columns: 34px 34px minmax(0, 1fr) 72px 48px;
+  gap: 5px;
+  align-items: end;
+}
+
+.page-text-format-controls > select:first-child {
+  grid-column: 1 / 4;
+}
+
+.page-text-format-controls > .page-text-size {
+  grid-column: 4;
+}
+
+.page-text-format-controls > .page-color-swatch {
+  grid-column: 5;
+}
+
+.page-text-format-controls > button:first-of-type {
+  grid-column: 1;
+}
+
+.page-text-format-controls > button:last-of-type {
+  grid-column: 2;
+}
+
+.page-text-format-controls > select:last-child {
+  grid-column: 3 / 6;
+}
+
+.page-layout-popover .page-text-format-controls select,
+.page-layout-popover .page-text-format-controls input[type="number"] {
+  height: 30px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+.page-layout-popover .page-text-format-controls button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 30px;
+  border: 1px solid #cfd8e1;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #24313c;
+  cursor: pointer;
+}
+
+.page-layout-popover .page-text-format-controls button.active-format {
+  border-color: #2e7d6f;
+  background: #e8f3f0;
+  color: #17594f;
+}
+
+.page-layout-popover label.page-text-size,
+.page-layout-popover label.page-color-swatch {
+  display: grid;
+  gap: 2px;
+  color: #687684;
+  font-size: 10px;
+}
+
+.page-layout-popover label.page-color-swatch input[type="color"] {
+  width: 100%;
+  height: 30px;
+  border: 1px solid #cfd8e1;
+  border-radius: 4px;
+  padding: 3px;
+  background: #ffffff;
+  cursor: pointer;
 }
 
 .page-number-toggle {
@@ -1006,11 +1103,13 @@ textarea {
 }
 
 .page-header {
-  top: 34px;
+  top: var(--page-header-distance, 47.2px);
+  display: flex;
+  gap: 6px;
 }
 
 .page-footer {
-  bottom: 34px;
+  bottom: var(--page-footer-distance, 47.2px);
   display: flex;
   justify-content: center;
   gap: 6px;
@@ -1582,12 +1681,16 @@ textarea {
     overflow: visible;
   }
 
-  /* 移动端工具栏靠近屏幕底部，页面设置向上展开才能始终保持可操作。 */
+  /* 中文注解：窄屏采用视口内固定面板，长表单不会因工具栏位置或正文滚动而跑出屏幕。 */
   .page-layout-popover {
-    top: auto;
-    bottom: calc(100% + 6px);
-    width: min(304px, calc(100vw - 32px));
-    max-height: calc(100dvh - 160px);
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    bottom: 16px;
+    left: 16px;
+    transform: none;
+    width: auto;
+    max-height: none;
   }
 
   .editor-source {

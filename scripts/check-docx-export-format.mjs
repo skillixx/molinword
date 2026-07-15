@@ -41,12 +41,16 @@ const buffer = await createDocxBuffer({
   content,
   pageLayout: {
     headerText: "默认奇数页眉",
+    headerStyle: { alignment: "left", fontFamily: "Arial", fontSizePt: 11.5, color: "#123456", bold: true, italic: true },
     footerText: "默认奇数页脚",
+    footerStyle: { alignment: "right", fontFamily: "SimSun", fontSizePt: 10, color: "#654321", bold: false, italic: false },
     pageNumberEnabled: true,
     firstPageDifferent: true,
     firstPage: { headerText: "首页页眉", footerText: "首页页脚", pageNumberEnabled: false },
     oddEvenDifferent: true,
-    evenPage: { headerText: "偶数页眉", footerText: "偶数页脚", pageNumberEnabled: true }
+    evenPage: { headerText: "偶数页眉", footerText: "偶数页脚", pageNumberEnabled: true },
+    headerDistance: 480,
+    footerDistance: 840
   }
 });
 const zip = await JSZip.loadAsync(buffer);
@@ -63,6 +67,37 @@ assert.ok(relationshipsXml, "document relationships should exist");
 assert.ok(numberingXml, "numbering.xml should exist");
 assert.equal(headerXmlParts.length, 3, "default, first and even headers should exist");
 assert.equal(footerXmlParts.length, 3, "default, first and even footers should exist");
+
+// 中文注解：页眉页脚格式必须进入独立部件，在线设置的基础办公样式不能只停留在页面预览。
+assert.ok(headerXmlParts.some((xml) => /<w:jc w:val="left"\/>/.test(xml) && /<w:rFonts[^>]+Arial/.test(xml) && /<w:sz w:val="23"\/>/.test(xml) && /<w:color w:val="123456"\/>/.test(xml) && /<w:b\/>/.test(xml) && /<w:i\/>/.test(xml)));
+assert.ok(footerXmlParts.some((xml) => /<w:jc w:val="right"\/>/.test(xml) && /<w:rFonts[^>]+SimSun/.test(xml) && /<w:sz w:val="20"\/>/.test(xml) && /<w:color w:val="654321"\/>/.test(xml)));
+
+const headerPageNumberBuffer = await createDocxBuffer({
+  title: "Header page number",
+  content: "<p>Body</p>",
+  pageLayout: {
+    headerText: "",
+    footerText: "",
+    headerPageNumberTemplate: "Page {PAGE:upperRoman} of {NUMPAGES}",
+    footerPageNumberTemplate: "Total {NUMPAGES}",
+    pageNumberFormat: "lowerRoman",
+    pageNumberStart: 0
+  }
+});
+const headerPageNumberZip = await JSZip.loadAsync(headerPageNumberBuffer);
+const headerPageNumberXml = (await Promise.all(headerPageNumberZip.file(/^word\/header\d+\.xml$/).map((file) => file.async("string")))).join("\n");
+const footerWithoutPageNumberXml = (await Promise.all(headerPageNumberZip.file(/^word\/footer\d+\.xml$/).map((file) => file.async("string")))).join("\n");
+// 中文注解：页码位置是在线页面模型的一部分，选择页眉后动态域只能写入页眉部件。
+assert.match(headerPageNumberXml, /Page /);
+assert.match(headerPageNumberXml, / of /);
+assert.match(headerPageNumberXml, /<w:fldSimple[^>]+w:instr="PAGE \\[*] ROMAN"/);
+assert.match(headerPageNumberXml, /<\/w:r><w:fldSimple[^>]+w:instr="PAGE \\[*] ROMAN"/);
+assert.match(headerPageNumberXml, /<w:fldSimple[^>]+w:instr="PAGE \\[*] ROMAN"><w:r><w:rPr>/);
+assert.match(footerWithoutPageNumberXml, /Total /);
+assert.match(footerWithoutPageNumberXml, /<w:fldSimple[^>]+w:instr="NUMPAGES"/);
+assert.doesNotMatch(footerWithoutPageNumberXml, /<w:fldSimple[^>]+w:instr="PAGE"/);
+const headerPageNumberDocumentXml = await headerPageNumberZip.file("word/document.xml")?.async("string") || "";
+assert.match(headerPageNumberDocumentXml, /<w:pgNumType[^>]+w:start="0"[^>]*w:fmt="lowerRoman"/);
 
 // 中文注解：直接检查 DOCX XML，确保在线编辑样式没有在 HTML -> Word 转换中被抹掉。
 assert.match(documentXml, /<w:jc w:val="center"\/>/);
@@ -84,6 +119,7 @@ assert.match(documentXml, /<w:br w:type="page"\/>/);
 // 中文注解：在线纸张固定使用 A4 和 1 英寸页边距，导出结构必须保持同一可用内容区域。
 assert.match(documentXml, /<w:pgSz[^>]+w:w="11906"[^>]+w:h="16838"/);
 assert.match(documentXml, /<w:pgMar[^>]+w:top="1440"[^>]+w:right="1440"[^>]+w:bottom="1440"[^>]+w:left="1440"/);
+assert.match(documentXml, /<w:pgMar[^>]+w:header="480"[^>]+w:footer="840"/);
 assert.match(documentXml, /<w:headerReference w:type="first"/);
 assert.match(documentXml, /<w:headerReference w:type="even"/);
 assert.match(documentXml, /<w:titlePg\/>/);
@@ -94,8 +130,8 @@ assert.ok(headerXmlParts.some((xml) => xml.includes("偶数页眉")));
 assert.ok(footerXmlParts.some((xml) => xml.includes("默认奇数页脚")));
 assert.ok(footerXmlParts.some((xml) => xml.includes("首页页脚")));
 assert.ok(footerXmlParts.some((xml) => xml.includes("偶数页脚")));
-assert.equal(footerXmlParts.filter((xml) => /<w:instrText[^>]*>PAGE<\/w:instrText>/.test(xml)).length, 2);
-assert.equal(footerXmlParts.filter((xml) => /<w:instrText[^>]*>NUMPAGES<\/w:instrText>/.test(xml)).length, 2);
+assert.equal(footerXmlParts.filter((xml) => /<w:fldSimple[^>]+w:instr="PAGE"/.test(xml)).length, 2);
+assert.equal(footerXmlParts.filter((xml) => /<w:fldSimple[^>]+w:instr="NUMPAGES"/.test(xml)).length, 2);
 
 function paragraphXmlForText(text) {
   return (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || [])
