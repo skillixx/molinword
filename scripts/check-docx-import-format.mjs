@@ -134,7 +134,7 @@ async function buildFormattedDocxFixture() {
     <w:tbl>
       <w:tblPr><w:tblW w:type="dxa" w:w="6000"/><w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="100" w:type="dxa"/><w:right w:w="200" w:type="dxa"/><w:bottom w:w="300" w:type="dxa"/><w:left w:w="400" w:type="dxa"/></w:tblCellMar></w:tblPr>
       <w:tblGrid><w:gridCol w:w="1800"/><w:gridCol w:w="4200"/></w:tblGrid>
-      <w:tr><w:tc><w:tcPr><w:tcW w:type="dxa" w:w="1800"/><w:tcMar><w:right w:w="600" w:type="dxa"/></w:tcMar><w:vAlign w:val="center"/><w:shd w:val="clear" w:fill="D9EAD3"/></w:tcPr><w:p><w:r><w:t>Geometry A</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:tcW w:type="dxa" w:w="4200"/></w:tcPr><w:p><w:r><w:t>Geometry B</w:t></w:r></w:p></w:tc></w:tr>
+      <w:tr><w:trPr><w:tblHeader/><w:cantSplit/><w:trHeight w:val="720" w:hRule="exact"/></w:trPr><w:tc><w:tcPr><w:tcW w:type="dxa" w:w="1800"/><w:tcMar><w:right w:w="600" w:type="dxa"/></w:tcMar><w:vAlign w:val="center"/><w:shd w:val="clear" w:fill="D9EAD3"/></w:tcPr><w:p><w:r><w:t>Geometry A</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:tcW w:type="dxa" w:w="4200"/></w:tcPr><w:p><w:r><w:t>Geometry B</w:t></w:r></w:p></w:tc></w:tr>
     </w:tbl>
     <w:tbl>
       <w:tr>
@@ -406,6 +406,12 @@ assert.match(importedGeometryTable, /data-table-layout="fixed"/);
 assert.match(importedGeometryTable, /style="width:\s*400px;\s*table-layout:\s*fixed"/);
 assert.match(importedGeometryTable, /colwidth="120"/);
 assert.match(importedGeometryTable, /colwidth="280"/);
+const importedGeometryRow = importedGeometryTable.match(/<tr[^>]*>/)?.[0] || "";
+assert.match(importedGeometryRow, /data-row-height="720"/);
+assert.match(importedGeometryRow, /data-row-height-rule="exact"/);
+assert.match(importedGeometryRow, /data-row-cant-split="true"/);
+assert.match(importedGeometryRow, /data-row-repeat-header="true"/);
+assert.match(importedGeometryRow, /style="height:\s*48px"/);
 const importedGeometryCell = importedGeometryTable.match(/<th[^>]*>[^<]*<p[^>]*>Geometry A<\/p><\/th>/)?.[0] || "";
 assert.match(importedGeometryCell, /data-docx-cell="true"/);
 assert.match(importedGeometryCell, /data-cell-margins="[^\"]*100[^\"]*600[^\"]*300[^\"]*400[^\"]*"/);
@@ -495,6 +501,10 @@ assert.match(geometryRoundTripXml, /<w:tblLayout w:type="fixed"\/>/);
 assert.match(geometryRoundTripXml, /<w:tblGrid><w:gridCol w:w="1800"\/><w:gridCol w:w="4200"\/><\/w:tblGrid>/);
 assert.match(geometryRoundTripXml, /<w:tcW w:type="dxa" w:w="1800"\/>/);
 assert.match(geometryRoundTripXml, /<w:tcW w:type="dxa" w:w="4200"\/>/);
+const geometryRowRoundTripXml = geometryRoundTripXml.match(/<w:tr>[\s\S]*?<\/w:tr>/)?.[0] || "";
+assert.match(geometryRowRoundTripXml, /<w:tblHeader\/>/);
+assert.match(geometryRowRoundTripXml, /<w:cantSplit\/>/);
+assert.match(geometryRowRoundTripXml, /<w:trHeight w:val="720" w:hRule="exact"\/>/);
 const geometryCellRoundTripXml = (geometryRoundTripXml.match(/<w:tc>[\s\S]*?<\/w:tc>/g) || []).find((cell) => cell.includes("Geometry A")) || "";
 assert.match(geometryCellRoundTripXml, /<w:tcMar>/);
 for (const [side, width] of [["top", 100], ["right", 600], ["bottom", 300], ["left", 400]]) assert.match(geometryCellRoundTripXml, new RegExp(`<w:${side} w:type="dxa" w:w="${width}"\\/>`));
@@ -525,6 +535,10 @@ assert.match(roundTripImportedGeometryTable, /colwidth="280"/);
 assert.match(roundTripImportedGeometryTable, /data-cell-vertical-align="center"/);
 assert.match(roundTripImportedGeometryTable, /data-cell-shading="#D9EAD3"/);
 assert.match(roundTripImportedGeometryTable, /padding-right:\s*40px/);
+assert.match(roundTripImportedGeometryTable, /data-row-height="720"/);
+assert.match(roundTripImportedGeometryTable, /data-row-height-rule="exact"/);
+assert.match(roundTripImportedGeometryTable, /data-row-cant-split="true"/);
+assert.match(roundTripImportedGeometryTable, /data-row-repeat-header="true"/);
 assert.deepEqual(roundTripImported.pageLayout, imported.pageLayout);
 const atLeastRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || [])
   .find((paragraph) => paragraph.includes(">At least spacing</w:t>")) || "";

@@ -511,6 +511,16 @@ const tableCellShadingOptions = [
   { label: "浅绿", value: "#E8F3F0" },
   { label: "浅黄", value: "#FFF2CC" }
 ];
+const tableRowHeightOptions = [
+  { label: "自动行高", value: "0" },
+  { label: "0.8 cm", value: "454" },
+  { label: "1.0 cm", value: "567" },
+  { label: "1.5 cm", value: "850" }
+];
+const tableRowHeightRuleOptions = [
+  { label: "最小值", value: "atLeast" },
+  { label: "固定值", value: "exact" }
+];
 
 function pageTextCssStyle(style: DocumentPageTextStyle): React.CSSProperties {
   return {
@@ -667,12 +677,13 @@ function FormatSelect(props: {
   placeholder: string;
   options: FormatSelectOption[];
   icon?: React.ReactNode;
+  disabled?: boolean;
   onSelect: (value: string, label: string) => void;
 }) {
   return (
     <label className="format-select" title={props.title}>
       {props.icon}
-      <select defaultValue="" onChange={(event) => {
+      <select defaultValue="" disabled={props.disabled} onChange={(event) => {
         const value = event.target.value;
         const label = event.target.selectedOptions[0]?.text || value;
         if (value) props.onSelect(value, label);
@@ -1011,6 +1022,37 @@ const DocumentTableCell = TableCell.extend({
 const DocumentTableHeader = TableHeader.extend({
   addAttributes() {
     return { ...this.parent?.(), ...documentTableCellAttributes() };
+  }
+});
+
+const DocumentTableRow = TableRow.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      rowHeight: {
+        default: 0,
+        parseHTML: (element) => Math.max(0, Math.min(31680, Math.round(Number(element.getAttribute("data-row-height")) || 0))),
+        renderHTML: (attributes) => {
+          const height = Math.max(0, Math.min(31680, Math.round(Number(attributes.rowHeight) || 0)));
+          return height ? { "data-row-height": height, style: `height: ${Math.round(height * 96 / 1440 * 100) / 100}px` } : {};
+        }
+      },
+      rowHeightRule: {
+        default: "auto",
+        parseHTML: (element) => ["exact", "atLeast"].includes(element.getAttribute("data-row-height-rule") || "") ? element.getAttribute("data-row-height-rule") : "auto",
+        renderHTML: (attributes) => ["exact", "atLeast"].includes(String(attributes.rowHeightRule)) ? { "data-row-height-rule": attributes.rowHeightRule } : {}
+      },
+      rowCantSplit: {
+        default: false,
+        parseHTML: (element) => element.getAttribute("data-row-cant-split") === "true",
+        renderHTML: (attributes) => attributes.rowCantSplit ? { "data-row-cant-split": "true" } : {}
+      },
+      rowRepeatHeader: {
+        default: false,
+        parseHTML: (element) => element.getAttribute("data-row-repeat-header") === "true",
+        renderHTML: (attributes) => attributes.rowRepeatHeader ? { "data-row-repeat-header": "true" } : {}
+      }
+    };
   }
 });
 
@@ -1368,6 +1410,26 @@ function structuredBlockItemCount(element: Element) {
   return 0;
 }
 
+function prependRepeatingTableHeaderRows(sourceTable: Element, clonedTable: HTMLElement, firstSourceRowIndex: number) {
+  if (!sourceTable.matches("table") || firstSourceRowIndex <= 0) return;
+  const sourceRows = Array.from(sourceTable.querySelectorAll("tr"));
+  const repeatingRows: Element[] = [];
+  // 中文注解：Word 只重复表格顶部连续标记为 tblHeader 的行，中间断开后不能继续重复。
+  for (const row of sourceRows) {
+    if ((row as HTMLElement).dataset.rowRepeatHeader === "true") repeatingRows.push(row);
+    else break;
+  }
+  if (!repeatingRows.length || firstSourceRowIndex < repeatingRows.length) return;
+  const firstClonedRow = clonedTable.querySelector("tr");
+  const parent = firstClonedRow?.parentElement;
+  if (!firstClonedRow || !parent) return;
+  for (const row of repeatingRows) {
+    const repeatedRow = row.cloneNode(true) as HTMLElement;
+    repeatedRow.classList.add("pagination-repeated-header");
+    parent.insertBefore(repeatedRow, firstClonedRow);
+  }
+}
+
 function structuredBlockFragmentHtml(element: Element, start: number, end: number, isFinal: boolean) {
   const clone = element.cloneNode(true) as HTMLElement;
   const items = clone.matches("ol, ul")
@@ -1379,6 +1441,7 @@ function structuredBlockFragmentHtml(element: Element, start: number, end: numbe
   clone.querySelectorAll("thead, tbody, tfoot").forEach((section) => {
     if (!section.querySelector("tr")) section.remove();
   });
+  if (clone.matches("table")) prependRepeatingTableHeaderRows(element, clone, start);
   if (clone.matches("ol") && start > 0) {
     const originalStart = Number(element.getAttribute("start") || 1);
     clone.setAttribute("start", String(originalStart + start));
@@ -1417,18 +1480,20 @@ function tableRowFragmentHtml(element: Element, rowIndex: number, starts: number
   const sourceRows = Array.from(element.querySelectorAll("tr"));
   const sourceRow = sourceRows[rowIndex];
   if (!sourceRow) return "";
-  const clone = element.cloneNode(true) as HTMLElement;
-  const clonedRows = Array.from(clone.querySelectorAll("tr"));
-  clonedRows.forEach((row, index) => {
-    if (index !== rowIndex) row.remove();
-  });
-  clone.querySelectorAll("thead, tbody, tfoot").forEach((section) => {
-    if (!section.querySelector("tr")) section.remove();
-  });
-
-  const clonedRow = clone.querySelector("tr");
+  const clone = element.cloneNode(false) as HTMLElement;
+  const sourceSection = sourceRow.parentElement?.matches("thead, tbody, tfoot") ? sourceRow.parentElement : null;
+  const clonedSection = sourceSection?.cloneNode(false) as HTMLElement | undefined;
+  const clonedRow = sourceRow.cloneNode(false) as HTMLElement;
+  if (clonedSection) {
+    clonedSection.append(clonedRow);
+    clone.append(clonedSection);
+  } else {
+    clone.append(clonedRow);
+  }
   const sourceCells = Array.from(sourceRow.querySelectorAll(":scope > th, :scope > td"));
-  const clonedCells = clonedRow ? Array.from(clonedRow.querySelectorAll(":scope > th, :scope > td")) : [];
+  const clonedCells = sourceCells.map((cell) => cell.cloneNode(false) as HTMLElement);
+  clonedRow.append(...clonedCells);
+  // 中文注解：只克隆当前行的结构，再填入本页文本片段，避免每次二分测量都深拷贝整张超长表格。
   sourceCells.forEach((cell, index) => {
     const clonedCell = clonedCells[index];
     if (!clonedCell) return;
@@ -1464,6 +1529,7 @@ function tableRowFragmentHtml(element: Element, rowIndex: number, starts: number
     clonedCell.replaceChildren(fragment);
     if (!clonedCell.textContent && !clonedCell.querySelector("img")) clonedCell.innerHTML = "<p>&nbsp;</p>";
   });
+  prependRepeatingTableHeaderRows(element, clone, rowIndex);
 
   if (isContinuation) clone.classList.add("pagination-table-continuation");
   if (isContinuation) clone.style.marginTop = "0px";
@@ -2353,6 +2419,7 @@ function Editor(props: {
   const [activeSectionLayout, setActiveSectionLayout] = React.useState<DocumentPageLayout>(() => normalizeDocumentPageLayout(props.pageLayout));
   const [sectionCount, setSectionCount] = React.useState(1);
   const [paginationAssetVersion, setPaginationAssetVersion] = React.useState(0);
+  const [paginationPending, setPaginationPending] = React.useState(false);
   const paginationMeasureRef = React.useRef<HTMLDivElement | null>(null);
   const imageInputRef = React.useRef<HTMLInputElement | null>(null);
   const manualSavePromiseRef = React.useRef<Promise<ApiDocument | null> | null>(null);
@@ -2390,7 +2457,7 @@ function Editor(props: {
   }, [props.pageLayout]);
 
   const editor = useEditor({
-    extensions: [StarterKit, ImageExtension.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DocxTab, ParagraphIndent, PageBreak, SectionBreak, DocumentTable, TableRow, DocumentTableHeader, DocumentTableCell],
+    extensions: [StarterKit, ImageExtension.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DocxTab, ParagraphIndent, PageBreak, SectionBreak, DocumentTable, DocumentTableRow, DocumentTableHeader, DocumentTableCell],
     content: props.content,
     editorProps: { attributes: { class: "word-editor" } },
     onCreate({ editor }) { updateOutlineFromEditor(editor); syncActiveSectionFromEditor(editor); },
@@ -2422,9 +2489,16 @@ function Editor(props: {
     setActiveSectionLayout((current) => samePageLayout(current, nextLayout) ? current : nextLayout);
   }, [activeSectionIndex, props.pageLayout]);
 
-  React.useLayoutEffect(() => {
+  React.useEffect(() => {
     const measureElement = paginationMeasureRef.current;
-    if (!measureElement) return;
+    if (!measureElement || viewMode !== "page") {
+      setPaginationPending(false);
+      return;
+    }
+    setPaginationPending(true);
+    // 中文注解：超长文档分页属于昂贵布局任务，只在分页视图绘制后计算，避免阻塞编辑和视图按钮反馈。
+    let cleanupPendingImages = () => {};
+    const paginationTimer = window.setTimeout(() => {
 
     const sourceHtml = buildExportPreviewHtml(props.currentTitle, props.content);
     let currentLayout = normalizeDocumentPageLayout(props.pageLayout);
@@ -2445,10 +2519,11 @@ function Editor(props: {
         image.addEventListener("load", requestRemeasure, { once: true });
         image.addEventListener("error", requestRemeasure, { once: true });
       });
-      return () => pendingImages.forEach((image) => {
+      cleanupPendingImages = () => pendingImages.forEach((image) => {
         image.removeEventListener("load", requestRemeasure);
         image.removeEventListener("error", requestRemeasure);
       });
+      return;
     }
     const sourceBlocks = Array.from(measureElement.children).map((child) => child.cloneNode(true) as HTMLElement);
     let pageContentHeight = currentGeometry.contentHeightPx;
@@ -2539,6 +2614,8 @@ function Editor(props: {
     const appendOversizedTableRow = (table: HTMLElement, rowIndex: number) => {
       const row = Array.from(table.querySelectorAll("tr"))[rowIndex];
       if (!row) return false;
+      // 中文注解：禁止跨页断行的行宁可整体移到下一页，也不能被在线分页器拆成多个伪造行。
+      if (row instanceof HTMLElement && row.dataset.rowCantSplit === "true") return false;
       const cells = Array.from(row.querySelectorAll(":scope > th, :scope > td"));
       // 中文注解：纯图片单元格使用对象占位字符参与一次分页，避免被当成空单元格永久丢弃。
       const texts = cells.map((cell) => cell.textContent || (cell.querySelector("img") ? "\uFFFC" : ""));
@@ -2733,7 +2810,13 @@ function Editor(props: {
     });
 
     setPreviewPages(nextPages);
-  }, [paginationAssetVersion, props.content, props.currentTitle, props.pageLayout, props.selectedTemplate]);
+    setPaginationPending(false);
+    }, 16);
+    return () => {
+      window.clearTimeout(paginationTimer);
+      cleanupPendingImages();
+    };
+  }, [paginationAssetVersion, props.content, props.currentTitle, props.pageLayout, props.selectedTemplate, viewMode]);
 
   const runSelectionAi = async (action: AiAction) => {
     const selectedText = getSelectedText(editor);
@@ -2843,6 +2926,37 @@ function Editor(props: {
       .run();
     // 中文注解：语义属性用于 Word 导出，style 用于编辑器和分页预览，两者必须在同一事务中更新。
     setSelectionHint(applied ? `已设置${label}。` : "当前单元格无法应用该格式。");
+  };
+
+  const updateCurrentTableRow = (patch: { height?: number; heightRule?: string; cantSplit?: boolean; repeatHeader?: boolean }, label: string) => {
+    if (!editor || !editor.isActive("table")) {
+      setSelectionHint("请先把光标放到需要设置的表格行中。");
+      return;
+    }
+    const { $from } = editor.state.selection;
+    let rowDepth = $from.depth;
+    while (rowDepth > 0 && $from.node(rowDepth).type.name !== "tableRow") rowDepth -= 1;
+    if (rowDepth <= 0) {
+      setSelectionHint("当前光标不在可设置的表格行中。");
+      return;
+    }
+    const row = $from.node(rowDepth);
+    let rowHeight = patch.height === undefined ? Math.max(0, Math.round(Number(row.attrs.rowHeight) || 0)) : Math.max(0, Math.round(patch.height));
+    let rowHeightRule = patch.heightRule === undefined ? String(row.attrs.rowHeightRule || "auto") : patch.heightRule;
+    if (patch.height === 0) rowHeightRule = "auto";
+    if (patch.heightRule && rowHeight === 0) rowHeight = 454;
+    const attrs = {
+      ...row.attrs,
+      rowHeight,
+      rowHeightRule,
+      rowCantSplit: patch.cantSplit === undefined ? Boolean(row.attrs.rowCantSplit) : patch.cantSplit,
+      rowRepeatHeader: patch.repeatHeader === undefined ? Boolean(row.attrs.rowRepeatHeader) : patch.repeatHeader
+    };
+    const transaction = editor.state.tr.setNodeMarkup($from.before(rowDepth), undefined, attrs).scrollIntoView();
+    editor.view.dispatch(transaction);
+    editor.view.focus();
+    // 中文注解：行属性直接写入 tableRow 节点，保存、分页预览和 Word 导出共享同一份语义数据。
+    setSelectionHint(`已设置${label}。`);
   };
 
   const insertImageFile = (file: File | null) => {
@@ -3115,6 +3229,10 @@ function Editor(props: {
             <button onClick={() => editor?.chain().focus().mergeCells().run()} disabled={!editor?.can().mergeCells()} title="合并选中的单元格"><Combine size={16} />合并</button>
             <button onClick={() => editor?.chain().focus().splitCell().run()} disabled={!editor?.can().splitCell()} title="拆分当前合并单元格"><Split size={16} />拆分</button>
             <button onClick={() => editor?.chain().focus().toggleHeaderCell().run()} disabled={!editor?.isActive("table")} title="切换当前单元格为表头"><PanelTop size={16} />表头</button>
+            <FormatSelect title="设置当前表格行高度" placeholder="行高" options={tableRowHeightOptions} icon={<Rows3 size={16} />} disabled={!editor?.isActive("table")} onSelect={(value, label) => updateCurrentTableRow({ height: Number(value) }, label)} />
+            <FormatSelect title="设置当前表格行高度规则" placeholder="行高规则" options={tableRowHeightRuleOptions} disabled={!editor?.isActive("table")} onSelect={(value, label) => updateCurrentTableRow({ heightRule: value }, `行高${label}`)} />
+            <button className={editor?.getAttributes("tableRow").rowCantSplit ? "active-format" : ""} onClick={() => updateCurrentTableRow({ cantSplit: !editor?.getAttributes("tableRow").rowCantSplit }, "禁止跨页断行")} disabled={!editor?.isActive("table")} title="禁止当前表格行跨页拆分">整行同页</button>
+            <button className={editor?.getAttributes("tableRow").rowRepeatHeader ? "active-format" : ""} onClick={() => updateCurrentTableRow({ repeatHeader: !editor?.getAttributes("tableRow").rowRepeatHeader }, "重复标题行")} disabled={!editor?.isActive("table")} title="在后续页面顶部重复当前标题行">重复标题</button>
             <FormatSelect title="设置当前单元格垂直对齐" placeholder="单元格对齐" options={tableCellVerticalAlignOptions} onSelect={(value, label) => updateCurrentTableCell({ verticalAlign: value }, `单元格${label}对齐`)} />
             <FormatSelect title="设置当前单元格内边距" placeholder="单元格边距" options={tableCellPaddingOptions} onSelect={(value, label) => updateCurrentTableCell({ margin: Number(value) }, `${label}单元格边距`)} />
             <FormatSelect title="设置当前单元格底色" placeholder="单元格底色" options={tableCellShadingOptions} onSelect={(value, label) => updateCurrentTableCell({ shading: value === "none" ? null : value }, `单元格${label}`)} />
@@ -3143,7 +3261,7 @@ function Editor(props: {
             <button onClick={clearSelectionFormat} title="清除当前选区格式"><Eraser size={16} />清除格式</button>
             </> : null}
           </div>
-          {props.aiLoading === "正在生成正文" ? <div className="paper-loading"><LoadingProcess label={props.aiLoading} /></div> : null}
+          {props.aiLoading === "正在生成正文" || paginationPending ? <div className="paper-loading"><LoadingProcess label={paginationPending ? "正在计算分页" : props.aiLoading || "正在处理"} /></div> : null}
           <div className="editor-scroll" style={documentPreviewStyle(props.selectedTemplate)}>
             <div className={viewMode === "edit" ? "editor-source" : "editor-source is-hidden"}>
               <div className="editor-paper">

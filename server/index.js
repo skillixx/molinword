@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import express from "express";
-import { AlignmentType, Document, Footer, Header, HeadingLevel, ImageRun, LevelFormat, LineRuleType, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, Tab, Table, TableCell, TableLayoutType, TableRow, TextRun, VerticalAlignTable, WidthType } from "docx";
+import { AlignmentType, Document, Footer, Header, HeadingLevel, HeightRule, ImageRun, LevelFormat, LineRuleType, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, Tab, Table, TableCell, TableLayoutType, TableRow, TextRun, VerticalAlignTable, WidthType } from "docx";
 import { imageSize } from "image-size";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
@@ -348,6 +348,7 @@ function sanitizeImportedHtml(value = "") {
       span: ["style", "class", "data-docx-tab", "data-tab-position", "data-tab-alignment"],
       mark: ["data-highlight", "style"],
       table: ["style", "data-table-width-type", "data-table-width-value", "data-table-grid-width", "data-table-layout"],
+      tr: ["style", "data-row-height", "data-row-height-rule", "data-row-cant-split", "data-row-repeat-header"],
       th: ["style", "colspan", "rowspan", "colwidth", "data-docx-cell", "data-cell-margins", "data-cell-vertical-align", "data-cell-shading"],
       td: ["style", "colspan", "rowspan", "colwidth", "data-docx-cell", "data-cell-margins", "data-cell-vertical-align", "data-cell-shading"],
       img: ["src", "alt", "style"],
@@ -380,6 +381,9 @@ function sanitizeImportedHtml(value = "") {
       table: {
         width: [/^\d+(?:\.\d+)?(?:px|%)$/],
         "table-layout": [/^(?:fixed|auto)$/]
+      },
+      tr: {
+        height: [/^\d+(?:\.\d+)?px$/]
       },
       th: {
         "padding-top": [/^\d+(?:\.\d+)?px$/],
@@ -1122,6 +1126,14 @@ async function parseStyledDocxTable(tableNode, context) {
   const rows = [];
   let activeVerticalMerges = new Map();
   for (const [rowIndex, rowNode] of xmlChildren(tableNode, "w:tr").entries()) {
+    const rowProperties = xmlChild(rowNode, "w:trPr");
+    const rowHeightNode = xmlChild(rowProperties, "w:trHeight");
+    const rowHeight = Math.max(0, Math.min(31680, Math.round(Number(firstValue(rowHeightNode?.attribs, ["w:val", "val"])) || 0)));
+    const rawRowHeightRule = firstValue(rowHeightNode?.attribs, ["w:hRule", "hRule"]);
+    // 中文注解：Word 省略 hRule 时按“最小值”解释；在线高度也必须使用同一规则参与分页测量。
+    const rowHeightRule = rowHeight > 0 ? (["exact", "atLeast"].includes(rawRowHeightRule) ? rawRowHeightRule : "atLeast") : "auto";
+    const cantSplit = wordToggleEnabled(xmlChild(rowProperties, "w:cantSplit"));
+    const repeatHeader = wordToggleEnabled(xmlChild(rowProperties, "w:tblHeader"));
     const cellTag = rowIndex === 0 ? "th" : "td";
     const parsedCells = await Promise.all(xmlChildren(rowNode, "w:tc").map((cellNode) => parseStyledDocxTableCell(cellNode, { ...context, tableCellMargins }, cellTag)));
     const visibleCells = [];
@@ -1148,10 +1160,11 @@ async function parseStyledDocxTable(tableNode, context) {
       }
       columnIndex += cell.columnSpan;
     }
-    rows.push(visibleCells);
+    rows.push({ cells: visibleCells, rowHeight, rowHeightRule, cantSplit, repeatHeader });
     activeVerticalMerges = nextVerticalMerges;
   }
-  const renderedRows = rows.map((cells) => {
+  const renderedRows = rows.map((row) => {
+    const cells = row.cells;
     const html = cells.map((cell) => {
       const attrs = [];
       if (cell.columnSpan > 1) attrs.push(`colspan="${cell.columnSpan}"`);
@@ -1170,7 +1183,15 @@ async function parseStyledDocxTable(tableNode, context) {
       if (styles.length) attrs.push(`style="${styles.join("; ")}"`);
       return `<${cell.tagName}${attrs.length ? ` ${attrs.join(" ")}` : ""}>${cell.paragraphs}</${cell.tagName}>`;
     }).join("");
-    return html ? `<tr>${html}</tr>` : "";
+    const rowAttrs = [];
+    if (row.rowHeight > 0) {
+      rowAttrs.push(`data-row-height="${row.rowHeight}"`);
+      rowAttrs.push(`data-row-height-rule="${row.rowHeightRule}"`);
+      rowAttrs.push(`style="height: ${Math.round(row.rowHeight * 96 / 1440 * 100) / 100}px"`);
+    }
+    if (row.cantSplit) rowAttrs.push('data-row-cant-split="true"');
+    if (row.repeatHeader) rowAttrs.push('data-row-repeat-header="true"');
+    return html ? `<tr${rowAttrs.length ? ` ${rowAttrs.join(" ")}` : ""}>${html}</tr>` : "";
   }).filter(Boolean);
   if (!renderedRows.length) return "";
   const widthStyle = tableWidthType === "pct" && tableWidthValue > 0
@@ -2000,7 +2021,15 @@ function tableFromNode(tableNode, listState) {
   const rows = rowNodes.map((rowNode) => {
     const cellNodes = (rowNode.children || []).filter((child) => ["td", "th"].includes(child.name));
     if (!cellNodes.length) return null;
+    const rowHeight = Math.max(0, Math.min(31680, Math.round(Number(rowNode.attribs?.["data-row-height"]) || 0)));
+    const rowHeightRule = rowNode.attribs?.["data-row-height-rule"];
     return new TableRow({
+      height: rowHeight > 0 ? {
+        value: rowHeight,
+        rule: rowHeightRule === "exact" ? HeightRule.EXACT : HeightRule.ATLEAST
+      } : undefined,
+      cantSplit: rowNode.attribs?.["data-row-cant-split"] === "true" || undefined,
+      tableHeader: rowNode.attribs?.["data-row-repeat-header"] === "true" || undefined,
       children: cellNodes.map((cellNode) => {
         const columnSpan = Math.max(1, Math.min(Math.round(Number(cellNode.attribs?.colspan) || 1), 50));
         const rowSpan = Math.max(1, Math.min(Math.round(Number(cellNode.attribs?.rowspan) || 1), 100));

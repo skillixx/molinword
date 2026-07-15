@@ -266,8 +266,11 @@ try {
   assert.deepEqual(sourceGeometry.columns, [120, 360]);
   const businessReviewCell = sourceTables.last().locator("td").filter({ hasText: "商务评审" });
   await businessReviewCell.click();
+  await page.waitForTimeout(50);
   await page.locator('label[title="设置当前单元格垂直对齐"] select').selectOption("bottom");
+  assert.equal(await businessReviewCell.getAttribute("data-cell-vertical-align"), "bottom");
   await page.locator('label[title="设置当前单元格内边距"] select').selectOption("180");
+  assert.equal(await businessReviewCell.getAttribute("data-cell-vertical-align"), "bottom");
   await page.locator('label[title="设置当前单元格底色"] select').selectOption("#FFF2CC");
   const sourceCellFormat = await businessReviewCell.evaluate((cell) => ({
     margins: cell.getAttribute("data-cell-margins"),
@@ -298,6 +301,18 @@ try {
   const headerCells = firstTable.locator("th");
   assert.equal(await headerCells.count(), 2);
   await headerCells.first().click();
+  await page.locator('label[title="设置当前表格行高度"] select').selectOption("850");
+  await page.locator('label[title="设置当前表格行高度规则"] select').selectOption("exact");
+  await page.getByRole("button", { name: "整行同页", exact: true }).click();
+  await page.getByRole("button", { name: "重复标题", exact: true }).click();
+  const sourceHeaderRow = firstTable.locator("tr").first();
+  assert.deepEqual(await sourceHeaderRow.evaluate((row) => ({
+    height: row.getAttribute("data-row-height"),
+    rule: row.getAttribute("data-row-height-rule"),
+    cantSplit: row.getAttribute("data-row-cant-split"),
+    repeatHeader: row.getAttribute("data-row-repeat-header"),
+    cssHeight: row.style.height
+  })), { height: "850", rule: "exact", cantSplit: "true", repeatHeader: "true", cssHeight: "56.67px" });
   await headerCells.last().click({ modifiers: ["Shift"] });
   await page.getByRole("button", { name: "合并", exact: true }).click();
   assert.match(await editor.innerHTML(), /<th[^>]+colspan="2"/);
@@ -322,7 +337,10 @@ try {
     const selection = window.getSelection();
     selection?.removeAllRanges();
     selection?.addRange(range);
+    (paragraph.closest(".word-editor"))?.focus();
+    document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
   });
+  await page.waitForTimeout(50);
   await page.locator('label[title="设置当前段落样式"] select').selectOption("heading-2");
   assert.match(await editor.innerHTML(), /<h2[^>]*>.*保留小号红字.*<\/h2>/);
 
@@ -452,6 +470,11 @@ try {
   assert.match(reopenedHtml, /第二节横向内容/);
   assert.equal((reopenedHtml.match(/data-docx-tab="true"/g) || []).length, 4);
   assert.match(reopenedHtml, /<td[^>]+data-cell-margins="[^"]*&quot;top&quot;:180[^"]*"[^>]+data-cell-vertical-align="bottom"[^>]+data-cell-shading="#FFF2CC"[^>]*>.*商务评审/s);
+  const reopenedHeaderRow = reopenedHtml.match(/<tr[^>]+data-row-height="850"[^>]*>/)?.[0] || "";
+  assert.match(reopenedHeaderRow, /data-row-height-rule="exact"/);
+  assert.match(reopenedHeaderRow, /data-row-cant-split="true"/);
+  assert.match(reopenedHeaderRow, /data-row-repeat-header="true"/);
+  assert.match(reopenedHeaderRow, /style="height: 56\.67px;?"/);
 
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "导出 Word", exact: true }).click();
@@ -493,6 +516,11 @@ try {
   }
   assert.match(businessReviewCellXml, /<w:shd w:fill="FFF2CC"\/>/);
   assert.match(businessReviewCellXml, /<w:vAlign w:val="bottom"\/>/);
+  const longTable = (documentXml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/g) || []).find((table) => table.includes("左侧单元格包含大量业务说明")) || "";
+  const longTableHeaderRow = longTable.match(/<w:tr>[\s\S]*?<\/w:tr>/)?.[0] || "";
+  assert.match(longTableHeaderRow, /<w:tblHeader\/>/);
+  assert.match(longTableHeaderRow, /<w:cantSplit\/>/);
+  assert.match(longTableHeaderRow, /<w:trHeight w:val="850" w:hRule="exact"\/>/);
   assert.match(documentXml, /<w:highlight w:val="yellow"\/>/);
   assert.match(documentXml, /<w:vertAlign w:val="superscript"\/>/);
   assert.match(documentXml, /<w:vertAlign w:val="subscript"\/>/);
@@ -537,6 +565,7 @@ try {
 
   await page.getByRole("button", { name: "分页", exact: true }).click();
   await page.locator(".page-sheet").first().waitFor();
+  await page.waitForFunction(() => document.querySelectorAll(".page-sheet").length > 5);
 
   const result = await page.evaluate(() => {
     const pages = Array.from(document.querySelectorAll(".page-sheet"));
@@ -560,6 +589,7 @@ try {
       sectionIndexes: pages.map((page) => Number(page.getAttribute("data-section-index") || 0)),
       pageSizes: pages.map((page) => ({ width: Math.round(page.getBoundingClientRect().width), height: Math.round(page.getBoundingClientRect().height) })),
       firstPageHasList: Boolean(pages[0]?.querySelector("ol")),
+      firstPageText: pages[0]?.textContent || "",
       continuationMarkers: Array.from(document.querySelectorAll(".pagination-list-continuation > li")).map((item) => getComputedStyle(item).listStyleType),
       listMarginLeft: getComputedStyle(document.querySelector(".page-body ol")).marginLeft,
       sourceListItemMarginBottom: getComputedStyle(document.querySelector(".word-editor ol > li")).marginBottom,
@@ -573,6 +603,8 @@ try {
       sourceTableImageCount: document.querySelectorAll(".word-editor table img").length,
       previewTableImageCount: document.querySelectorAll(".page-body table img").length,
       previewRowSpanCount: document.querySelectorAll('.page-body td[rowspan="2"]').length,
+      repeatedHeaderCount: document.querySelectorAll(".page-body .pagination-repeated-header").length,
+      repeatedHeaderHeights: Array.from(document.querySelectorAll(".page-body .pagination-repeated-header")).map((row) => (row instanceof HTMLElement ? row.style.height : "")),
       sourceTabCount: document.querySelectorAll(".word-editor .docx-tab").length,
       previewTabCount: document.querySelectorAll(".page-body .docx-tab").length,
       previewTabWidths: Array.from(document.querySelectorAll(".page-body .docx-tab")).map((tab) => tab.getBoundingClientRect().width),
@@ -634,7 +666,7 @@ try {
   // 中文注解：覆盖当前页空间利用、无溢出、编号延续、表格跨页和内容完整性五个分页契约。
   assert.ok(result.pageCount > 5, "fixture should create a multi-page document");
   assert.deepEqual(result.overflowPages, []);
-  assert.equal(result.firstPageHasList, true);
+  assert.equal(result.firstPageHasList, true, `第一页应利用剩余空间开始编号列表，实际内容：${result.firstPageText.slice(0, 120)}`);
   assert.ok(result.continuationMarkers.length > 0);
   assert.ok(result.continuationMarkers.every((marker) => marker === "none"));
   assert.equal(result.listMarginLeft, "48px");
@@ -647,6 +679,8 @@ try {
   assert.equal(result.sourceTableImageCount, 1);
   assert.equal(result.previewTableImageCount, 1);
   assert.ok(result.previewRowSpanCount > 0, "分页预览应保留纵向合并单元格");
+  assert.ok(result.repeatedHeaderCount > 0, "跨页表格应在后续页面重复在线设置的标题行");
+  assert.ok(result.repeatedHeaderHeights.every((height) => height === "56.67px"), "重复标题行应保留在线设置的固定行高");
   assert.equal(result.previewTabCount, result.sourceTabCount, "分页预览应完整保留在线编辑器中的制表位");
   assert.ok(result.previewTabWidths.every((width) => width >= 2), "分页预览中的制表位应按 Word 位置完成布局");
   assert.ok(result.tableGeometry.previewWidth >= 480 && result.tableGeometry.previewWidth <= 481);
@@ -728,6 +762,7 @@ try {
   await editor.waitFor();
   await page.getByRole("button", { name: "分页", exact: true }).click();
   await page.locator(".page-sheet").first().waitFor();
+  await page.waitForFunction(() => Array.from(document.querySelectorAll(".page-sheet")).some((page) => page.getAttribute("data-section-index") === "1"));
   const legacySectionPreview = await page.evaluate(() => {
     const pages = Array.from(document.querySelectorAll(".page-sheet"));
     const secondSectionFirstPage = pages.findIndex((page) => page.getAttribute("data-section-index") === "1");
