@@ -911,8 +911,19 @@ textarea {
 .page-body ol,
 .pagination-measurer ul,
 .pagination-measurer ol {
-  margin: 0 0 8px 24px;
+  margin: 0 0 0 48px;
   padding: 0;
+}
+
+.page-body li,
+.pagination-measurer li {
+  margin-bottom: 5.33px;
+}
+
+.page-body .pagination-list-continuation > li,
+.pagination-measurer .pagination-list-continuation > li {
+  /* 中文注解：同一个超长列表项跨页后只在首段显示编号，续页保持文本缩进但不重复编号。 */
+  list-style: none;
 }
 
 .word-editor table,
@@ -1082,8 +1093,12 @@ textarea {
 
 .word-editor ul,
 .word-editor ol {
-  margin: 0 0 8px 24px;
+  margin: 0 0 0 48px;
   padding: 0;
+}
+
+.word-editor li {
+  margin-bottom: 5.33px;
 }
 
 .word-editor:focus {

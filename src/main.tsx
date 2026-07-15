@@ -514,6 +514,89 @@ function structuredBlockFragmentHtml(element: Element, start: number, end: numbe
   return clone.outerHTML;
 }
 
+function listItemFragmentHtml(element: Element, itemIndex: number, start: number, end: number, isContinuation: boolean, isFinal: boolean) {
+  const sourceItem = Array.from(element.children).filter((child) => child.matches("li"))[itemIndex];
+  if (!sourceItem) return "";
+  const startBoundary = textBoundary(sourceItem, start);
+  const endBoundary = textBoundary(sourceItem, end);
+  if (!startBoundary || !endBoundary) return "";
+
+  const range = document.createRange();
+  range.setStart(startBoundary.node, startBoundary.offset);
+  range.setEnd(endBoundary.node, endBoundary.offset);
+  const listClone = element.cloneNode(false) as HTMLElement;
+  const itemClone = sourceItem.cloneNode(false) as HTMLElement;
+  itemClone.append(range.cloneContents());
+  if (!isFinal) itemClone.style.marginBottom = "0px";
+  listClone.append(itemClone);
+  if (listClone.matches("ol")) {
+    const originalStart = Number(element.getAttribute("start") || 1);
+    listClone.setAttribute("start", String(originalStart + itemIndex));
+  }
+  if (isContinuation) listClone.classList.add("pagination-list-continuation");
+  if (isContinuation) listClone.style.marginTop = "0px";
+  if (!isFinal) listClone.style.marginBottom = "0px";
+  return listClone.outerHTML;
+}
+
+function tableRowFragmentHtml(element: Element, rowIndex: number, starts: number[], ends: number[], isContinuation: boolean, isFinal: boolean) {
+  const sourceRows = Array.from(element.querySelectorAll("tr"));
+  const sourceRow = sourceRows[rowIndex];
+  if (!sourceRow) return "";
+  const clone = element.cloneNode(true) as HTMLElement;
+  const clonedRows = Array.from(clone.querySelectorAll("tr"));
+  clonedRows.forEach((row, index) => {
+    if (index !== rowIndex) row.remove();
+  });
+  clone.querySelectorAll("thead, tbody, tfoot").forEach((section) => {
+    if (!section.querySelector("tr")) section.remove();
+  });
+
+  const clonedRow = clone.querySelector("tr");
+  const sourceCells = Array.from(sourceRow.querySelectorAll(":scope > th, :scope > td"));
+  const clonedCells = clonedRow ? Array.from(clonedRow.querySelectorAll(":scope > th, :scope > td")) : [];
+  sourceCells.forEach((cell, index) => {
+    const clonedCell = clonedCells[index];
+    if (!clonedCell) return;
+    const startBoundary = textBoundary(cell, starts[index] || 0);
+    const endBoundary = textBoundary(cell, ends[index] || 0);
+    if (!startBoundary || !endBoundary) {
+      clonedCell.innerHTML = ends[index] > starts[index] ? cell.innerHTML : "<p>&nbsp;</p>";
+      return;
+    }
+    const range = document.createRange();
+    range.setStart(startBoundary.node, startBoundary.offset);
+    range.setEnd(endBoundary.node, endBoundary.offset);
+    const fragment = range.cloneContents();
+    if ((starts[index] || 0) === 0) {
+      // 中文注解：文本前的块级图片不属于 Range 文本边界，只在首个跨页片段补回一次。
+      const leadingNodes: Node[] = [];
+      Array.from(cell.childNodes).some((node) => {
+        if (node.textContent?.length) return true;
+        leadingNodes.push(node.cloneNode(true));
+        return false;
+      });
+      fragment.prepend(...leadingNodes);
+    }
+    if ((ends[index] || 0) >= (cell.textContent || "").length) {
+      const trailingNodes: Node[] = [];
+      Array.from(cell.childNodes).reverse().some((node) => {
+        if (node.textContent?.length) return true;
+        trailingNodes.unshift(node.cloneNode(true));
+        return false;
+      });
+      fragment.append(...trailingNodes);
+    }
+    clonedCell.replaceChildren(fragment);
+    if (!clonedCell.textContent && !clonedCell.querySelector("img")) clonedCell.innerHTML = "<p>&nbsp;</p>";
+  });
+
+  if (isContinuation) clone.classList.add("pagination-table-continuation");
+  if (isContinuation) clone.style.marginTop = "0px";
+  if (!isFinal) clone.style.marginBottom = "0px";
+  return clone.outerHTML;
+}
+
 function preferredTextBreak(text: string, start: number, measuredEnd: number) {
   if (measuredEnd >= text.length) return text.length;
   const searchStart = Math.max(start + 1, measuredEnd - 24);
@@ -1425,6 +1508,79 @@ function Editor(props: {
       nextPages[nextPages.length - 1].push(html);
       currentHeight += height;
     };
+    const appendOversizedListItem = (list: HTMLElement, itemIndex: number) => {
+      const item = Array.from(list.children).filter((child) => child.matches("li"))[itemIndex];
+      const text = item?.textContent || "";
+      if (!item || text.length <= 1) return false;
+      let textStart = 0;
+      while (textStart < text.length) {
+        const availableHeight = pageContentHeight - currentHeight;
+        let low = textStart + 1;
+        let high = text.length;
+        let bestTextEnd = textStart;
+        while (low <= high) {
+          const middle = Math.floor((low + high) / 2);
+          const candidateHtml = listItemFragmentHtml(list, itemIndex, textStart, middle, textStart > 0, middle === text.length);
+          if (measureHtml(candidateHtml) <= availableHeight) {
+            bestTextEnd = middle;
+            low = middle + 1;
+          } else {
+            high = middle - 1;
+          }
+        }
+        if (bestTextEnd === textStart) {
+          if (currentHeight > 0) return false;
+          bestTextEnd = Math.min(textStart + 1, text.length);
+        }
+        bestTextEnd = preferredTextBreak(text, textStart, bestTextEnd);
+        const fragmentHtml = listItemFragmentHtml(list, itemIndex, textStart, bestTextEnd, textStart > 0, bestTextEnd === text.length);
+        appendHtml(fragmentHtml);
+        textStart = bestTextEnd;
+        if (textStart < text.length) openNextPage();
+      }
+      return true;
+    };
+    const appendOversizedTableRow = (table: HTMLElement, rowIndex: number) => {
+      const row = Array.from(table.querySelectorAll("tr"))[rowIndex];
+      if (!row) return false;
+      const cells = Array.from(row.querySelectorAll(":scope > th, :scope > td"));
+      // 中文注解：纯图片单元格使用对象占位字符参与一次分页，避免被当成空单元格永久丢弃。
+      const texts = cells.map((cell) => cell.textContent || (cell.querySelector("img") ? "\uFFFC" : ""));
+      if (!texts.some((text) => text.length > 1)) return false;
+      let starts = texts.map(() => 0);
+
+      while (starts.some((start, index) => start < texts[index].length)) {
+        const availableHeight = pageContentHeight - currentHeight;
+        let low = 1;
+        let high = 1000;
+        let bestEnds: number[] | null = null;
+        while (low <= high) {
+          const fraction = Math.floor((low + high) / 2);
+          const candidateEnds = starts.map((start, index) => {
+            const remaining = texts[index].length - start;
+            return remaining > 0 ? start + Math.max(1, Math.floor(remaining * fraction / 1000)) : start;
+          });
+          const candidateHtml = tableRowFragmentHtml(table, rowIndex, starts, candidateEnds, starts.some((start) => start > 0), candidateEnds.every((end, index) => end >= texts[index].length));
+          if (measureHtml(candidateHtml) <= availableHeight) {
+            bestEnds = candidateEnds;
+            low = fraction + 1;
+          } else {
+            high = fraction - 1;
+          }
+        }
+        if (!bestEnds) {
+          if (currentHeight > 0) return false;
+          bestEnds = starts.map((start, index) => start < texts[index].length ? start + 1 : start);
+        }
+        bestEnds = bestEnds.map((end, index) => end > starts[index] ? preferredTextBreak(texts[index], starts[index], end) : end);
+        const isFinal = bestEnds.every((end, index) => end >= texts[index].length);
+        const fragmentHtml = tableRowFragmentHtml(table, rowIndex, starts, bestEnds, starts.some((start) => start > 0), isFinal);
+        appendHtml(fragmentHtml);
+        starts = bestEnds;
+        if (!isFinal) openNextPage();
+      }
+      return true;
+    };
 
     sourceBlocks.forEach((child) => {
       if (child instanceof HTMLElement && child.dataset.pageBreak === "true") {
@@ -1455,6 +1611,16 @@ function Editor(props: {
               }
             }
             if (bestEnd === start) {
+              if (child.matches("ol, ul") && appendOversizedListItem(child, start)) {
+                start += 1;
+                if (start < itemCount) openNextPage();
+                continue;
+              }
+              if (child.matches("table") && appendOversizedTableRow(child, start)) {
+                start += 1;
+                if (start < itemCount) openNextPage();
+                continue;
+              }
               if (currentHeight > 0) {
                 openNextPage();
                 continue;

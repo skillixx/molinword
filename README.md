@@ -138,4 +138,9 @@ documents/{documentId}/exports/{fileName}.docx
 
 ```bash
 npm run build
+npm run check:editor-pagination
+npm run check:docx-export-format
+npm run check:docx-import-format
 ```
+
+`check:editor-pagination` 会启动自包含的浏览器测试，验证 A4 分页、超长列表项、超高表格行、图片单元格、模板样式恢复、移动端宽度以及长文档滚动时三侧菜单保持可见。
