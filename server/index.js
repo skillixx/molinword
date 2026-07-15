@@ -969,8 +969,10 @@ async function docxImagesFromRun(runNode, zip, relationships) {
     const sizeStyle = width > 0 && height > 0
       ? `width: ${Math.round(width * 100) / 100}px; height: ${Math.round(height * 100) / 100}px; `
       : "";
+    const properties = xmlDescendants(container, "wp:docPr")[0];
+    const alt = firstValue(properties?.attribs, ["descr", "title", "name"]) || "导入图片";
     // 中文注解：Word 图片尺寸使用 EMU，导入时换算为 CSS 像素，在线分页才能按原图占位测量。
-    if (dataUrl) images.push(`<img src="${dataUrl}" alt="导入图片" style="${sizeStyle}max-width: 100%;" />`);
+    if (dataUrl) images.push(`<img src="${dataUrl}" alt="${escapeHtml(alt)}" style="${sizeStyle}max-width: 100%;" />`);
   }
   return images;
 }
@@ -1950,6 +1952,12 @@ function textRunsFromNode(node, marks = {}) {
     })] : [];
   }
 
+  if (node.name === "img") {
+    const imageRun = imageRunFromNode(node);
+    // 中文注解：段落内图片必须作为 ParagraphChild 保留原位置，不能只在顶层节点导出，否则图片往返后会消失。
+    return imageRun ? [imageRun] : [];
+  }
+
   if (node.name === "a") {
     const href = safeDocumentHyperlink(node.attribs?.href);
     const linkMarks = { ...marks, color: marks.color || "0563C1", underline: marks.underline ?? true };
@@ -2037,7 +2045,8 @@ function paragraphFromNode(node, listContext = null) {
     ? (node.children || []).filter((child) => !isHtmlListNode(child)).map(collectText).join("")
     : collectText(node);
   const text = ownListText.replace(/\s+/g, " ").trim();
-  if (!text) return null;
+  const hasImage = xmlDescendants(node, "img").length > 0;
+  if (!text && !hasImage) return null;
   const paragraphStyle = mergeParagraphOptions(paragraphStyleFromNode(node), paragraphIndentFromNode(node));
 
   if (tagName === "h1") {
@@ -2244,18 +2253,24 @@ function imageSizeFromNode(node, data) {
   return { width, height };
 }
 
-function imageParagraphFromNode(node) {
+function imageRunFromNode(node) {
   const image = dataUrlToImage(node?.attribs?.src);
-  if (!image) return new Paragraph({ text: "[图片内容暂未导出]", spacing: { after: 120 } });
+  if (!image) return null;
+  const alt = String(node?.attribs?.alt || "正文图片").trim().slice(0, 200) || "正文图片";
+  return new ImageRun({
+    data: image.data,
+    type: image.extension,
+    transformation: imageSizeFromNode(node, image.data),
+    altText: { name: alt, description: alt, title: alt }
+  });
+}
+
+function imageParagraphFromNode(node) {
+  const imageRun = imageRunFromNode(node);
+  if (!imageRun) return new Paragraph({ text: "[图片内容暂未导出]", spacing: { after: 120 } });
   // 中文注解：在线编辑里的 data URL 图片直接写入 DOCX，避免导出后出现空白占位。
   return new Paragraph({
-    children: [
-      new ImageRun({
-        data: image.data,
-        type: image.extension,
-        transformation: imageSizeFromNode(node, image.data)
-      })
-    ],
+    children: [imageRun],
     spacing: { after: 120 }
   });
 }

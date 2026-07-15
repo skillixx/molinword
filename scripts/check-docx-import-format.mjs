@@ -174,6 +174,7 @@ async function buildFormattedDocxFixture() {
       <w:r>
         <w:drawing>
           <wp:extent cx="11430000" cy="7620000"/>
+          <wp:docPr id="1" name="正文流程图" descr="正文流程图"/>
           <a:graphic>
             <a:graphicData>
               <pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
@@ -184,6 +185,7 @@ async function buildFormattedDocxFixture() {
         </w:drawing>
       </w:r>
     </w:p>
+    <w:p><w:r><w:t>图片前文字</w:t></w:r><w:r><w:drawing><wp:extent cx="952500" cy="952500"/><wp:docPr id="2" name="混排图标" descr="混排图标"/><a:graphic><a:graphicData><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:blipFill><a:blip r:embed="rIdImage1"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></w:drawing></w:r><w:r><w:t>图片后文字</w:t></w:r></w:p>
     <w:sectPr><w:headerReference w:type="default" r:id="rIdHeader1"/><w:footerReference w:type="default" r:id="rIdFooter1"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="360" w:footer="900"/></w:sectPr>
   </w:body>
 </w:document>`
@@ -400,8 +402,18 @@ const hyperlinkRoundTripXml = await hyperlinkRoundTripZip.file("word/document.xm
 const hyperlinkRoundTripRels = await hyperlinkRoundTripZip.file("word/_rels/document.xml.rels")?.async("string") || "";
 assert.match(hyperlinkRoundTripXml, /<w:hyperlink[^>]+r:id="[^"]+"[^>]*>[\s\S]*OpenAI documentation[\s\S]*<\/w:hyperlink>/);
 assert.match(hyperlinkRoundTripRels, /Target="https:\/\/platform\.openai\.com\/docs" TargetMode="External"/);
+assert.match(hyperlinkRoundTripXml, /<w:drawing>/);
+assert.ok(hyperlinkRoundTripZip.file(/^word\/media\/.+\.png$/).length > 0, "正文图片再次导出后必须保留媒体文件");
+assert.ok((hyperlinkRoundTripXml.match(/<w:drawing>/g) || []).length >= 2, "纯图片段落和图文混排中的图片都必须再次导出");
+const roundTripMixedImageParagraph = (hyperlinkRoundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("图片前文字")) || "";
+assert.ok(roundTripMixedImageParagraph.indexOf("图片前文字") < roundTripMixedImageParagraph.indexOf("<w:drawing>"));
+assert.ok(roundTripMixedImageParagraph.indexOf("<w:drawing>") < roundTripMixedImageParagraph.indexOf("图片后文字"));
 const hyperlinkReimported = await parseImportedDocument({ originalname: "hyperlink-round-trip.docx", buffer: hyperlinkRoundTripBuffer, mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: hyperlinkRoundTripBuffer.length });
 assert.match(hyperlinkReimported.content, /<a href="https:\/\/platform\.openai\.com\/docs"[^>]*>[\s\S]*OpenAI documentation[\s\S]*<\/a>/);
+const roundTripBodyImage = hyperlinkReimported.content.match(/<img[^>]+src="data:image\/png;base64,[^>]*>/)?.[0] || "";
+assert.ok(roundTripBodyImage, "正文图片再次导入后必须恢复为可编辑图片");
+assert.match(roundTripBodyImage, /alt="正文流程图"/);
+assert.match(hyperlinkReimported.content, /图片前文字[\s\S]*<img[^>]+alt="混排图标"[\s\S]*图片后文字/);
 assert.match(imported.content, /<p[^>]+data-keep-next="true"[^>]+data-keep-lines="true"[^>]+data-page-break-before="true"[^>]+data-widow-control="true"[^>]*>Pagination controlled paragraph<\/p>/);
 assert.match(imported.content, /<p[^>]+data-widow-control="false"[^>]*>Widow control disabled paragraph<\/p>/);
 const importedTabParagraph = (imported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || [])
@@ -447,6 +459,8 @@ assert.match(imported.content, /<td(?:\s|>)/);
 assert.match(imported.content, /Import Cell 1/);
 assert.match(imported.content, /data-page-break="true"/);
 assert.match(imported.content, /<img[^>]+src="data:image\/png;base64,/);
+assert.match(imported.content, /<img[^>]+alt="正文流程图"/);
+assert.match(imported.content, /图片前文字[\s\S]*<img[^>]+alt="混排图标"[\s\S]*图片后文字/);
 // 中文注解：超出 A4 内容区的大图在导入时即等比缩放，避免浏览器与导出端分别限制宽高后产生占位差。
 assert.match(imported.content, /<img[^>]+style="[^"]*width:\s*602px;\s*height:\s*401\.33px;/);
 // 中文注解：读取 numbering.xml 后应恢复编号类型和嵌套层级，供 Tiptap 继续编辑。
