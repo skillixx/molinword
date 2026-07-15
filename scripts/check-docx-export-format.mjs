@@ -14,11 +14,19 @@ const content = `
   <table>
     <tbody>
       <tr><th><p>表头 A</p></th><th><p>表头 B</p></th></tr>
-      <tr><td><p><strong>单元格 1</strong></p></td><td><p>单元格 2</p></td></tr>
+      <tr>
+        <td><p><strong>单元格 1</strong></p><ol><li>Table list A</li></ol></td>
+        <td><p>单元格 2</p><ol><li>Table list B</li></ol></td>
+      </tr>
     </tbody>
   </table>
   <div data-page-break="true" class="page-break-marker"></div>
   <p>分页符后的内容</p>
+  <ol>
+    <li>Ordered item 1<ol><li>Nested ordered item</li></ol></li>
+    <li>Ordered item 2</li>
+  </ol>
+  <ul><li>Bullet item</li></ul>
   <p>图片导出测试</p>
   <img src="data:image/png;base64,${tinyPngBase64}" style="width:120px;max-width:100%;height:auto" alt="export image" />
 `;
@@ -27,10 +35,12 @@ const buffer = await createDocxBuffer({ title: "导出格式保持测试", conte
 const zip = await JSZip.loadAsync(buffer);
 const documentXml = await zip.file("word/document.xml")?.async("string");
 const relationshipsXml = await zip.file("word/_rels/document.xml.rels")?.async("string");
+const numberingXml = await zip.file("word/numbering.xml")?.async("string");
 const mediaFiles = zip.file(/^word\/media\/.+\.(?:png|jpe?g|gif|webp)$/i);
 
 assert.ok(documentXml, "document.xml should exist");
 assert.ok(relationshipsXml, "document relationships should exist");
+assert.ok(numberingXml, "numbering.xml should exist");
 
 // 中文注解：直接检查 DOCX XML，确保在线编辑样式没有在 HTML -> Word 转换中被抹掉。
 assert.match(documentXml, /<w:jc w:val="center"\/>/);
@@ -47,6 +57,50 @@ assert.match(documentXml, /<w:tc>/);
 assert.match(documentXml, /表头 A/);
 assert.match(documentXml, /单元格 1/);
 assert.match(documentXml, /<w:br w:type="page"\/>/);
+
+// 中文注解：编号列表、嵌套层级和项目符号必须保留各自语义，不能统一退化为一级圆点。
+assert.match(documentXml, /<w:numPr><w:ilvl w:val="0"\/><w:numId w:val="\d+"\/><\/w:numPr>/);
+assert.match(documentXml, /<w:numPr><w:ilvl w:val="1"\/><w:numId w:val="\d+"\/><\/w:numPr>/);
+assert.match(numberingXml, /<w:numFmt w:val="decimal"\/>/);
+assert.match(numberingXml, /<w:numFmt w:val="bullet"\/>/);
+
+function listInfoForText(text) {
+  const paragraphXml = (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || [])
+    .find((paragraph) => paragraph.includes(`>${text}</w:t>`));
+  assert.ok(paragraphXml, `list paragraph should exist: ${text}`);
+  return {
+    level: Number(paragraphXml.match(/<w:ilvl w:val="(\d+)"\/>/)?.[1]),
+    numberId: paragraphXml.match(/<w:numId w:val="(\d+)"\/>/)?.[1]
+  };
+}
+
+function numberFormatForList({ numberId, level }) {
+  const numberXml = [...numberingXml.matchAll(/<w:num w:numId="(\d+)">([\s\S]*?)<\/w:num>/g)]
+    .find((match) => match[1] === numberId)?.[2] || "";
+  const abstractId = numberXml.match(/<w:abstractNumId w:val="(\d+)"\/>/)?.[1];
+  const abstractXml = [...numberingXml.matchAll(/<w:abstractNum w:abstractNumId="(\d+)"[^>]*>([\s\S]*?)<\/w:abstractNum>/g)]
+    .find((match) => match[1] === abstractId)?.[2] || "";
+  const levelXml = [...abstractXml.matchAll(/<w:lvl w:ilvl="(\d+)"[^>]*>([\s\S]*?)<\/w:lvl>/g)]
+    .find((match) => Number(match[1]) === level)?.[2] || "";
+  return levelXml.match(/<w:numFmt w:val="([^"]+)"\/>/)?.[1];
+}
+
+const orderedItem = listInfoForText("Ordered item 1");
+const nestedOrderedItem = listInfoForText("Nested ordered item");
+const bulletItem = listInfoForText("Bullet item");
+const tableListA = listInfoForText("Table list A");
+const tableListB = listInfoForText("Table list B");
+assert.equal(orderedItem.level, 0);
+assert.equal(nestedOrderedItem.level, 1);
+assert.equal(orderedItem.numberId, nestedOrderedItem.numberId);
+assert.notEqual(orderedItem.numberId, bulletItem.numberId);
+assert.notEqual(tableListA.numberId, tableListB.numberId);
+assert.notEqual(tableListA.numberId, orderedItem.numberId);
+assert.notEqual(tableListB.numberId, orderedItem.numberId);
+// 中文注解：把具体段落的 numId 追溯到抽象编号定义，防止 decimal 与 bullet 被对调后测试仍误通过。
+assert.equal(numberFormatForList(orderedItem), "decimal");
+assert.equal(numberFormatForList(nestedOrderedItem), "decimal");
+assert.equal(numberFormatForList(bulletItem), "bullet");
 
 // 中文注解：图片必须进入 DOCX 媒体目录并建立 image relationship，避免导出文件只剩占位文本。
 assert.match(documentXml, /<w:drawing>/);

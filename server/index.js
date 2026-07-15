@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import express from "express";
-import { AlignmentType, Document, HeadingLevel, ImageRun, Packer, PageBreak as DocxPageBreak, Paragraph, Table, TableCell, TableRow, TextRun, WidthType } from "docx";
+import { AlignmentType, Document, HeadingLevel, ImageRun, LevelFormat, Packer, PageBreak as DocxPageBreak, Paragraph, Table, TableCell, TableRow, TextRun, WidthType } from "docx";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
 import mammoth from "mammoth";
@@ -21,6 +21,7 @@ const docxPage = {
   heightTwip: 16838,
   marginTwip: 1440
 };
+const orderedListReference = "online-ordered-list";
 
 const app = express();
 const port = Number(process.env.LOCAL_API_PORT || process.env.APP_PORT || process.env.PORT || 3001);
@@ -296,6 +297,52 @@ function parseDocxStyles(stylesXml = "") {
   return styles;
 }
 
+function parseDocxNumbering(numberingXml = "") {
+  // 中文注解：先解析抽象编号层级，再绑定具体 numId，才能从段落编号反查有序或项目符号语义。
+  const numbering = new Map();
+  if (!numberingXml.trim()) return numbering;
+  const document = parseDocument(numberingXml, { xmlMode: true });
+  const abstractLevels = new Map();
+
+  for (const abstractNode of xmlDescendants(document, "w:abstractNum")) {
+    const abstractId = firstValue(abstractNode.attribs, ["w:abstractNumId", "abstractNumId"]);
+    if (!abstractId) continue;
+    const levels = new Map();
+    for (const levelNode of xmlChildren(abstractNode, "w:lvl")) {
+      const level = Number(firstValue(levelNode.attribs, ["w:ilvl", "ilvl"]) || 0);
+      levels.set(level, xmlVal(xmlChild(levelNode, "w:numFmt")) || "decimal");
+    }
+    abstractLevels.set(abstractId, levels);
+  }
+
+  for (const numberNode of xmlDescendants(document, "w:num")) {
+    const numberId = firstValue(numberNode.attribs, ["w:numId", "numId"]);
+    const abstractId = xmlVal(xmlChild(numberNode, "w:abstractNumId"));
+    if (!numberId || !abstractLevels.has(abstractId)) continue;
+    const levels = new Map(abstractLevels.get(abstractId));
+    for (const overrideNode of xmlChildren(numberNode, "w:lvlOverride")) {
+      const level = Number(firstValue(overrideNode.attribs, ["w:ilvl", "ilvl"]) || 0);
+      const overrideFormat = xmlVal(xmlChild(xmlChild(overrideNode, "w:lvl"), "w:numFmt"));
+      if (overrideFormat) levels.set(level, overrideFormat);
+    }
+    // 中文注解：真实 Word 文件可能通过 lvlOverride 改写某一级编号格式，具体 numId 必须优先采用覆盖值。
+    numbering.set(numberId, levels);
+  }
+  return numbering;
+}
+
+function docxListInfo(pPr, style, numbering) {
+  const numPr = xmlChild(pPr, "w:numPr");
+  const styleText = `${style.name || ""} ${style.id || ""}`;
+  if (!numPr && !/list|列表/i.test(styleText)) return null;
+  const level = Math.max(0, Math.min(Number(xmlVal(xmlChild(numPr, "w:ilvl")) || 0), 5));
+  const numberId = xmlVal(xmlChild(numPr, "w:numId"));
+  const numberFormat = numbering.get(numberId)?.get(level);
+  // 中文注解：Word 中除 bullet/none 外的编号格式都属于有序列表，包含中文数字、字母和罗马数字。
+  const ordered = numberFormat ? !["bullet", "none"].includes(numberFormat) : /number|编号/i.test(styleText);
+  return { level, ordered, numberId };
+}
+
 function docxTextFromRun(runNode) {
   return (runNode.children || [])
     .map((child) => {
@@ -381,7 +428,8 @@ async function docxRunToHtml(runNode, inheritedRunStyles = {}, zip = null, relat
   return `${textHtml}${imageHtml}${pageBreaks}`;
 }
 
-async function parseStyledDocxParagraph(paragraphNode, styleMap, zip = null, relationships = new Map()) {
+async function parseStyledDocxParagraph(paragraphNode, context) {
+  const { styleMap, numbering, zip, relationships } = context;
   const pPr = xmlChild(paragraphNode, "w:pPr");
   const styleId = xmlVal(xmlChild(pPr, "w:pStyle"));
   const style = { id: styleId, ...(styleMap.get(styleId) || {}) };
@@ -389,7 +437,7 @@ async function parseStyledDocxParagraph(paragraphNode, styleMap, zip = null, rel
   const inheritedRunStyles = style.run || {};
   const body = (await Promise.all(xmlChildren(paragraphNode, "w:r").map((run) => docxRunToHtml(run, inheritedRunStyles, zip, relationships)))).join("") || "<br>";
   const tag = docxParagraphTag(style);
-  const isList = Boolean(xmlChild(pPr, "w:numPr")) || /list|列表/i.test(`${style.name || ""} ${styleId || ""}`);
+  const list = docxListInfo(pPr, style, numbering);
   const indentLevel = wordTwipToIndentLevel(firstValue(xmlChild(pPr, "w:ind")?.attribs, ["w:firstLine", "firstLine"]));
   const attrs = [];
   const styleText = cssText(paragraphStyles);
@@ -405,32 +453,88 @@ async function parseStyledDocxParagraph(paragraphNode, styleMap, zip = null, rel
       ])
       .filter(Boolean)
       .join("");
-    return { html: html || pageBreakHtml(), listItem: "", ordered: false };
+    return { html: html || pageBreakHtml(), listItem: "", ordered: false, listLevel: 0 };
   }
-  return { html: `<${tag}${attrs.length ? ` ${attrs.join(" ")}` : ""}>${body}</${tag}>`, listItem: isList ? body : "", ordered: /number|编号/i.test(`${style.name || ""} ${styleId || ""}`) };
+  return {
+    html: `<${tag}${attrs.length ? ` ${attrs.join(" ")}` : ""}>${body}</${tag}>`,
+    listItem: list ? body : "",
+    ordered: Boolean(list?.ordered),
+    listLevel: list?.level || 0,
+    listNumberId: list?.numberId || ""
+  };
 }
 
-async function parseStyledDocxTableCell(cellNode, styleMap, tagName, zip, relationships) {
+async function parseStyledDocxTableCell(cellNode, context, tagName) {
   const tcPr = xmlChild(cellNode, "w:tcPr");
   const gridSpan = xmlVal(xmlChild(tcPr, "w:gridSpan"));
   const attrs = [];
   if (Number(gridSpan) > 1) attrs.push(`colspan="${Number(gridSpan)}"`);
 
-  const paragraphs = (await Promise.all(xmlChildren(cellNode, "w:p")
-    .map((paragraph) => parseStyledDocxParagraph(paragraph, styleMap, zip, relationships))))
-    .map((paragraph) => paragraph.html)
-    .join("") || "<p><br></p>";
+  const parsedParagraphs = await Promise.all(xmlChildren(cellNode, "w:p")
+    .map((paragraph) => parseStyledDocxParagraph(paragraph, context)));
+  // 中文注解：单元格内同样可能包含连续编号段落，必须在表格结构内恢复 ol/ul，不能退化为普通 p。
+  const paragraphs = renderDocxParagraphs(parsedParagraphs) || "<p><br></p>";
   return `<${tagName}${attrs.length ? ` ${attrs.join(" ")}` : ""}>${paragraphs}</${tagName}>`;
 }
 
-async function parseStyledDocxTable(tableNode, styleMap, zip, relationships) {
+async function parseStyledDocxTable(tableNode, context) {
   const rows = await Promise.all(xmlChildren(tableNode, "w:tr").map(async (rowNode, rowIndex) => {
     const cellTag = rowIndex === 0 ? "th" : "td";
-    const cells = (await Promise.all(xmlChildren(rowNode, "w:tc").map((cellNode) => parseStyledDocxTableCell(cellNode, styleMap, cellTag, zip, relationships)))).join("");
+    const cells = (await Promise.all(xmlChildren(rowNode, "w:tc").map((cellNode) => parseStyledDocxTableCell(cellNode, context, cellTag)))).join("");
     return cells ? `<tr>${cells}</tr>` : "";
   }));
   const filteredRows = rows.filter(Boolean);
   return filteredRows.length ? `<table><tbody>${filteredRows.join("")}</tbody></table>` : "";
+}
+
+function renderDocxListItems(items) {
+  // 中文注解：用栈把连续的 Word 列表段落恢复为合法嵌套 HTML，并在层级回退时依次闭合父列表项。
+  let html = "";
+  const openLists = [];
+
+  for (const item of items) {
+    const tag = item.ordered ? "ol" : "ul";
+    const level = Math.min(item.listLevel, openLists.length);
+    if (!openLists.length || level === openLists.length) {
+      html += `<${tag}><li>${item.listItem}`;
+      openLists.push({ tag, numberId: item.listNumberId });
+      continue;
+    }
+
+    while (openLists.length - 1 > level) html += `</li></${openLists.pop().tag}>`;
+    const currentList = openLists[openLists.length - 1];
+    if (currentList.tag === tag && currentList.numberId === item.listNumberId) {
+      html += `</li><li>${item.listItem}`;
+    } else {
+      // 中文注解：相同类型但 numId 不同代表 Word 中的新编号实例，必须拆开列表以保留“重新从 1 开始”。
+      html += `</li></${openLists.pop().tag}><${tag}><li>${item.listItem}`;
+      openLists.push({ tag, numberId: item.listNumberId });
+    }
+  }
+
+  while (openLists.length) html += `</li></${openLists.pop().tag}>`;
+  return html;
+}
+
+function renderDocxParagraphs(parsedParagraphs) {
+  // 中文注解：普通段落保持原顺序，连续列表段落统一交给列表栈渲染，供正文和表格单元格复用。
+  const chunks = [];
+  let listItems = [];
+  const flushList = () => {
+    if (!listItems.length) return;
+    chunks.push(renderDocxListItems(listItems));
+    listItems = [];
+  };
+
+  for (const paragraph of parsedParagraphs) {
+    if (paragraph.listItem) listItems.push(paragraph);
+    else {
+      flushList();
+      chunks.push(paragraph.html);
+    }
+  }
+  flushList();
+  return chunks.join("");
 }
 
 async function parseStyledDocxToHtml(buffer) {
@@ -438,36 +542,34 @@ async function parseStyledDocxToHtml(buffer) {
   const documentXml = await zip.file("word/document.xml")?.async("string");
   if (!documentXml) return "";
   const stylesXml = await zip.file("word/styles.xml")?.async("string");
+  const numberingXml = await zip.file("word/numbering.xml")?.async("string");
   const relsXml = await zip.file("word/_rels/document.xml.rels")?.async("string");
   const styleMap = parseDocxStyles(stylesXml || "");
+  const numbering = parseDocxNumbering(numberingXml || "");
   const relationships = parseDocxRelationships(relsXml || "");
+  const context = { styleMap, numbering, zip, relationships };
   const document = parseDocument(documentXml, { xmlMode: true });
   const body = xmlDescendants(document, "w:body")[0];
   const chunks = [];
-  let openList = null;
+  let openList = [];
   const flushList = () => {
-    if (!openList) return;
-    chunks.push(`<${openList.tag}>${openList.items.join("")}</${openList.tag}>`);
-    openList = null;
+    if (!openList.length) return;
+    chunks.push(renderDocxListItems(openList));
+    openList = [];
   };
 
   for (const block of xmlChildren(body)) {
     if (block.name === "w:tbl") {
       flushList();
-      const table = await parseStyledDocxTable(block, styleMap, zip, relationships);
+      const table = await parseStyledDocxTable(block, context);
       if (table) chunks.push(table);
       continue;
     }
 
     if (block.name === "w:p") {
-      const parsed = await parseStyledDocxParagraph(block, styleMap, zip, relationships);
+      const parsed = await parseStyledDocxParagraph(block, context);
       if (parsed.listItem) {
-        const tag = parsed.ordered ? "ol" : "ul";
-        if (!openList || openList.tag !== tag) {
-          flushList();
-          openList = { tag, items: [] };
-        }
-        openList.items.push(`<li>${parsed.listItem}</li>`);
+        openList.push(parsed);
       } else {
         flushList();
         chunks.push(parsed.html);
@@ -675,6 +777,17 @@ function textRunsFromNode(node, marks = {}) {
   return (node.children || []).flatMap((child) => textRunsFromNode(child, nextMarks));
 }
 
+function isHtmlListNode(node) {
+  return ["ol", "ul"].includes(node?.name);
+}
+
+function textRunsFromListItem(node) {
+  // 中文注解：父列表项只导出自身文字，嵌套列表由后续 Word 段落承载，避免父项重复包含子项文本。
+  return (node.children || [])
+    .filter((child) => !isHtmlListNode(child))
+    .flatMap((child) => textRunsFromNode(child));
+}
+
 function parseStyleMap(style = "") {
   return String(style)
     .split(";")
@@ -721,9 +834,12 @@ function mergeParagraphOptions(...options) {
   }, {});
 }
 
-function paragraphFromNode(node) {
+function paragraphFromNode(node, listContext = null) {
   const tagName = node.name;
-  const text = collectText(node).replace(/\s+/g, " ").trim();
+  const ownListText = tagName === "li"
+    ? (node.children || []).filter((child) => !isHtmlListNode(child)).map(collectText).join("")
+    : collectText(node);
+  const text = ownListText.replace(/\s+/g, " ").trim();
   if (!text) return null;
   const paragraphStyle = mergeParagraphOptions(paragraphStyleFromNode(node), paragraphIndentFromNode(node));
 
@@ -739,12 +855,16 @@ function paragraphFromNode(node) {
     return new Paragraph({ children: textRunsFromNode(node), heading: HeadingLevel.HEADING_3, spacing: { before: 140, after: 100 }, ...paragraphStyle });
   }
 
-  // 中文注解：列表先按普通项目符号导出，后续可以继续扩展多级编号和缩进样式。
   if (tagName === "li") {
+    const level = Math.max(0, Math.min(listContext?.level || 0, 5));
+    const listOptions = listContext?.type === "ol"
+      ? { numbering: { reference: orderedListReference, level, instance: listContext.instance } }
+      : { bullet: { level } };
+    // 中文注解：按 HTML 的 ol/ul 类型和嵌套深度写入 Word 原生列表，在线编号不会在导出后变成圆点。
     return new Paragraph({
-      children: textRunsFromNode(node),
-      bullet: { level: 0 },
+      children: textRunsFromListItem(node),
       spacing: { after: 80 },
+      ...listOptions,
       ...paragraphStyle
     });
   }
@@ -756,12 +876,14 @@ function paragraphFromNode(node) {
   });
 }
 
-function tableCellChildrenFromNode(cellNode) {
+function tableCellChildrenFromNode(cellNode, listState) {
   const children = [];
   for (const child of cellNode.children || []) {
     if (["h1", "h2", "h3", "p", "li"].includes(child.name)) {
       const paragraph = paragraphFromNode(child);
       if (paragraph) children.push(paragraph);
+    } else if (isHtmlListNode(child)) {
+      appendListParagraphs(child, children, 0, listState.nextOrderedInstance++);
     } else if (child.name === "img") {
       const paragraph = imageParagraphFromNode(child);
       if (paragraph) children.push(paragraph);
@@ -771,14 +893,26 @@ function tableCellChildrenFromNode(cellNode) {
   return [new Paragraph({ children: textRunsFromNode(cellNode), spacing: { after: 0 } })];
 }
 
-function tableFromNode(tableNode) {
+function appendListParagraphs(listNode, blocks, level, orderedInstance) {
+  // 中文注解：列表项和嵌套列表分别导出为 Word 段落，递归深度直接映射到 ilvl。
+  const listType = listNode.name;
+  for (const listItem of (listNode.children || []).filter((child) => child.name === "li")) {
+    const paragraph = paragraphFromNode(listItem, { type: listType, level, instance: orderedInstance });
+    if (paragraph) blocks.push(paragraph);
+    for (const nestedList of (listItem.children || []).filter(isHtmlListNode)) {
+      appendListParagraphs(nestedList, blocks, Math.min(level + 1, 5), orderedInstance);
+    }
+  }
+}
+
+function tableFromNode(tableNode, listState) {
   const rowNodes = (tableNode.children || []).flatMap((child) => child.name === "tbody" || child.name === "thead" ? child.children || [] : [child]).filter((child) => child.name === "tr");
   const rows = rowNodes.map((rowNode) => {
     const cellNodes = (rowNode.children || []).filter((child) => ["td", "th"].includes(child.name));
     if (!cellNodes.length) return null;
     return new TableRow({
       children: cellNodes.map((cellNode) => new TableCell({
-        children: tableCellChildrenFromNode(cellNode),
+        children: tableCellChildrenFromNode(cellNode, listState),
         shading: cellNode.name === "th" ? { fill: "F3F6F8" } : undefined
       }))
     });
@@ -834,6 +968,8 @@ function pageBreakParagraph() {
 function extractDocxBlocksFromHtml(html = "") {
   const parsed = parseDocument(html, { decodeEntities: true });
   const blocks = [];
+  // 中文注解：正文和每个表格单元格共用实例分配器，确保所有顶层编号列表都能独立从 1 开始。
+  const listState = { nextOrderedInstance: 1 };
 
   function walk(node) {
     if (isPageBreakNode(node)) {
@@ -842,13 +978,20 @@ function extractDocxBlocksFromHtml(html = "") {
     }
 
     if (node.name === "table") {
-      const table = tableFromNode(node);
+      const table = tableFromNode(node, listState);
       if (table) blocks.push(table);
       return;
     }
 
     if (node.name === "img") {
       blocks.push(imageParagraphFromNode(node));
+      return;
+    }
+
+    if (isHtmlListNode(node)) {
+      // 中文注解：每个顶层编号列表使用独立实例，确保新列表在 Word 中从 1 重新开始。
+      const instance = listState.nextOrderedInstance++;
+      appendListParagraphs(node, blocks, 0, instance);
       return;
     }
 
@@ -936,6 +1079,21 @@ function createDocxStyles(templateStyle = {}) {
 async function createDocxBuffer({ title, content, templateStyle = null }) {
   const document = new Document({
     styles: createDocxStyles(templateStyle || {}),
+    numbering: {
+      config: [
+        {
+          reference: orderedListReference,
+          // 中文注解：预置六级十进制编号，与编辑器支持的最大嵌套深度一致，并保持稳定缩进。
+          levels: Array.from({ length: 6 }, (_, level) => ({
+            level,
+            format: LevelFormat.DECIMAL,
+            text: `%${level + 1}.`,
+            alignment: AlignmentType.LEFT,
+            style: { paragraph: { indent: { left: 720 * (level + 1), hanging: 360 } } }
+          }))
+        }
+      ]
+    },
     sections: [
       {
         properties: {

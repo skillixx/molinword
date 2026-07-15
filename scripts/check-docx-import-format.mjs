@@ -15,6 +15,7 @@ async function buildFormattedDocxFixture() {
   <Default Extension="png" ContentType="image/png"/>
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+  <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
 </Types>`
   );
   zip.folder("_rels").file(
@@ -32,6 +33,26 @@ async function buildFormattedDocxFixture() {
 </Relationships>`
   );
   zip.folder("word").folder("media").file("image1.png", tinyPngBase64, { base64: true });
+  zip.folder("word").file(
+    "numbering.xml",
+    `<?xml version="1.0" encoding="UTF-8"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:abstractNum w:abstractNumId="10">
+    <w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/></w:lvl>
+    <w:lvl w:ilvl="1"><w:numFmt w:val="lowerLetter"/></w:lvl>
+  </w:abstractNum>
+  <w:abstractNum w:abstractNumId="11">
+    <w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/></w:lvl>
+  </w:abstractNum>
+  <w:num w:numId="7"><w:abstractNumId w:val="10"/></w:num>
+  <w:num w:numId="8"><w:abstractNumId w:val="11"/></w:num>
+  <w:num w:numId="9">
+    <w:abstractNumId w:val="11"/>
+    <w:lvlOverride w:ilvl="0"><w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/></w:lvl></w:lvlOverride>
+  </w:num>
+  <w:num w:numId="10"><w:abstractNumId w:val="10"/></w:num>
+</w:numbering>`
+  );
   zip.folder("word").file(
     "styles.xml",
     `<?xml version="1.0" encoding="UTF-8"?>
@@ -80,7 +101,10 @@ async function buildFormattedDocxFixture() {
         <w:tc><w:p><w:r><w:t>Header B</w:t></w:r></w:p></w:tc>
       </w:tr>
       <w:tr>
-        <w:tc><w:p><w:r><w:t>Import Cell 1</w:t></w:r></w:p></w:tc>
+        <w:tc>
+          <w:p><w:r><w:t>Import Cell 1</w:t></w:r></w:p>
+          <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="7"/></w:numPr></w:pPr><w:r><w:t>Table ordered item</w:t></w:r></w:p>
+        </w:tc>
         <w:tc><w:p><w:r><w:t>Import Cell 2</w:t></w:r></w:p></w:tc>
       </w:tr>
     </w:tbl>
@@ -89,6 +113,12 @@ async function buildFormattedDocxFixture() {
       <w:r><w:br w:type="page"/></w:r>
       <w:r><w:t>分页符后</w:t></w:r>
     </w:p>
+    <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="7"/></w:numPr></w:pPr><w:r><w:t>Ordered item 1</w:t></w:r></w:p>
+    <w:p><w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="7"/></w:numPr></w:pPr><w:r><w:t>Nested ordered item</w:t></w:r></w:p>
+    <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="7"/></w:numPr></w:pPr><w:r><w:t>Ordered item 2</w:t></w:r></w:p>
+    <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="8"/></w:numPr></w:pPr><w:r><w:t>Bullet item</w:t></w:r></w:p>
+    <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="9"/></w:numPr></w:pPr><w:r><w:t>Override ordered item</w:t></w:r></w:p>
+    <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="10"/></w:numPr></w:pPr><w:r><w:t>Restart ordered item</w:t></w:r></w:p>
     <w:p>
       <w:r>
         <w:drawing>
@@ -130,5 +160,10 @@ assert.match(imported.content, /<td>/);
 assert.match(imported.content, /Import Cell 1/);
 assert.match(imported.content, /data-page-break="true"/);
 assert.match(imported.content, /<img[^>]+src="data:image\/png;base64,/);
+// 中文注解：读取 numbering.xml 后应恢复编号类型和嵌套层级，供 Tiptap 继续编辑。
+assert.match(imported.content, /<ol><li>Ordered item 1<ol><li>Nested ordered item<\/li><\/ol><\/li><li>Ordered item 2<\/li><\/ol>/);
+assert.match(imported.content, /<ul><li>Bullet item<\/li><\/ul>/);
+assert.match(imported.content, /<ol><li>Override ordered item<\/li><\/ol><ol><li>Restart ordered item<\/li><\/ol>/);
+assert.match(imported.content, /<td><p>Import Cell 1<\/p><ol><li>Table ordered item<\/li><\/ol><\/td>/);
 
 console.log("DOCX import format check passed");
