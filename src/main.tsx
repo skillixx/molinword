@@ -26,6 +26,7 @@ import {
   FileText,
   FileUp,
   FolderOpen,
+  Highlighter,
   Image as ImageIcon,
   Italic,
   IndentDecrease,
@@ -45,6 +46,8 @@ import {
   Sparkles,
   Split,
   Strikethrough,
+  Subscript,
+  Superscript,
   Table as TableIcon,
   Trash2,
   Type,
@@ -716,6 +719,61 @@ const ImportedTextStyle = Mark.create({
   renderHTML({ HTMLAttributes }) {
     return ["span", HTMLAttributes, 0];
   }
+});
+
+const highlightColors: Record<string, string> = {
+  yellow: "#FFFF00",
+  green: "#00FF00",
+  cyan: "#00FFFF",
+  magenta: "#FF00FF",
+  red: "#FF0000",
+  blue: "#0000FF",
+  darkYellow: "#808000",
+  darkGreen: "#008000",
+  darkCyan: "#008080",
+  darkBlue: "#000080",
+  darkMagenta: "#800080",
+  darkRed: "#800000",
+  lightGray: "#C0C0C0",
+  darkGray: "#808080",
+  black: "#000000",
+  white: "#FFFFFF"
+};
+
+const TextHighlight = Mark.create({
+  name: "textHighlight",
+  addAttributes() {
+    return {
+      color: {
+        default: "yellow",
+        parseHTML: (element) => Object.prototype.hasOwnProperty.call(highlightColors, element.getAttribute("data-highlight") || "") ? element.getAttribute("data-highlight") : "yellow",
+        renderHTML: (attributes) => {
+          const color = Object.prototype.hasOwnProperty.call(highlightColors, attributes.color) ? attributes.color : "yellow";
+          return { "data-highlight": color, style: `background-color: ${highlightColors[color]}` };
+        }
+      }
+    };
+  },
+  parseHTML() {
+    return [{ tag: "mark[data-highlight]" }, { tag: "mark" }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ["mark", HTMLAttributes, 0];
+  }
+});
+
+const SuperscriptText = Mark.create({
+  name: "superscriptText",
+  excludes: "subscriptText",
+  parseHTML: () => [{ tag: "sup" }],
+  renderHTML: () => ["sup", 0]
+});
+
+const SubscriptText = Mark.create({
+  name: "subscriptText",
+  excludes: "superscriptText",
+  parseHTML: () => [{ tag: "sub" }],
+  renderHTML: () => ["sub", 0]
 });
 
 const ParagraphIndent = Extension.create({
@@ -1996,7 +2054,7 @@ function Editor(props: {
   }, [props.pageLayout]);
 
   const editor = useEditor({
-    extensions: [StarterKit, ImageExtension.configure({ inline: false, allowBase64: true }), ImportedTextStyle, ParagraphIndent, PageBreak, SectionBreak, Table.configure({ resizable: true }), TableRow, TableHeader, TableCell],
+    extensions: [StarterKit, ImageExtension.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, ParagraphIndent, PageBreak, SectionBreak, Table.configure({ resizable: true }), TableRow, TableHeader, TableCell],
     content: props.content,
     editorProps: { attributes: { class: "word-editor" } },
     onCreate({ editor }) { updateOutlineFromEditor(editor); syncActiveSectionFromEditor(editor); },
@@ -2585,6 +2643,9 @@ function Editor(props: {
             <button className={editor?.isActive("italic") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleItalic().run()} title="斜体"><Italic size={16} /></button>
             <button className={editor?.isActive("underline") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleUnderline().run()} title="下划线"><UnderlineIcon size={16} />下划线</button>
             <button className={editor?.isActive("strike") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleStrike().run()} title="删除线"><Strikethrough size={16} /></button>
+            <button aria-label="黄色突出显示" className={editor?.isActive("textHighlight") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleMark("textHighlight", { color: "yellow" }).run()} title="黄色突出显示"><Highlighter size={16} /></button>
+            <button aria-label="上标" className={editor?.isActive("superscriptText") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleMark("superscriptText").run()} title="上标"><Superscript size={16} /></button>
+            <button aria-label="下标" className={editor?.isActive("subscriptText") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleMark("subscriptText").run()} title="下标"><Subscript size={16} /></button>
             <label className="format-select" title="设置选中文字字体">
               <Type size={16} />
               <select aria-label="字体" defaultValue="" onChange={(event) => { if (event.target.value) applySelectedTextStyle({ "font-family": event.target.value }, "字体"); event.target.value = ""; }}>

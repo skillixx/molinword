@@ -338,7 +338,7 @@ function importedTextToHtml(value = "") {
 function sanitizeImportedHtml(value = "") {
   // 中文注解：导入内容只放行编辑器可承载的安全样式，避免脚本、外链和存储细节进入前端。
   return sanitizeHtml(String(value), {
-    allowedTags: ["h1", "h2", "h3", "p", "span", "strong", "b", "em", "i", "u", "s", "ul", "ol", "li", "blockquote", "br", "table", "tbody", "thead", "tr", "th", "td", "img", "div"],
+    allowedTags: ["h1", "h2", "h3", "p", "span", "strong", "b", "em", "i", "u", "s", "mark", "sup", "sub", "ul", "ol", "li", "blockquote", "br", "table", "tbody", "thead", "tr", "th", "td", "img", "div"],
     allowedAttributes: {
       h1: ["style", "data-indent"],
       h2: ["style", "data-indent"],
@@ -346,6 +346,7 @@ function sanitizeImportedHtml(value = "") {
       p: ["style", "data-indent"],
       li: ["style", "data-indent"],
       span: ["style"],
+      mark: ["data-highlight", "style"],
       th: ["colspan", "rowspan"],
       td: ["colspan", "rowspan"],
       img: ["src", "alt", "style"],
@@ -359,6 +360,7 @@ function sanitizeImportedHtml(value = "") {
         "font-size": [/^\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
         "font-weight": [/^(?:bold|[1-9]00)$/],
         "font-style": [/^italic$/],
+        "background-color": [/^#[0-9a-f]{6}$/i],
         "text-align": [/^(?:left|center|right|justify)$/],
         "text-indent": [/^-?\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
         "line-height": [/^\d+(?:\.\d+)?(?:px|pt|em|rem|%)?$/],
@@ -453,6 +455,30 @@ function cssText(styles = {}) {
 function wordToggleEnabled(node) {
   if (!node) return false;
   return !["0", "false", "none", "off"].includes(String(xmlVal(node) || "").toLowerCase());
+}
+
+const docxHighlightCssColors = {
+  black: "#000000",
+  blue: "#0000FF",
+  cyan: "#00FFFF",
+  darkBlue: "#000080",
+  darkCyan: "#008080",
+  darkGray: "#808080",
+  darkGreen: "#008000",
+  darkMagenta: "#800080",
+  darkRed: "#800000",
+  darkYellow: "#808000",
+  green: "#00FF00",
+  lightGray: "#C0C0C0",
+  magenta: "#FF00FF",
+  red: "#FF0000",
+  white: "#FFFFFF",
+  yellow: "#FFFF00"
+};
+
+function normalizeDocxHighlight(value = "") {
+  const name = String(value || "");
+  return Object.prototype.hasOwnProperty.call(docxHighlightCssColors, name) ? name : "";
 }
 
 function parseDocxThemeFonts(themeXml = "") {
@@ -558,6 +584,8 @@ function parseRunProperties(rPr, themeFonts = {}, themeColors = {}) {
   const italic = xmlChild(rPr, "w:i");
   const underline = xmlChild(rPr, "w:u");
   const strike = xmlChild(rPr, "w:strike") || xmlChild(rPr, "w:dstrike");
+  const highlight = normalizeDocxHighlight(xmlVal(xmlChild(rPr, "w:highlight")));
+  const verticalAlign = xmlVal(xmlChild(rPr, "w:vertAlign"));
   if (bold) {
     styles.$bold = wordToggleEnabled(bold) ? "1" : "0";
     if (styles.$bold === "1") styles["font-weight"] = "bold";
@@ -568,6 +596,8 @@ function parseRunProperties(rPr, themeFonts = {}, themeColors = {}) {
   }
   if (underline) styles.$underline = wordToggleEnabled(underline) ? "1" : "0";
   if (strike) styles.$strike = wordToggleEnabled(strike) ? "1" : "0";
+  if (highlight) styles.$highlight = highlight;
+  if (["superscript", "subscript"].includes(verticalAlign)) styles.$verticalAlign = verticalAlign;
   return styles;
 }
 
@@ -913,6 +943,13 @@ async function docxRunToHtml(runNode, inheritedRunStyles = {}, context = {}) {
     if (runStyles.$italic === "1" || runStyles["font-style"] === "italic") html = `<em>${html}</em>`;
     if (runStyles.$bold === "1" || runStyles["font-weight"] === "bold") html = `<strong>${html}</strong>`;
     if (runStyles.$strike === "1") html = `<s>${html}</s>`;
+    if (runStyles.$verticalAlign === "superscript") html = `<sup>${html}</sup>`;
+    if (runStyles.$verticalAlign === "subscript") html = `<sub>${html}</sub>`;
+    if (runStyles.$highlight) {
+      const highlightColor = docxHighlightCssColors[runStyles.$highlight];
+      // 中文注解：突出显示保留 Word 的颜色名称，同时写入浏览器颜色，在线显示和再次导出使用同一语义。
+      html = `<mark data-highlight="${runStyles.$highlight}" style="background-color: ${highlightColor}">${html}</mark>`;
+    }
     const style = cssText(runStyles);
     return style && html ? `<span style="${escapeHtml(style)}">${html}</span>` : html;
   }).join("");
@@ -1597,6 +1634,8 @@ function textRunStyleFromNode(node) {
   if (font) runStyle.font = font;
   if (styles["font-weight"] === "bold" || Number(styles["font-weight"]) >= 600) runStyle.bold = true;
   if (styles["font-style"] === "italic") runStyle.italics = true;
+  const highlight = normalizeDocxHighlight(node?.attribs?.["data-highlight"]);
+  if (highlight) runStyle.highlight = highlight;
   return runStyle;
 }
 
@@ -1646,7 +1685,10 @@ function textRunsFromNode(node, marks = {}) {
       strike: marks.strike,
       color: marks.color,
       size: marks.size,
-      font: marks.font
+      font: marks.font,
+      highlight: marks.highlight,
+      superScript: marks.superScript,
+      subScript: marks.subScript
     })] : [];
   }
 
@@ -1657,7 +1699,9 @@ function textRunsFromNode(node, marks = {}) {
     bold: marks.bold || nodeRunStyle.bold || ["strong", "b"].includes(node.name),
     italics: marks.italics || nodeRunStyle.italics || ["em", "i"].includes(node.name),
     underline: marks.underline || node.name === "u",
-    strike: marks.strike || ["s", "strike", "del"].includes(node.name)
+    strike: marks.strike || ["s", "strike", "del"].includes(node.name),
+    superScript: node.name === "sup" ? true : (node.name === "sub" ? false : marks.superScript),
+    subScript: node.name === "sub" ? true : (node.name === "sup" ? false : marks.subScript)
   };
 
   return (node.children || []).flatMap((child) => textRunsFromNode(child, nextMarks));

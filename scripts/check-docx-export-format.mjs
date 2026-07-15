@@ -12,6 +12,9 @@ const content = `
     <u>下划线文字</u>
     <em>斜体文字</em>
     <s>删除线文字</s>
+    <mark data-highlight="yellow" style="background-color:#FFFF00">突出显示文字</mark>
+    <sup>上标文字</sup>
+    <sub>下标文字</sub>
   </p>
   <table>
     <tbody>
@@ -142,6 +145,9 @@ assert.match(documentXml, /<w:b\/>/);
 assert.match(documentXml, /<w:u(?:\s+w:val="single")?\/>/);
 assert.match(documentXml, /<w:i\/>/);
 assert.match(documentXml, /<w:strike\/>/);
+assert.match(documentXml, /<w:highlight w:val="yellow"\/>/);
+assert.match(documentXml, /<w:vertAlign w:val="superscript"\/>/);
+assert.match(documentXml, /<w:vertAlign w:val="subscript"\/>/);
 assert.match(documentXml, /<w:ind[^>]+w:firstLine="480"\/>/);
 assert.match(documentXml, /<w:tbl>/);
 assert.match(documentXml, /<w:tr>/);

@@ -20,7 +20,7 @@ const fixtureDocument = {
   tone: "正式",
   templateId: 3,
   outline: ["超长结构分页"],
-  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table><tbody><tr><th>审批阶段</th><th>状态</th></tr><tr><td>商务评审</td><td>通过</td></tr><tr><td>归档确认</td><td>完成</td></tr></tbody></table>`,
+  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table><tbody><tr><th>审批阶段</th><th>状态</th></tr><tr><td>商务评审</td><td>通过</td></tr><tr><td>归档确认</td><td>完成</td></tr></tbody></table>`,
   // 中文注解：模拟升级前数据库里的旧页面设置，确保真实历史文档开启高级页眉时不会崩溃。
   pageLayout: { headerText: "", footerText: "", pageNumberEnabled: false },
   status: "draft",
@@ -180,6 +180,26 @@ try {
   await page.getByLabel("字体", { exact: true }).selectOption("SimSun");
   await page.getByTitle("斜体", { exact: true }).click();
   await page.getByTitle("删除线", { exact: true }).click();
+  const selectEditorText = async (target) => {
+    await page.evaluate((text) => {
+      const root = document.querySelector(".word-editor");
+      root.focus();
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      let node = walker.nextNode();
+      while (node && !node.nodeValue?.includes(text)) node = walker.nextNode();
+      if (!node) throw new Error(`找不到编辑器文字：${text}`);
+      const start = node.nodeValue.indexOf(text);
+      const range = document.createRange();
+      range.setStart(node, start);
+      range.setEnd(node, start + text.length);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      // 中文注解：ProseMirror 监听 selectionchange 同步内部选区；只改浏览器 Range 会让后续工具仍作用于旧选区。
+      document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+    }, target);
+    await page.waitForTimeout(50);
+  };
   const formattedHtml = await editor.innerHTML();
   assert.match(formattedHtml, /font-family:\s*SimSun/);
   assert.match(formattedHtml, /font-size:\s*12pt/);
@@ -188,11 +208,22 @@ try {
   assert.match(formattedHtml, /color:\s*(?:#0000ff|rgb\(0, 0, 255\))/);
   assert.match(formattedHtml, /<em>/);
   assert.match(formattedHtml, /<s>/);
-
   await page.getByRole("button", { name: "撤销", exact: true }).click();
   assert.doesNotMatch(await editor.innerHTML(), /<s>/);
   await page.getByRole("button", { name: "重做", exact: true }).click();
   assert.match(await editor.innerHTML(), /<s>/);
+
+  // 中文注解：真实选择三个独立文本并点击工具栏，证明高级字符格式可编辑，而不只是被动展示导入结果。
+  await selectEditorText("突出显示工具");
+  await page.getByRole("button", { name: "黄色突出显示", exact: true }).click();
+  await selectEditorText("上标工具");
+  await page.getByRole("button", { name: "上标", exact: true }).click();
+  await selectEditorText("下标工具");
+  await page.getByRole("button", { name: "下标", exact: true }).click();
+  const advancedFormatHtml = await editor.innerHTML();
+  assert.match(advancedFormatHtml, /<mark[^>]+data-highlight="yellow"[^>]*>突出显示工具<\/mark>/);
+  assert.match(advancedFormatHtml, /<sup>上标工具<\/sup>/);
+  assert.match(advancedFormatHtml, /<sub>下标工具<\/sub>/);
 
   const sourceTables = editor.locator("table");
   assert.equal(await sourceTables.count(), 2);
@@ -381,6 +412,9 @@ try {
   assert.match(documentXml, /<w:gridSpan w:val="2"\/>/);
   assert.match(documentXml, /<w:vMerge w:val="restart"\/>/);
   assert.match(documentXml, /<w:vMerge w:val="continue"\/>/);
+  assert.match(documentXml, /<w:highlight w:val="yellow"\/>/);
+  assert.match(documentXml, /<w:vertAlign w:val="superscript"\/>/);
+  assert.match(documentXml, /<w:vertAlign w:val="subscript"\/>/);
   assert.ok(headerXmlParts.some((xml) => xml.includes("首页项目封面")));
   assert.ok(headerXmlParts.some((xml) => xml.includes("奇数页项目页眉")));
   assert.ok(headerXmlParts.some((xml) => xml.includes("奇数页项目页眉") && /<w:jc w:val="left"\/>/.test(xml) && /<w:rFonts[^>]+SimSun/.test(xml) && /<w:sz w:val="24"\/>/.test(xml) && /<w:color w:val="C00000"\/>/.test(xml) && /<w:b\/>/.test(xml)));
