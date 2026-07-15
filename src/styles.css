@@ -760,6 +760,32 @@ textarea {
   background: #f8fafb;
 }
 
+.view-mode-control {
+  display: inline-grid;
+  grid-template-columns: repeat(2, 64px);
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: 1px solid #cfd8e1;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.view-mode-control button {
+  width: 64px;
+  min-height: 34px;
+  border: 0;
+  border-radius: 0;
+  justify-content: center;
+}
+
+.view-mode-control button + button {
+  border-left: 1px solid #cfd8e1;
+}
+
+.format-bar.preview-mode {
+  min-height: 59px;
+}
+
 .editor-scroll {
   flex: 1;
   min-height: 0;

@@ -264,9 +264,14 @@ function wordTwipToIndentLevel(value = "") {
 
 function cssText(styles = {}) {
   return Object.entries(styles)
-    .filter(([, value]) => Boolean(value))
+    .filter(([name, value]) => !name.startsWith("$") && Boolean(value))
     .map(([name, value]) => `${name}: ${value}`)
     .join("; ");
+}
+
+function wordToggleEnabled(node) {
+  if (!node) return false;
+  return !["0", "false", "none", "off"].includes(String(xmlVal(node) || "").toLowerCase());
 }
 
 function parseRunProperties(rPr) {
@@ -279,8 +284,20 @@ function parseRunProperties(rPr) {
   if (size) styles["font-size"] = size;
   const color = wordColor(xmlVal(xmlChild(rPr, "w:color")));
   if (color) styles.color = color;
-  if (xmlChild(rPr, "w:b")) styles["font-weight"] = "bold";
-  if (xmlChild(rPr, "w:i")) styles["font-style"] = "italic";
+  const bold = xmlChild(rPr, "w:b");
+  const italic = xmlChild(rPr, "w:i");
+  const underline = xmlChild(rPr, "w:u");
+  const strike = xmlChild(rPr, "w:strike") || xmlChild(rPr, "w:dstrike");
+  if (bold) {
+    styles.$bold = wordToggleEnabled(bold) ? "1" : "0";
+    if (styles.$bold === "1") styles["font-weight"] = "bold";
+  }
+  if (italic) {
+    styles.$italic = wordToggleEnabled(italic) ? "1" : "0";
+    if (styles.$italic === "1") styles["font-style"] = "italic";
+  }
+  if (underline) styles.$underline = wordToggleEnabled(underline) ? "1" : "0";
+  if (strike) styles.$strike = wordToggleEnabled(strike) ? "1" : "0";
   return styles;
 }
 
@@ -495,10 +512,14 @@ async function docxRunToHtml(runNode, inheritedRunStyles = {}, zip = null, relat
   const pageBreaks = docxPageBreaksFromRun(runNode);
   if (!text && !imageHtml && !pageBreaks) return "";
   const runStyles = { ...inheritedRunStyles, ...parseRunProperties(xmlChild(runNode, "w:rPr")) };
+  // 中文注解：Word 可在当前文本显式关闭继承样式，内部开关为 0 时要同步移除父样式的 CSS 表达。
+  if (runStyles.$bold === "0") delete runStyles["font-weight"];
+  if (runStyles.$italic === "0") delete runStyles["font-style"];
   let html = escapeHtml(text).replace(/\n/g, "<br>");
-  if (xmlChild(xmlChild(runNode, "w:rPr"), "w:u")) html = `<u>${html}</u>`;
-  if (xmlChild(xmlChild(runNode, "w:rPr"), "w:i") || runStyles["font-style"] === "italic") html = `<em>${html}</em>`;
-  if (xmlChild(xmlChild(runNode, "w:rPr"), "w:b") || runStyles["font-weight"] === "bold") html = `<strong>${html}</strong>`;
+  if (runStyles.$underline === "1") html = `<u>${html}</u>`;
+  if (runStyles.$italic === "1" || runStyles["font-style"] === "italic") html = `<em>${html}</em>`;
+  if (runStyles.$bold === "1" || runStyles["font-weight"] === "bold") html = `<strong>${html}</strong>`;
+  if (runStyles.$strike === "1") html = `<s>${html}</s>`;
   const style = cssText(runStyles);
   const textHtml = style && html ? `<span style="${escapeHtml(style)}">${html}</span>` : html;
   return `${textHtml}${imageHtml}${pageBreaks}`;

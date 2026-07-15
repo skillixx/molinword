@@ -11,6 +11,7 @@ const content = `
     <span style="font-family:&quot;Microsoft YaHei&quot;;font-size:14pt;color:#C00000;font-weight:bold">红色加粗字号</span>
     <u>下划线文字</u>
     <em>斜体文字</em>
+    <s>删除线文字</s>
   </p>
   <table>
     <tbody>
@@ -51,9 +52,11 @@ assert.match(documentXml, /<w:jc w:val="center"\/>/);
 assert.match(documentXml, /<w:color w:val="C00000"\/>/);
 assert.match(documentXml, /<w:sz w:val="28"\/>/);
 assert.match(documentXml, /<w:rFonts[^>]+Microsoft YaHei/);
+assert.match(documentXml, /<w:rFonts[^>]+SimSun/);
 assert.match(documentXml, /<w:b\/>/);
 assert.match(documentXml, /<w:u(?:\s+w:val="single")?\/>/);
 assert.match(documentXml, /<w:i\/>/);
+assert.match(documentXml, /<w:strike\/>/);
 assert.match(documentXml, /<w:ind[^>]+w:firstLine="480"\/>/);
 assert.match(documentXml, /<w:tbl>/);
 assert.match(documentXml, /<w:tr>/);

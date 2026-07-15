@@ -15,7 +15,7 @@ const fixtureDocument = {
   tone: "正式",
   templateId: 3,
   outline: ["超长结构分页"],
-  content: `<ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table>`,
+  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table>`,
   status: "draft",
   wordCount: listText.length + cellA.length + cellB.length,
   updatedAt: new Date().toISOString()
@@ -119,6 +119,41 @@ try {
   page.on("pageerror", (error) => browserErrors.push(error.message));
   await page.goto(`http://127.0.0.1:${address.port}/`, { waitUntil: "networkidle" });
   await page.getByText(fixtureDocument.title, { exact: true }).click();
+  const editor = page.locator(".word-editor");
+  await editor.waitFor();
+  assert.equal(await editor.isEditable(), true);
+  await editor.click();
+  await editor.press("Control+A");
+  await page.getByLabel("字体", { exact: true }).selectOption("SimSun");
+  await page.getByTitle("斜体", { exact: true }).click();
+  await page.getByTitle("删除线", { exact: true }).click();
+  const formattedHtml = await editor.innerHTML();
+  assert.match(formattedHtml, /font-family:\s*SimSun/);
+  assert.match(formattedHtml, /font-size:\s*12pt/);
+  assert.match(formattedHtml, /font-size:\s*18pt/);
+  assert.match(formattedHtml, /color:\s*(?:#ff0000|rgb\(255, 0, 0\))/);
+  assert.match(formattedHtml, /color:\s*(?:#0000ff|rgb\(0, 0, 255\))/);
+  assert.match(formattedHtml, /<em>/);
+  assert.match(formattedHtml, /<s>/);
+
+  await page.getByRole("button", { name: "撤销", exact: true }).click();
+  assert.doesNotMatch(await editor.innerHTML(), /<s>/);
+  await page.getByRole("button", { name: "重做", exact: true }).click();
+  assert.match(await editor.innerHTML(), /<s>/);
+
+  await page.evaluate(() => {
+    const paragraph = document.querySelector(".word-editor p");
+    if (!paragraph) throw new Error("未找到段落样式测试节点");
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  });
+  await page.locator('label[title="设置当前段落样式"] select').selectOption("heading-2");
+  assert.match(await editor.innerHTML(), /<h2[^>]*>.*保留小号红字.*<\/h2>/);
+
+  await page.getByRole("button", { name: "分页", exact: true }).click();
   await page.locator(".page-sheet").first().waitFor();
 
   const result = await page.evaluate(() => {

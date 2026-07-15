@@ -26,6 +26,7 @@ import {
   FileUp,
   FolderOpen,
   Image as ImageIcon,
+  Italic,
   IndentDecrease,
   IndentIncrease,
   LayoutTemplate,
@@ -40,9 +41,12 @@ import {
   Save,
   Search,
   Sparkles,
+  Strikethrough,
   Table as TableIcon,
   Type,
   Underline as UnderlineIcon,
+  Undo2,
+  Redo2,
   Wand2,
   XCircle
 } from "lucide-react";
@@ -172,11 +176,28 @@ const textColorOptions = [
   { label: "绿", value: "#245F55" }
 ];
 const fontSizeOptions = [
+  { label: "五号", value: "10.5pt" },
   { label: "小四", value: "12pt" },
   { label: "四号", value: "14pt" },
   { label: "小三", value: "15pt" },
   { label: "三号", value: "16pt" },
-  { label: "二号", value: "22pt" }
+  { label: "二号", value: "22pt" },
+  { label: "小初", value: "36pt" }
+];
+const fontFamilyOptions = [
+  { label: "微软雅黑", value: "Microsoft YaHei" },
+  { label: "宋体", value: "SimSun" },
+  { label: "黑体", value: "SimHei" },
+  { label: "仿宋", value: "FangSong" },
+  { label: "楷体", value: "KaiTi" },
+  { label: "Arial", value: "Arial" },
+  { label: "Times New Roman", value: "Times New Roman" }
+];
+const paragraphStyleOptions = [
+  { label: "正文", value: "paragraph" },
+  { label: "标题 1", value: "heading-1" },
+  { label: "标题 2", value: "heading-2" },
+  { label: "标题 3", value: "heading-3" }
 ];
 const importedInlineStyleNames = ["font-family", "font-size", "color", "font-weight", "font-style"];
 const importedBlockStyleNames = ["text-align", "text-indent", "margin-left", "line-height", "margin-top", "margin-bottom", "--word-line-rule"];
@@ -188,7 +209,7 @@ const lineSpacingOptions = [
 ];
 const paragraphSpacingOptions = ["0pt", "6pt", "12pt", "18pt", "24pt"].map((value) => ({ label: value, value }));
 
-function ParagraphSpacingSelect(props: {
+function FormatSelect(props: {
   title: string;
   placeholder: string;
   options: FormatSelectOption[];
@@ -1431,7 +1452,7 @@ function Editor(props: {
   const [aiResult, setAiResult] = React.useState<AiEditResult | null>(null);
   const [selectionHint, setSelectionHint] = React.useState("请先选中文本，再使用局部 AI 操作。");
   const [hasSelection, setHasSelection] = React.useState(false);
-  const [viewMode, setViewMode] = React.useState<EditorViewMode>("page");
+  const [viewMode, setViewMode] = React.useState<EditorViewMode>("edit");
   const [previewPages, setPreviewPages] = React.useState<string[][]>([[buildExportPreviewHtml(props.currentTitle, props.content)]]);
   const [paginationAssetVersion, setPaginationAssetVersion] = React.useState(0);
   const paginationMeasureRef = React.useRef<HTMLDivElement | null>(null);
@@ -1717,10 +1738,43 @@ function Editor(props: {
 
   const applySelectedTextStyle = (styles: Record<string, string>, label: string) => {
     if (!editor) return;
+    const { from, to, empty } = editor.state.selection;
+    if (!empty) {
+      const markType = editor.state.schema.marks.importedTextStyle;
+      let transaction = editor.state.tr;
+      // 中文注解：逐个文本节点合并样式，避免修改字体时覆盖选区内原有的字号和颜色。
+      editor.state.doc.nodesBetween(from, to, (node, position) => {
+        if (!node.isText) return;
+        const start = Math.max(from, position);
+        const end = Math.min(to, position + node.nodeSize);
+        if (start >= end) return;
+        const currentMark = node.marks.find((mark) => mark.type === markType);
+        const style = mergeStyleText(String(currentMark?.attrs.style || ""), styles, importedInlineStyleNames);
+        if (currentMark) transaction = transaction.removeMark(start, end, markType);
+        if (style) transaction = transaction.addMark(start, end, markType.create({ style }));
+      });
+      editor.view.dispatch(transaction.scrollIntoView());
+      editor.view.focus();
+      setSelectionHint(`已应用${label}。`);
+      return;
+    }
     const currentStyle = String(editor.getAttributes("importedTextStyle").style || "");
     const style = mergeStyleText(currentStyle, styles, importedInlineStyleNames);
     const applied = editor.chain().focus().setMark("importedTextStyle", { style }).run();
     setSelectionHint(applied ? `已应用${label}。` : "请先选中文本，或把光标放到要继续输入的位置。");
+  };
+
+  const applyDocumentTextStyle = (style: string) => {
+    if (!editor) return;
+    const chain = editor.chain().focus();
+    const headingLevels: Record<string, 1 | 2 | 3> = { "heading-1": 1, "heading-2": 2, "heading-3": 3 };
+    const level = headingLevels[style];
+    if (style !== "paragraph" && !level) {
+      setSelectionHint("不支持该段落样式。");
+      return;
+    }
+    const applied = style === "paragraph" ? chain.setParagraph().run() : chain.setHeading({ level }).run();
+    setSelectionHint(applied ? "已应用段落样式。" : "请把光标放到需要调整的段落中。");
   };
 
   const applyParagraphAlignment = (alignment: "left" | "center" | "right" | "justify", label: string) => {
@@ -1841,25 +1895,38 @@ function Editor(props: {
       <div className={`editor-layout${props.isOutlineCollapsed ? " outline-collapsed" : ""}`}>
         <aside className="outline-panel"><div className="section-title"><ListTree size={18} /><h2>文档大纲</h2><button className="panel-collapse-button" onClick={() => props.setIsOutlineCollapsed(!props.isOutlineCollapsed)} title={props.isOutlineCollapsed ? "展开文档大纲" : "收起文档大纲"} aria-label={props.isOutlineCollapsed ? "展开文档大纲" : "收起文档大纲"}>{props.isOutlineCollapsed ? <ChevronsRight size={17} /> : <ChevronsLeft size={17} />}</button></div><div className="outline-content">{props.outline.length === 0 ? <div className="empty-state">暂无大纲，请先生成或在正文中添加标题。</div> : props.outline.map((item) => <button key={item.id} className={item.level === 3 ? "outline-child" : ""} onMouseDown={(event) => event.preventDefault()} onClick={() => jumpToOutline(item)}>{item.title}</button>)}</div></aside>
         <section className="paper-panel">
-          <div className="format-bar">
-            <button className={viewMode === "edit" ? "active-format" : ""} onClick={() => setViewMode("edit")} title="切换到可编辑的连续视图">编辑视图</button>
-            <button className={viewMode === "page" ? "active-format" : ""} onClick={() => setViewMode("page")} title="按导出 Word 的页面尺寸预览分页">分页预览</button>
+          <div className={`format-bar${viewMode === "page" ? " preview-mode" : ""}`}>
+            <div className="view-mode-control" aria-label="文档视图">
+              <button className={viewMode === "edit" ? "active-format" : ""} onClick={() => setViewMode("edit")} title="切换到可编辑的 A4 视图">编辑</button>
+              <button className={viewMode === "page" ? "active-format" : ""} onClick={() => setViewMode("page")} title="按导出 Word 的页面尺寸预览分页">分页</button>
+            </div>
+            {viewMode === "edit" ? <>
+            <button onClick={() => editor?.chain().focus().undo().run()} disabled={!editor?.can().undo()} title="撤销" aria-label="撤销"><Undo2 size={16} /></button>
+            <button onClick={() => editor?.chain().focus().redo().run()} disabled={!editor?.can().redo()} title="重做" aria-label="重做"><Redo2 size={16} /></button>
             <button onClick={insertManualPageBreak} title="在当前位置插入分页符"><FileText size={16} />分页符</button>
             <span className="format-divider" />
-            <button className={editor?.isActive("paragraph") ? "active-format" : ""} onClick={() => editor?.chain().focus().setParagraph().run()} title="设置为正文"><AlignLeft size={16} />正文</button>
-            <button className={editor?.isActive("heading", { level: 2 }) ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()} title="设置为标题">标题</button>
+            <FormatSelect title="设置当前段落样式" placeholder="段落样式" options={paragraphStyleOptions} onSelect={(value) => applyDocumentTextStyle(value)} />
             <button className={editor?.isActive("bold") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleBold().run()} title="加粗"><Bold size={16} />加粗</button>
+            <button className={editor?.isActive("italic") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleItalic().run()} title="斜体"><Italic size={16} /></button>
             <button className={editor?.isActive("underline") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleUnderline().run()} title="下划线"><UnderlineIcon size={16} />下划线</button>
+            <button className={editor?.isActive("strike") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleStrike().run()} title="删除线"><Strikethrough size={16} /></button>
+            <label className="format-select" title="设置选中文字字体">
+              <Type size={16} />
+              <select aria-label="字体" defaultValue="" onChange={(event) => { if (event.target.value) applySelectedTextStyle({ "font-family": event.target.value }, "字体"); event.target.value = ""; }}>
+                <option value="">字体</option>
+                {fontFamilyOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
             <label className="format-select" title="设置选中文字字号">
               <Type size={16} />
-              <select defaultValue="" onChange={(event) => { if (event.target.value) applySelectedTextStyle({ "font-size": event.target.value }, "字号"); event.target.value = ""; }}>
+              <select aria-label="字号" defaultValue="" onChange={(event) => { if (event.target.value) applySelectedTextStyle({ "font-size": event.target.value }, "字号"); event.target.value = ""; }}>
                 <option value="">字号</option>
                 {fontSizeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </label>
             <label className="format-select" title="设置选中文字颜色">
               <Type size={16} />
-              <select defaultValue="" onChange={(event) => { if (event.target.value) applySelectedTextStyle({ color: event.target.value }, "颜色"); event.target.value = ""; }}>
+              <select aria-label="文字颜色" defaultValue="" onChange={(event) => { if (event.target.value) applySelectedTextStyle({ color: event.target.value }, "颜色"); event.target.value = ""; }}>
                 <option value="">颜色</option>
                 {textColorOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
@@ -1881,9 +1948,9 @@ function Editor(props: {
             <button onClick={() => applyParagraphAlignment("right", "右对齐")} title="右对齐"><AlignRight size={16} /></button>
             <button onClick={() => applyParagraphAlignment("justify", "两端对齐")} title="两端对齐"><AlignJustify size={16} /></button>
             <span className="format-divider" />
-            <ParagraphSpacingSelect title="设置当前段落或选区的行距" placeholder="行距" options={lineSpacingOptions} icon={<Rows3 size={16} />} onSelect={(value, label) => applyParagraphSpacing({ "line-height": value, "--word-line-rule": "auto" }, `${label}行距`)} />
-            <ParagraphSpacingSelect title="设置当前段落或选区的段前间距" placeholder="段前" options={paragraphSpacingOptions} onSelect={(value) => applyParagraphSpacing({ "margin-top": value }, `段前 ${value}`)} />
-            <ParagraphSpacingSelect title="设置当前段落或选区的段后间距" placeholder="段后" options={paragraphSpacingOptions} onSelect={(value) => applyParagraphSpacing({ "margin-bottom": value }, `段后 ${value}`)} />
+            <FormatSelect title="设置当前段落或选区的行距" placeholder="行距" options={lineSpacingOptions} icon={<Rows3 size={16} />} onSelect={(value, label) => applyParagraphSpacing({ "line-height": value, "--word-line-rule": "auto" }, `${label}行距`)} />
+            <FormatSelect title="设置当前段落或选区的段前间距" placeholder="段前" options={paragraphSpacingOptions} onSelect={(value) => applyParagraphSpacing({ "margin-top": value }, `段前 ${value}`)} />
+            <FormatSelect title="设置当前段落或选区的段后间距" placeholder="段后" options={paragraphSpacingOptions} onSelect={(value) => applyParagraphSpacing({ "margin-bottom": value }, `段后 ${value}`)} />
             <span className="format-divider" />
             <button onClick={() => editor?.chain().focus().decreaseIndent().run()} title="减少首行缩进"><IndentDecrease size={16} />减少首行</button>
             <button onClick={() => editor?.chain().focus().increaseIndent().run()} title="增加首行缩进"><IndentIncrease size={16} />首行缩进</button>
@@ -1892,6 +1959,7 @@ function Editor(props: {
             <button onClick={() => changeSelectedTextCase("lower")} title="将选中文字转为小写"><Type size={16} />小写</button>
             <button onClick={() => changeSelectedTextCase("title")} title="将选中英文转为首字母大写"><Type size={16} />首字母</button>
             <button onClick={clearSelectionFormat} title="清除当前选区格式"><Eraser size={16} />清除格式</button>
+            </> : null}
           </div>
           {props.aiLoading === "正在生成正文" ? <div className="paper-loading"><LoadingProcess label={props.aiLoading} /></div> : null}
           <div className="editor-scroll" style={documentPreviewStyle(props.selectedTemplate)}>

@@ -107,6 +107,10 @@ async function buildFormattedDocxFixture() {
         <w:rPr><w:b/><w:color w:val="C00000"/></w:rPr>
         <w:t>红色加粗文本</w:t>
       </w:r>
+      <w:r>
+        <w:rPr><w:i/><w:u w:val="single"/><w:strike/></w:rPr>
+        <w:t>斜体下划线删除线文本</w:t>
+      </w:r>
     </w:p>
     <w:p><w:pPr><w:pStyle w:val="BodyBased"/></w:pPr><w:r><w:t>Inherited spacing</w:t></w:r></w:p>
     <w:p><w:pPr><w:spacing w:line="360" w:lineRule="atLeast"/></w:pPr><w:r><w:t>At least spacing</w:t></w:r></w:p>
@@ -173,6 +177,7 @@ assert.match(imported.content, /margin-top:\s*6pt/);
 assert.match(imported.content, /margin-bottom:\s*12pt/);
 assert.match(imported.content, /color:\s*#C00000/i);
 assert.match(imported.content, /<strong>/);
+assert.match(imported.content, /<s><em><u>斜体下划线删除线文本<\/u><\/em><\/s>/);
 assert.match(imported.content, /<table>/);
 assert.match(imported.content, /<th>/);
 assert.match(imported.content, /<td>/);
@@ -198,6 +203,19 @@ assert.match(atLeastParagraph, /--word-line-rule:\s*atLeast/);
 const roundTripBuffer = await createDocxBuffer({ title: "Spacing round trip", content: imported.content });
 const roundTripZip = await JSZip.loadAsync(roundTripBuffer);
 const roundTripXml = await roundTripZip.file("word/document.xml")?.async("string") || "";
+const decoratedRoundTripXml = (roundTripXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || [])
+  .find((run) => run.includes(">斜体下划线删除线文本</w:t>")) || "";
+assert.match(decoratedRoundTripXml, /<w:i\/>/);
+assert.match(decoratedRoundTripXml, /<w:u(?:\s+w:val="single")?\/>/);
+assert.match(decoratedRoundTripXml, /<w:strike\/>/);
+const roundTripImported = await parseImportedDocument({
+  originalname: "round-trip-format.docx",
+  buffer: roundTripBuffer,
+  mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  size: roundTripBuffer.length
+});
+// 中文注解：docx 会写出 b=false 等显式关闭标记，再导入时不能把未加粗文本误判成粗体。
+assert.match(roundTripImported.content, /<s><em><u>斜体下划线删除线文本<\/u><\/em><\/s>/);
 const atLeastRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || [])
   .find((paragraph) => paragraph.includes(">At least spacing</w:t>")) || "";
 // 中文注解：最小行距往返后仍必须是 atLeast，避免大字号文字被固定行高裁切并改变分页。
