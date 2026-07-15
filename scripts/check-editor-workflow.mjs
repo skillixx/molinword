@@ -85,10 +85,16 @@ async function apiResponse(request, response) {
     sendJson(response, { document: storedDocument });
     return true;
   }
+  if (request.method === "POST" && url.pathname === `/api/documents/${fixtureDocument.id}/images`) {
+    for await (const _chunk of request) { /* 中文注解：消费 multipart 请求体，模拟真实上传接口。 */ }
+    sendJson(response, { image: { id: "file-2", fileId: 2, src: "/api/files/2/content", alt: "header-logo.png", widthPx: 120, heightPx: 60, paragraphIndex: 0, placement: "afterText", alignment: "center" } }, 201);
+    return true;
+  }
   if (request.method === "POST" && url.pathname === `/api/documents/${fixtureDocument.id}/export-docx`) {
     const body = await readJsonBody(request);
     const content = typeof body.content === "string" ? body.content : storedDocument.content;
-    exportedDocxBuffer = await createDocxBuffer({ title: storedDocument.title, content, templateStyle: fixtureWordStyle, pageLayout: storedDocument.pageLayout });
+    const hydratedPageLayout = JSON.parse(JSON.stringify(storedDocument.pageLayout).replaceAll("/api/files/2/content", tinyPng));
+    exportedDocxBuffer = await createDocxBuffer({ title: storedDocument.title, content, templateStyle: fixtureWordStyle, pageLayout: hydratedPageLayout });
     sendJson(response, { file: { id: 1, documentId: storedDocument.id, fileName: "editor-parity.docx", fileType: "docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", fileSize: exportedDocxBuffer.length, downloadUrl: "/api/files/1/download" } }, 201);
     return true;
   }
@@ -98,6 +104,11 @@ async function apiResponse(request, response) {
       "Content-Disposition": 'attachment; filename="editor-parity.docx"'
     });
     response.end(exportedDocxBuffer);
+    return true;
+  }
+  if (request.method === "GET" && url.pathname === "/api/files/2/content") {
+    response.writeHead(200, { "Content-Type": "image/png" });
+    response.end(Buffer.from(tinyPng.split(",")[1], "base64"));
     return true;
   }
   if (request.method === "GET" && url.pathname === "/api/templates") {
@@ -207,6 +218,8 @@ try {
   await page.getByLabel("默认页眉颜色", { exact: true }).fill("#c00000");
   await page.getByLabel("默认页眉加粗", { exact: true }).click();
   await page.getByLabel("默认页眉对齐", { exact: true }).selectOption("left");
+  await page.locator(".page-image-settings").first().locator('input[type="file"]').setInputFiles({ name: "header-logo.png", mimeType: "image/png", buffer: Buffer.from(tinyPng.split(",")[1], "base64") });
+  await page.getByLabel("默认页眉图片1对齐", { exact: true }).selectOption("left");
   await page.getByLabel("默认页脚文字", { exact: true }).fill("奇数页办公文档");
   await page.getByLabel("默认页脚字体", { exact: true }).selectOption("Arial");
   await page.getByLabel("默认页脚字号", { exact: true }).fill("10.5");
@@ -282,8 +295,10 @@ try {
   assert.deepEqual(storedDocument.pageLayout, {
     headerText: "奇数页项目页眉",
     headerStyle: styledHeader,
+    headerImages: [{ id: "file-2", fileId: 2, src: "/api/files/2/content", alt: "header-logo.png", widthPx: 120, heightPx: 60, paragraphIndex: 0, placement: "afterText", alignment: "left" }],
     footerText: "奇数页办公文档",
     footerStyle: styledFooter,
+    footerImages: [],
     headerPageNumberTemplate: "",
     footerPageNumberTemplate: "第 {PAGE} 页 / 共 {NUMPAGES} 页",
     headerPageNumberSeparate: false,
@@ -291,9 +306,9 @@ try {
     pageNumberEnabled: true,
     pageNumberPosition: "footer",
     firstPageDifferent: true,
-    firstPage: { headerText: "首页项目封面", headerStyle: defaultPageTextStyle, footerText: "首页保密标识", footerStyle: defaultPageTextStyle, headerPageNumberTemplate: "", footerPageNumberTemplate: "", headerPageNumberSeparate: false, footerPageNumberSeparate: false, pageNumberEnabled: false, pageNumberPosition: "footer" },
+    firstPage: { headerText: "首页项目封面", headerStyle: defaultPageTextStyle, headerImages: [], footerText: "首页保密标识", footerStyle: defaultPageTextStyle, footerImages: [], headerPageNumberTemplate: "", footerPageNumberTemplate: "", headerPageNumberSeparate: false, footerPageNumberSeparate: false, pageNumberEnabled: false, pageNumberPosition: "footer" },
     oddEvenDifferent: true,
-    evenPage: { headerText: "偶数页项目页眉", headerStyle: defaultPageTextStyle, footerText: "偶数页办公文档", footerStyle: defaultPageTextStyle, headerPageNumberTemplate: "", footerPageNumberTemplate: "第 {PAGE} 页 / 共 {NUMPAGES} 页", headerPageNumberSeparate: false, footerPageNumberSeparate: false, pageNumberEnabled: true, pageNumberPosition: "footer" },
+    evenPage: { headerText: "偶数页项目页眉", headerStyle: defaultPageTextStyle, headerImages: [], footerText: "偶数页办公文档", footerStyle: defaultPageTextStyle, footerImages: [], headerPageNumberTemplate: "", footerPageNumberTemplate: "第 {PAGE} 页 / 共 {NUMPAGES} 页", headerPageNumberSeparate: false, footerPageNumberSeparate: false, pageNumberEnabled: true, pageNumberPosition: "footer" },
     orientation: "portrait",
     pageNumberFormat: "decimal",
     pageNumberStart: null,
@@ -327,9 +342,11 @@ try {
   const settingsXml = await archive.file("word/settings.xml")?.async("string");
   const headerXmlParts = await Promise.all(archive.file(/^word\/header\d+\.xml$/).map((file) => file.async("string")));
   const footerXmlParts = await Promise.all(archive.file(/^word\/footer\d+\.xml$/).map((file) => file.async("string")));
+  const headerMedia = archive.file(/^word\/media\/.+\.png$/);
   assert.ok(documentXml, "导出的 DOCX 应包含 document.xml");
   assert.equal(headerXmlParts.length, 5, "导出的 DOCX 应包含首节三类页眉和第二节默认/偶数页眉");
   assert.equal(footerXmlParts.length, 5, "导出的 DOCX 应包含首节三类页脚和第二节默认/偶数页脚");
+  assert.ok(headerXmlParts.some((xml) => /<w:drawing>/.test(xml)) && headerMedia.length > 0, "在线页眉图片应进入导出的 DOCX 媒体部件");
   assert.equal((documentXml.match(/<w:sectPr(?:\s|>)/g) || []).length, 2);
   assert.match(documentXml, /<w:type w:val="nextPage"\/>/);
   assert.match(documentXml, /<w:pgSz[^>]+w:orient="landscape"/);
@@ -408,6 +425,7 @@ try {
       fontVariable: getComputedStyle(document.querySelector(".editor-scroll")).getPropertyValue("--document-font-family").trim(),
       lineVariable: getComputedStyle(document.querySelector(".editor-scroll")).getPropertyValue("--document-line-height").trim(),
       headerTexts: Array.from(document.querySelectorAll(".page-header")).map((item) => item.textContent || ""),
+      headerImageCount: document.querySelectorAll(".page-header img").length,
       footerTexts: Array.from(document.querySelectorAll(".page-footer")).map((item) => item.textContent || ""),
       oddHeaderStyle: (() => {
         const item = Array.from(document.querySelectorAll(".page-header")).find((node) => node.textContent === "奇数页项目页眉");
@@ -445,6 +463,7 @@ try {
   assert.ok(secondSectionFirstPage > 0);
   assert.deepEqual(result.pageSizes[secondSectionFirstPage], { width: 1123, height: 794 });
   assert.equal(result.headerTexts.length, result.pageCount);
+  assert.ok(result.headerImageCount > 0, "分页预览应显示在线设置的页眉图片");
   assert.equal(result.headerTexts[0], "首页项目封面");
   assert.ok(result.headerTexts.slice(1, secondSectionFirstPage).every((text, index) => (index + 2) % 2 === 0 ? text === "偶数页项目页眉" : text === "奇数页项目页眉"));
   assert.ok(result.headerTexts.slice(secondSectionFirstPage).every((text) => text.includes("第二节横向页眉") && text.includes("审批状态：已确认")));

@@ -1025,6 +1025,81 @@ textarea {
   height: 16px;
 }
 
+.page-image-settings {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid #dce3e8;
+  border-radius: 4px;
+  background: #f8fafb;
+}
+
+.page-image-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #52616f;
+  font-size: 11px;
+}
+
+.page-image-upload,
+.page-image-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 28px;
+  border: 1px solid #cfd8e1;
+  border-radius: 4px;
+  padding: 0 8px;
+  background: #ffffff;
+  color: #245f55;
+  cursor: pointer;
+}
+
+.page-image-item {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) 30px;
+  align-items: center;
+  gap: 6px;
+}
+
+.page-image-item > img {
+  width: 52px;
+  height: 38px;
+  border: 1px solid #dce3e8;
+  object-fit: contain;
+  background: #ffffff;
+}
+
+.page-image-fields {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.page-image-fields label {
+  display: grid;
+  gap: 2px;
+  color: #687684;
+  font-size: 9px;
+}
+
+.page-image-fields input,
+.page-image-fields select {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 3px;
+  font-size: 10px;
+}
+
+.page-image-delete {
+  width: 30px;
+  padding: 0;
+  color: #a33b3b;
+}
+
 .editor-scroll {
   flex: 1;
   min-height: 0;
@@ -1115,7 +1190,22 @@ textarea {
 .page-header.multiline,
 .page-footer.multiline {
   display: block;
+  white-space: normal;
+}
+
+.page-part-line {
+  display: flex;
+  min-height: 1.4em;
+  align-items: center;
+  justify-content: inherit;
+  gap: 6px;
   white-space: pre-wrap;
+}
+
+.page-part-line img {
+  flex: 0 0 auto;
+  max-width: 100%;
+  object-fit: contain;
 }
 
 .page-header.multiline.page-number-separate > span,

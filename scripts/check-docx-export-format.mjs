@@ -298,4 +298,22 @@ const [, constrainedTop, constrainedRight, constrainedBottom, constrainedLeft] =
 assert.ok(constrainedLeft + constrainedRight <= 11906 - 720);
 assert.ok(constrainedTop + constrainedBottom <= 16838 - 720);
 
+const pageImageBuffer = await createDocxBuffer({
+  title: "Header and footer images",
+  content: "<p>Body</p>",
+  pageLayout: {
+    headerText: "项目页眉",
+    headerImages: [{ id: "header-logo", fileId: null, src: `data:image/png;base64,${tinyPngBase64}`, alt: "企业标识", widthPx: 120, heightPx: 60, paragraphIndex: 0, placement: "beforeText", alignment: "left" }],
+    footerImages: [{ id: "footer-mark", fileId: null, src: `data:image/png;base64,${tinyPngBase64}`, alt: "页脚标识", widthPx: 40, heightPx: 20, paragraphIndex: 0, placement: "afterText", alignment: "right" }]
+  }
+});
+const pageImageZip = await JSZip.loadAsync(pageImageBuffer);
+const pageImageHeaders = await Promise.all(pageImageZip.file(/^word\/header\d+\.xml$/).map((file) => file.async("string")));
+const pageImageFooters = await Promise.all(pageImageZip.file(/^word\/footer\d+\.xml$/).map((file) => file.async("string")));
+const pageImageRelationships = await Promise.all(pageImageZip.file(/^word\/_rels\/(?:header|footer)\d+\.xml\.rels$/).map((file) => file.async("string")));
+assert.ok(pageImageHeaders.some((xml) => /<w:drawing>/.test(xml) && /<wp:extent cx="1143000" cy="571500"/.test(xml) && xml.indexOf("<w:drawing>") < xml.indexOf("项目页眉")));
+assert.ok(pageImageFooters.some((xml) => /<w:drawing>/.test(xml) && /<wp:extent cx="381000" cy="190500"/.test(xml)));
+assert.ok(pageImageRelationships.some((xml) => /relationships\/image/.test(xml)));
+assert.ok(pageImageZip.file(/^word\/media\/.+\.png$/).length >= 1);
+
 console.log("DOCX export format check passed");

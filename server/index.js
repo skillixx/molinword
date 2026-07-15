@@ -24,11 +24,14 @@ const docxPage = {
 const orderedListReference = "online-ordered-list";
 const defaultPageTextStyle = Object.freeze({ alignment: "center", fontFamily: "Microsoft YaHei", fontSizePt: 9, color: "#6B7280", bold: false, italic: false });
 const defaultPageNumberTemplate = "第 {PAGE} 页 / 共 {NUMPAGES} 页";
+const supportedPageImageMimeTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 const defaultPageVariant = Object.freeze({
   headerText: "",
   headerStyle: defaultPageTextStyle,
+  headerImages: [],
   footerText: "",
   footerStyle: defaultPageTextStyle,
+  footerImages: [],
   headerPageNumberTemplate: "",
   footerPageNumberTemplate: "",
   headerPageNumberSeparate: false,
@@ -82,6 +85,32 @@ function normalizePageTextStyle(value, fallback = defaultPageTextStyle) {
   };
 }
 
+function normalizePageImages(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 10).map((item, index) => {
+    const source = item && typeof item === "object" ? item : {};
+    const fileId = Number(source.fileId);
+    const rawSrc = String(source.src || "").trim();
+    const src = /^data:image\/(?:png|jpeg|jpg|gif|webp);base64,/i.test(rawSrc) || /^\/api\/files\/\d+\/content$/i.test(rawSrc) ? rawSrc : "";
+    const rawWidth = Number(source.widthPx);
+    const rawHeight = Number(source.heightPx);
+    const width = Number.isFinite(rawWidth) ? Math.max(1, rawWidth) : 120;
+    const height = Number.isFinite(rawHeight) ? Math.max(1, rawHeight) : 60;
+    const scale = Math.min(1, 602 / width, 400 / height);
+    return {
+      id: String(source.id || (Number.isSafeInteger(fileId) && fileId > 0 ? `file-${fileId}` : `page-image-${index + 1}`)).replace(/[^\w-]/g, "").slice(0, 80) || `page-image-${index + 1}`,
+      fileId: Number.isSafeInteger(fileId) && fileId > 0 ? fileId : null,
+      src,
+      alt: String(source.alt || "页眉页脚图片").replace(/[<>]/g, "").trim().slice(0, 200),
+      widthPx: Math.round(width * scale * 100) / 100,
+      heightPx: Math.round(height * scale * 100) / 100,
+      paragraphIndex: Math.max(0, Math.min(Math.round(Number(source.paragraphIndex) || 0), 49)),
+      placement: source.placement === "beforeText" ? "beforeText" : "afterText",
+      alignment: ["left", "center", "right"].includes(source.alignment) ? source.alignment : "center"
+    };
+  }).filter((item) => item.src || item.fileId);
+}
+
 function normalizePageVariant(value, fallback = defaultPageVariant) {
   const source = value && typeof value === "object" ? value : {};
   const base = fallback && typeof fallback === "object" ? fallback : defaultPageVariant;
@@ -97,8 +126,10 @@ function normalizePageVariant(value, fallback = defaultPageVariant) {
   return {
     headerText: normalizePageText(source.headerText ?? base.headerText),
     headerStyle: normalizePageTextStyle(source.headerStyle, base.headerStyle || defaultPageTextStyle),
+    headerImages: normalizePageImages(source.headerImages === undefined ? base.headerImages : source.headerImages),
     footerText: normalizePageText(source.footerText ?? base.footerText),
     footerStyle: normalizePageTextStyle(source.footerStyle, base.footerStyle || defaultPageTextStyle),
+    footerImages: normalizePageImages(source.footerImages === undefined ? base.footerImages : source.footerImages),
     headerPageNumberTemplate,
     footerPageNumberTemplate,
     headerPageNumberSeparate: Boolean(headerPageNumberTemplate) && (source.headerPageNumberSeparate === undefined ? Boolean(base.headerPageNumberSeparate) : Boolean(source.headerPageNumberSeparate)),
@@ -170,6 +201,11 @@ const documentUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 15 * 1024 * 1024, files: 1 }
 });
+const pageImageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024, files: 1 },
+  fileFilter: (_request, file, callback) => callback(null, supportedPageImageMimeTypes.has(file.mimetype))
+});
 
 function receiveImportedDocument(request, response, next) {
   documentUpload.single("file")(request, response, (error) => {
@@ -179,6 +215,16 @@ function receiveImportedDocument(request, response, next) {
       return;
     }
     response.status(400).json({ message: "文件上传失败，请重新选择文档。" });
+  });
+}
+
+function receivePageImage(request, response, next) {
+  pageImageUpload.single("file")(request, response, (error) => {
+    if (!error) return next();
+    const message = error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE"
+      ? "图片不能超过 8MB。"
+      : "仅支持 PNG、JPEG、GIF 和 WebP 图片。";
+    response.status(400).json({ message });
   });
 }
 
@@ -746,6 +792,73 @@ async function readDocxImageDataUrl(zip, relationships, embedId) {
   return `data:${imageMimeFromPath(normalizedPath)};base64,${data}`;
 }
 
+function docxPartRelationshipsPath(partPath = "") {
+  const normalized = String(partPath).replace(/\\/g, "/");
+  const slash = normalized.lastIndexOf("/");
+  const directory = slash >= 0 ? normalized.slice(0, slash + 1) : "";
+  const fileName = slash >= 0 ? normalized.slice(slash + 1) : normalized;
+  return `${directory}_rels/${fileName}.rels`;
+}
+
+function resolveDocxPartTarget(partPath = "", target = "") {
+  if (target.startsWith("/")) return target.slice(1);
+  const directory = String(partPath).replace(/\\/g, "/").replace(/[^/]+$/, "");
+  const segments = `${directory}${target}`.split("/");
+  const resolved = [];
+  for (const segment of segments) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") resolved.pop();
+    else resolved.push(segment);
+  }
+  return resolved.join("/");
+}
+
+async function parseDocxPartImages(zip, part) {
+  if (!part?.present || !part.xml || !part.path) return [];
+  const relsXml = await zip.file(docxPartRelationshipsPath(part.path))?.async("string") || "";
+  const relationships = parseDocxRelationships(relsXml);
+  const document = parseDocument(part.xml, { xmlMode: true });
+  const paragraphs = xmlDescendants(document, "w:p");
+  const images = [];
+  for (const [paragraphIndex, paragraph] of paragraphs.entries()) {
+    const alignment = ["left", "center", "right"].includes(xmlVal(xmlChild(xmlChild(paragraph, "w:pPr"), "w:jc")))
+      ? xmlVal(xmlChild(xmlChild(paragraph, "w:pPr"), "w:jc"))
+      : "center";
+    const children = xmlChildren(paragraph);
+    const firstTextIndex = children.findIndex((child) => child.name === "w:r" && xmlDescendants(child, "w:t").some((text) => (text.children || []).some((value) => String(value.data || "").trim())));
+    for (const [childIndex, run] of children.entries()) {
+      if (run.name !== "w:r") continue;
+      for (const drawing of xmlDescendants(run, "w:drawing")) {
+        const blip = xmlDescendants(drawing, "a:blip")[0];
+        const embedId = firstValue(blip?.attribs, ["r:embed", "embed"]);
+        const target = relationships.get(embedId);
+        if (!target) continue;
+        const imagePath = resolveDocxPartTarget(part.path, target);
+        const imageFile = zip.file(imagePath);
+        if (!imageFile) continue;
+        const data = await imageFile.async("base64");
+        const extent = xmlDescendants(drawing, "wp:extent")[0];
+        const widthPx = Number(firstValue(extent?.attribs, ["cx"])) / 9525;
+        const heightPx = Number(firstValue(extent?.attribs, ["cy"])) / 9525;
+        const properties = xmlDescendants(drawing, "wp:docPr")[0];
+        images.push({
+          id: `imported-${images.length + 1}`,
+          fileId: null,
+          src: `data:${imageMimeFromPath(imagePath)};base64,${data}`,
+          alt: firstValue(properties?.attribs, ["descr", "name"]) || "导入图片",
+          widthPx: widthPx > 0 ? widthPx : 120,
+          heightPx: heightPx > 0 ? heightPx : 60,
+          paragraphIndex,
+          placement: firstTextIndex >= 0 && childIndex < firstTextIndex ? "beforeText" : "afterText",
+          alignment
+        });
+      }
+    }
+  }
+  // 中文注解：页眉页脚图片的关系路径相对各自部件解析，不能复用 document.xml.rels。
+  return normalizePageImages(images);
+}
+
 async function docxImagesFromRun(runNode, zip, relationships) {
   const images = [];
   const drawings = xmlDescendants(runNode, "w:drawing");
@@ -1167,8 +1280,10 @@ function parseDocxPageVariantParts(headerPart, footerPart, fallback = defaultPag
   return normalizePageVariant({
     headerText: headerPart.present ? parsed.headerText : fallback.headerText,
     headerStyle: headerPart.present ? parsed.headerStyle : fallback.headerStyle,
+    headerImages: headerPart.present ? (headerPart.images || []) : fallback.headerImages,
     footerText: footerPart.present ? parsed.footerText : fallback.footerText,
     footerStyle: footerPart.present ? parsed.footerStyle : fallback.footerStyle,
+    footerImages: footerPart.present ? (footerPart.images || []) : fallback.footerImages,
     headerPageNumberTemplate: headerPart.present ? parsed.headerPageNumberTemplate : fallback.headerPageNumberTemplate,
     footerPageNumberTemplate: footerPart.present ? parsed.footerPageNumberTemplate : fallback.footerPageNumberTemplate,
     headerPageNumberSeparate: headerPart.present ? parsed.headerPageNumberSeparate : fallback.headerPageNumberSeparate,
@@ -1231,9 +1346,9 @@ async function parseDocxPageLayout(buffer) {
     const reference = references.find((item) => (firstValue(item.attribs, ["w:type", "type"]) || "default") === referenceType);
     const relationshipId = firstValue(reference?.attribs, ["r:id", "id"]);
     const target = relationships.get(relationshipId);
-    if (!reference || !target) return { present: false, xml: "" };
+    if (!reference || !target) return { present: false, xml: "", path: "", images: [] };
     const path = target.startsWith("/") ? target.slice(1) : `word/${target.replace(/^\.?\//, "")}`;
-    return { present: true, xml: await zip.file(path)?.async("string") || "" };
+    return { present: true, path, xml: await zip.file(path)?.async("string") || "", images: [] };
   };
 
   const sectionLayouts = [];
@@ -1247,7 +1362,10 @@ async function parseDocxPageLayout(buffer) {
       readReferencedPart(section, "w:footerReference", "first"),
       readReferencedPart(section, "w:headerReference", "even"),
       readReferencedPart(section, "w:footerReference", "even")
-    ]) : Array.from({ length: 6 }, () => ({ present: false, xml: "" }));
+    ]) : Array.from({ length: 6 }, () => ({ present: false, xml: "", path: "", images: [] }));
+    await Promise.all([
+      defaultHeader, defaultFooter, firstHeader, firstFooter, evenHeader, evenFooter
+    ].map(async (part) => { part.images = await parseDocxPartImages(zip, part); }));
     pageParts.push(defaultHeader.xml, defaultFooter.xml, firstHeader.xml, firstFooter.xml, evenHeader.xml, evenFooter.xml);
     const geometry = section ? parseDocxPageGeometry(section, fallback) : { orientation: fallback.orientation, pageNumberFormat: fallback.pageNumberFormat, pageNumberStart: fallback.pageNumberStart, headerDistance: fallback.headerDistance, footerDistance: fallback.footerDistance, margins: fallback.margins };
     sectionLayouts.push(normalizePageLayout({
@@ -1261,7 +1379,7 @@ async function parseDocxPageLayout(buffer) {
   }
 
   // 中文注解：当前页面模型只保存纯文本；只要发现字体、字号、颜色、对齐或其他富格式，就明确提示用户可能丢失样式。
-  const hasUnsupportedHeaderFooter = /<w:(?:drawing|pict|tbl|shd|tabs|u|strike|vertAlign)\b/i.test(pageParts.join(""));
+  const hasUnsupportedHeaderFooter = /<w:(?:pict|tbl|shd|tabs|u|strike|vertAlign)\b|<wp:anchor\b/i.test(pageParts.join(""));
   const hasMixedHeaderFooterStyles = pageParts.some((xml) => docxPartHasMixedTextStyles(xml, styleContext));
   const dynamicFieldInstructions = pageParts.flatMap(docxFieldInstructions);
   const hasFlattenedDynamicFields = dynamicFieldInstructions.some((instruction) => !isPageNumberFieldInstruction(instruction));
@@ -1272,7 +1390,7 @@ async function parseDocxPageLayout(buffer) {
   if (rawSectionBreakTypes.includes("continuous")) {
     warnings.push("文档包含连续分节符；为确保在线分页与导出结果一致，已按下一页分节符恢复。");
   }
-  if (hasUnsupportedHeaderFooter || hasMixedHeaderFooterStyles) warnings.push("页眉页脚中的图片、混合字符样式或高级格式暂未完整恢复；多段落、基础字体、字号、颜色、加粗、斜体、对齐和页码已保留。");
+  if (hasUnsupportedHeaderFooter || hasMixedHeaderFooterStyles) warnings.push("页眉页脚中的浮动对象、表格、混合字符样式或高级格式暂未完整恢复；内联图片、多段落、基础字体、字号、颜色、加粗、斜体、对齐和页码已保留。");
   if (hasFlattenedDynamicFields) warnings.push("页眉页脚中的日期、文件名或其他动态域已按当前显示值恢复为普通文字，再次导出后不会自动更新。");
   // 中文注解：首节保存在文档页面设置中，后续节由正文分节节点携带，编辑、预览和再次导出共用同一顺序。
   return {
@@ -1348,6 +1466,7 @@ async function parseImportedDocument(file) {
       outline: extractImportedOutline(content),
       documentType: "Word 文档",
       pageLayout: pageLayoutResult.pageLayout,
+      sectionLayouts: pageLayoutResult.sectionLayouts,
       warnings: pageLayoutResult.warnings
     };
   }
@@ -1891,31 +2010,46 @@ function createDocxHeaderFooter(pageLayout, templateStyle = {}, forceDefault = f
     }
     return new TextRun({ text: part, ...runStyle });
   });
-  const createPartParagraphs = (text, pageNumberTemplate, pageNumberSeparate, style) => {
+  const pageImageRun = (image) => {
+    const source = dataUrlToImage(image.src);
+    if (!source) return null;
+    return new ImageRun({
+      data: source.data,
+      type: source.extension,
+      transformation: { width: image.widthPx, height: image.heightPx }
+    });
+  };
+  const createPartParagraphs = (text, images, pageNumberTemplate, pageNumberSeparate, style) => {
     const lines = String(text || "").split("\n");
-    const paragraphs = text
-      ? lines.map((line, index) => {
-        const children = line ? [new TextRun({ text: line, ...style.run })] : [];
+    const normalizedImages = normalizePageImages(images);
+    const lastImageParagraph = normalizedImages.reduce((maximum, image) => Math.max(maximum, image.paragraphIndex), -1);
+    const paragraphCount = Math.max(text ? lines.length : 0, lastImageParagraph + 1);
+    const paragraphs = Array.from({ length: paragraphCount }, (_, index) => {
+        const line = text ? (lines[index] || "") : "";
+        const paragraphImages = normalizedImages.filter((image) => image.paragraphIndex === index);
+        const beforeImages = paragraphImages.filter((image) => image.placement === "beforeText").map(pageImageRun).filter(Boolean);
+        const afterImages = paragraphImages.filter((image) => image.placement !== "beforeText").map(pageImageRun).filter(Boolean);
+        const children = [...beforeImages, ...(line ? [new TextRun({ text: line, ...style.run })] : []), ...afterImages];
         if (index === lines.length - 1 && pageNumberTemplate && !pageNumberSeparate) {
           if (line) children.push(new TextRun({ text: " · ", ...style.run }));
           children.push(...pageNumberChildren(pageNumberTemplate, style.run));
         }
-        return new Paragraph({ alignment: style.alignment, children });
-      })
-      : [];
+        const imageAlignment = paragraphImages[0]?.alignment;
+        return new Paragraph({ alignment: alignmentMap[imageAlignment] || style.alignment, children });
+      });
     // 中文注解：多段落文字与页码分段输出，保持常见 Word“说明行 + 独立页码行”的页面结构。
     if (pageNumberTemplate && (!text || pageNumberSeparate)) paragraphs.push(new Paragraph({ alignment: style.alignment, children: pageNumberChildren(pageNumberTemplate, style.run) }));
     return paragraphs;
   };
   const createHeader = (variant, force = false) => {
     const style = docxTextStyle(variant.headerStyle);
-    const paragraphs = createPartParagraphs(variant.headerText, variant.headerPageNumberTemplate, variant.headerPageNumberSeparate, style);
+    const paragraphs = createPartParagraphs(variant.headerText, variant.headerImages, variant.headerPageNumberTemplate, variant.headerPageNumberSeparate, style);
     if (!force && !paragraphs.length) return undefined;
     return new Header({ children: paragraphs.length ? paragraphs : [new Paragraph({ alignment: style.alignment, children: [] })] });
   };
   const createFooter = (variant, force = false) => {
     const style = docxTextStyle(variant.footerStyle);
-    const paragraphs = createPartParagraphs(variant.footerText, variant.footerPageNumberTemplate, variant.footerPageNumberSeparate, style);
+    const paragraphs = createPartParagraphs(variant.footerText, variant.footerImages, variant.footerPageNumberTemplate, variant.footerPageNumberSeparate, style);
     if (!force && !paragraphs.length) return undefined;
     return new Footer({ children: paragraphs.length ? paragraphs : [new Paragraph({ alignment: style.alignment, children: [] })] });
   };
@@ -2028,6 +2162,109 @@ async function streamToBuffer(stream) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   return Buffer.concat(chunks);
+}
+
+function pageImageExtension(mimeType = "") {
+  if (mimeType === "image/jpeg") return "jpg";
+  return supportedPageImageMimeTypes.has(mimeType) ? mimeType.split("/")[1] : "png";
+}
+
+function mapPageLayoutImages(layout, mapper) {
+  const normalized = normalizePageLayout(layout);
+  const mapVariant = (variant) => normalizePageVariant({
+    ...variant,
+    headerImages: variant.headerImages.map(mapper),
+    footerImages: variant.footerImages.map(mapper)
+  }, variant);
+  return normalizePageLayout({
+    ...mapVariant(normalized),
+    firstPage: mapVariant(normalized.firstPage),
+    evenPage: mapVariant(normalized.evenPage)
+  }, normalized);
+}
+
+function pageLayoutImageSources(layouts = []) {
+  const sources = new Set();
+  for (const layout of layouts) {
+    const normalized = normalizePageLayout(layout);
+    for (const variant of [normalized, normalized.firstPage, normalized.evenPage]) {
+      for (const image of [...variant.headerImages, ...variant.footerImages]) {
+        if (image.src) sources.add(image.src);
+      }
+    }
+  }
+  return [...sources];
+}
+
+async function persistImportedPageImages(pool, storage, userId, documentId, imported) {
+  const layouts = imported.sectionLayouts?.length ? imported.sectionLayouts : [imported.pageLayout];
+  const sources = pageLayoutImageSources(layouts).filter((src) => src.startsWith("data:"));
+  if (!sources.length) return imported;
+  const replacements = new Map();
+  const storedAssets = [];
+  try {
+    for (const [index, src] of sources.entries()) {
+      const image = dataUrlToImage(src);
+      if (!image) continue;
+      const mimeType = image.extension === "jpg" ? "image/jpeg" : `image/${image.extension}`;
+      const fileName = `page-image-${index + 1}.${pageImageExtension(mimeType)}`;
+      const objectKey = `documents/${documentId}/images/${crypto.randomUUID()}.${pageImageExtension(mimeType)}`;
+      await storage.putObject(storageBucket, objectKey, image.data, image.data.length, { "Content-Type": mimeType });
+      const storedAsset = { id: null, objectKey };
+      storedAssets.push(storedAsset);
+      const [result] = await pool.query(
+        `INSERT INTO files
+          (user_id, document_id, original_name, file_name, file_type, mime_type, file_size, bucket, object_key, purpose)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'image')`,
+        [userId, documentId, fileName, fileName, pageImageExtension(mimeType), mimeType, image.data.length, storageBucket, objectKey]
+      );
+      storedAsset.id = result.insertId;
+      replacements.set(src, { fileId: result.insertId, src: `/api/files/${result.insertId}/content` });
+    }
+  } catch (error) {
+    const storedIds = storedAssets.map((asset) => asset.id).filter(Boolean);
+    if (storedIds.length) await pool.query("DELETE FROM files WHERE id IN (?) AND user_id = ?", [storedIds, userId]).catch(() => undefined);
+    await Promise.all(storedAssets.map((asset) => storage.removeObject(storageBucket, asset.objectKey).catch(() => undefined)));
+    throw error;
+  }
+  const replaceImage = (image) => replacements.has(image.src) ? { ...image, ...replacements.get(image.src) } : image;
+  const sectionLayouts = layouts.map((layout) => mapPageLayoutImages(layout, replaceImage));
+  let content = imported.content;
+  for (const [source, replacement] of replacements) content = content.split(source).join(replacement.src);
+  // 中文注解：原始 data URL 只在解析阶段短暂存在，入库后统一替换为文件 ID，避免页面设置 JSON 膨胀。
+  return { ...imported, content, pageLayout: sectionLayouts[0], sectionLayouts };
+}
+
+function stripTransientPageImages(imported) {
+  const layouts = imported.sectionLayouts?.length ? imported.sectionLayouts : [imported.pageLayout];
+  const sources = pageLayoutImageSources(layouts).filter((src) => src.startsWith("data:"));
+  const stripImage = (image) => image.src.startsWith("data:") ? { ...image, src: "", fileId: null } : image;
+  const sectionLayouts = layouts.map((layout) => mapPageLayoutImages(layout, stripImage));
+  let content = imported.content;
+  for (const source of sources) content = content.split(source).join("");
+  return { ...imported, content, pageLayout: sectionLayouts[0], sectionLayouts };
+}
+
+async function hydratePageImagesForExport(pool, storage, userId, pageLayout, content) {
+  const serialized = `${JSON.stringify(pageLayout)}\n${content}`;
+  const ids = [...serialized.matchAll(/\/api\/files\/(\d+)\/content/g)].map((match) => Number(match[1]));
+  const uniqueIds = [...new Set(ids.filter((id) => Number.isSafeInteger(id) && id > 0))];
+  if (!uniqueIds.length) return { pageLayout, content };
+  const [rows] = await pool.query(
+    "SELECT id, bucket, object_key, mime_type FROM files WHERE id IN (?) AND user_id = ? AND purpose = 'image'",
+    [uniqueIds, userId]
+  );
+  const replacements = new Map();
+  for (const row of rows) {
+    const stream = await storage.getObject(row.bucket, row.object_key);
+    const buffer = await streamToBuffer(stream);
+    replacements.set(`/api/files/${row.id}/content`, `data:${row.mime_type};base64,${buffer.toString("base64")}`);
+  }
+  const replaceImage = (image) => replacements.has(image.src) ? { ...image, src: replacements.get(image.src) } : image;
+  let hydratedContent = content;
+  for (const [source, dataUrl] of replacements) hydratedContent = hydratedContent.split(source).join(dataUrl);
+  // 中文注解：DOCX 打包器需要真实字节，导出前才从 MinIO 临时水合，浏览器和数据库始终只保存受控 URL。
+  return { pageLayout: mapPageLayoutImages(pageLayout, replaceImage), content: hydratedContent };
 }
 
 function toDocument(row) {
@@ -2823,14 +3060,42 @@ app.post("/api/documents/import", authenticateDocumentImport, receiveImportedDoc
 
     const pool = await ensureDb();
     const currentUser = request.importUser;
-    const imported = await parseImportedDocument(request.file);
+    let imported = await parseImportedDocument(request.file);
+    const initialImported = stripTransientPageImages(imported);
     const title = request.file.originalname.replace(/\.(docx?|pdf)$/i, "").trim() || "导入文档";
     const [result] = await pool.query(
       `INSERT INTO documents
         (user_id, title, document_type, tone, outline_json, content, page_layout_json, status, word_count, last_opened_at)
        VALUES (?, ?, ?, '正式', ?, ?, ?, 'draft', ?, NOW())`,
-      [currentUser.userId, title, imported.documentType, jsonString(imported.outline), imported.content, jsonString(imported.pageLayout), countWords(imported.content)]
+      [currentUser.userId, title, imported.documentType, jsonString(imported.outline), initialImported.content, jsonString(initialImported.pageLayout), countWords(initialImported.content)]
     );
+
+    if (pageLayoutImageSources(imported.sectionLayouts || [imported.pageLayout]).some((src) => src.startsWith("data:"))) {
+      if (minioClient) {
+        try {
+          imported = await persistImportedPageImages(pool, await ensureStorage(), currentUser.userId, result.insertId, imported);
+          await pool.query(
+            "UPDATE documents SET content = ?, page_layout_json = ?, word_count = ? WHERE id = ? AND user_id = ?",
+            [imported.content, jsonString(imported.pageLayout), countWords(imported.content), result.insertId, currentUser.userId]
+          );
+        } catch (storageError) {
+          console.error("Imported page image storage failed", storageError);
+          imported = stripTransientPageImages(imported);
+          await pool.query(
+            "UPDATE documents SET content = ?, page_layout_json = ?, word_count = ? WHERE id = ? AND user_id = ?",
+            [imported.content, jsonString(imported.pageLayout), countWords(imported.content), result.insertId, currentUser.userId]
+          );
+          imported.warnings = [...(imported.warnings || []), "页眉页脚图片归档失败，本次导入已保留文字，请检查文件存储服务后重新导入。"];
+        }
+      } else {
+        imported = stripTransientPageImages(imported);
+        await pool.query(
+          "UPDATE documents SET content = ?, page_layout_json = ?, word_count = ? WHERE id = ? AND user_id = ?",
+          [imported.content, jsonString(imported.pageLayout), countWords(imported.content), result.insertId, currentUser.userId]
+        );
+        imported.warnings = [...(imported.warnings || []), "未配置文件存储服务，页眉页脚图片未入库；请配置后重新导入。"];
+      }
+    }
 
     let sourceStored = false;
     if (minioClient) {
@@ -2863,6 +3128,53 @@ app.post("/api/documents/import", authenticateDocumentImport, receiveImportedDoc
     response.status(201).json({ document: toDocument(row), sourceStored, warnings: imported.warnings || [] });
   } catch (error) {
     sendError(response, error, error?.httpStatus || 500, "文档导入失败，请检查文件格式后重试。");
+  }
+});
+
+app.post("/api/documents/:id/images", authenticateDocumentImport, receivePageImage, async (request, response) => {
+  try {
+    if (!request.file || !supportedPageImageMimeTypes.has(request.file.mimetype)) throw createPublicError("请选择 PNG、JPEG、GIF 或 WebP 图片。", 400);
+    const pool = await ensureDb();
+    const storage = await ensureStorage();
+    const currentUser = request.importUser;
+    const [[documentRow]] = await pool.query(
+      "SELECT id FROM documents WHERE id = ? AND user_id = ? AND status <> 'deleted'",
+      [request.params.id, currentUser.userId]
+    );
+    if (!documentRow) throw createPublicError("文档不存在或已被删除。", 404);
+    const extension = pageImageExtension(request.file.mimetype);
+    const fileName = `${safeFileName(request.file.originalname.replace(/\.[^.]+$/, "")) || "page-image"}.${extension}`;
+    const objectKey = `documents/${documentRow.id}/images/${crypto.randomUUID()}.${extension}`;
+    await storage.putObject(storageBucket, objectKey, request.file.buffer, request.file.size, { "Content-Type": request.file.mimetype });
+    let result;
+    try {
+      [result] = await pool.query(
+        `INSERT INTO files
+          (user_id, document_id, original_name, file_name, file_type, mime_type, file_size, bucket, object_key, purpose)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'image')`,
+        [currentUser.userId, documentRow.id, request.file.originalname, fileName, extension, request.file.mimetype, request.file.size, storageBucket, objectKey]
+      );
+    } catch (error) {
+      await storage.removeObject(storageBucket, objectKey).catch(() => undefined);
+      throw error;
+    }
+    let dimensions = {};
+    try { dimensions = imageSize(request.file.buffer) || {}; } catch { dimensions = {}; }
+    response.status(201).json({
+      image: {
+        id: `file-${result.insertId}`,
+        fileId: result.insertId,
+        src: `/api/files/${result.insertId}/content`,
+        alt: request.file.originalname.slice(0, 200),
+        widthPx: Number(dimensions.width) || 120,
+        heightPx: Number(dimensions.height) || 60,
+        paragraphIndex: 0,
+        placement: "afterText",
+        alignment: "center"
+      }
+    });
+  } catch (error) {
+    sendError(response, error, error?.httpStatus || 500, "页面图片上传失败，请稍后重试。");
   }
 });
 
@@ -3062,7 +3374,8 @@ app.post("/api/documents/:id/export-docx", async (request, response) => {
     // 中文注解：导出只读取文档已保存的模板绑定，防止浏览器状态与服务端版式不一致。
     const templateStyle = await readTemplateStyle(pool, storage, documentRow.template_id);
     const pageLayout = normalizePageLayout(parseJson(documentRow.page_layout_json, defaultPageLayout));
-    const buffer = await createDocxBuffer({ title: documentRow.title, content: exportContent, templateStyle, pageLayout });
+    const hydrated = await hydratePageImagesForExport(pool, storage, currentUser.userId, pageLayout, exportContent);
+    const buffer = await createDocxBuffer({ title: documentRow.title, content: hydrated.content, templateStyle, pageLayout: hydrated.pageLayout });
     const exportedAt = new Date();
     const baseName = safeFileName(documentRow.title);
     const fileName = `${baseName}-${exportedAt.getTime()}.docx`;
@@ -3128,6 +3441,30 @@ app.get("/api/files/:id/download", async (request, response) => {
     objectStream.pipe(response);
   } catch (error) {
     sendError(response, error, 500, "下载文件失败，请稍后重试。");
+  }
+});
+
+app.get("/api/files/:id/content", async (request, response) => {
+  try {
+    const pool = await ensureDb();
+    const storage = await ensureStorage();
+    const currentUser = await getCurrentUser(request);
+    const [[fileRow]] = await pool.query(
+      "SELECT * FROM files WHERE id = ? AND user_id = ? AND purpose = 'image'",
+      [request.params.id, currentUser.userId]
+    );
+    if (!fileRow) {
+      response.status(404).json({ message: "图片不存在或已被删除。" });
+      return;
+    }
+    const objectStream = await storage.getObject(fileRow.bucket, fileRow.object_key);
+    response.setHeader("Content-Type", fileRow.mime_type || "application/octet-stream");
+    if (fileRow.file_size) response.setHeader("Content-Length", String(fileRow.file_size));
+    response.setHeader("Cache-Control", "private, max-age=3600");
+    response.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(fileRow.original_name)}`);
+    objectStream.pipe(response);
+  } catch (error) {
+    sendError(response, error, 500, "读取图片失败，请稍后重试。");
   }
 });
 

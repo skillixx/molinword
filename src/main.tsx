@@ -43,6 +43,7 @@ import {
   Sparkles,
   Strikethrough,
   Table as TableIcon,
+  Trash2,
   Type,
   Underline as UnderlineIcon,
   Undo2,
@@ -68,11 +69,24 @@ type DocumentPageTextStyle = {
   bold: boolean;
   italic: boolean;
 };
+type DocumentPageImage = {
+  id: string;
+  fileId: number | null;
+  src: string;
+  alt: string;
+  widthPx: number;
+  heightPx: number;
+  paragraphIndex: number;
+  placement: "beforeText" | "afterText";
+  alignment: "left" | "center" | "right";
+};
 type DocumentPageVariant = {
   headerText: string;
   headerStyle: DocumentPageTextStyle;
+  headerImages: DocumentPageImage[];
   footerText: string;
   footerStyle: DocumentPageTextStyle;
+  footerImages: DocumentPageImage[];
   headerPageNumberTemplate: string;
   footerPageNumberTemplate: string;
   headerPageNumberSeparate: boolean;
@@ -99,8 +113,10 @@ const defaultDocumentPageNumberTemplate = "第 {PAGE} 页 / 共 {NUMPAGES} 页";
 const defaultDocumentPageVariant: DocumentPageVariant = {
   headerText: "",
   headerStyle: { ...defaultDocumentPageTextStyle },
+  headerImages: [],
   footerText: "",
   footerStyle: { ...defaultDocumentPageTextStyle },
+  footerImages: [],
   headerPageNumberTemplate: "",
   footerPageNumberTemplate: "",
   headerPageNumberSeparate: false,
@@ -144,6 +160,29 @@ function normalizeDocumentPageText(value: unknown) {
     .slice(0, 2000);
 }
 
+function normalizeDocumentPageImages(value: unknown): DocumentPageImage[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 10).map((item, index) => {
+    const source = (item && typeof item === "object" ? item : {}) as Partial<DocumentPageImage>;
+    const rawWidth = Number(source.widthPx);
+    const rawHeight = Number(source.heightPx);
+    const width = Number.isFinite(rawWidth) ? Math.max(1, rawWidth) : 120;
+    const height = Number.isFinite(rawHeight) ? Math.max(1, rawHeight) : 60;
+    const scale = Math.min(1, 602 / width, 400 / height);
+    return {
+      id: String(source.id || (source.fileId ? `file-${source.fileId}` : `page-image-${index + 1}`)),
+      fileId: Number.isSafeInteger(Number(source.fileId)) && Number(source.fileId) > 0 ? Number(source.fileId) : null,
+      src: String(source.src || ""),
+      alt: String(source.alt || "页眉页脚图片").slice(0, 200),
+      widthPx: Math.round(width * scale * 100) / 100,
+      heightPx: Math.round(height * scale * 100) / 100,
+      paragraphIndex: Math.max(0, Math.min(Math.round(Number(source.paragraphIndex) || 0), 49)),
+      placement: source.placement === "beforeText" ? ("beforeText" as const) : ("afterText" as const),
+      alignment: ["left", "center", "right"].includes(String(source.alignment)) ? source.alignment! : "center"
+    };
+  }).filter((item) => Boolean(item.src));
+}
+
 function normalizeDocumentPageVariant(value: Partial<DocumentPageVariant> | null | undefined, fallback = defaultDocumentPageVariant): DocumentPageVariant {
   const source = value || {};
   const hasHeaderTemplate = Object.prototype.hasOwnProperty.call(source, "headerPageNumberTemplate");
@@ -158,8 +197,10 @@ function normalizeDocumentPageVariant(value: Partial<DocumentPageVariant> | null
   return {
     headerText: normalizeDocumentPageText(value?.headerText ?? fallback.headerText),
     headerStyle: normalizeDocumentPageTextStyle(value?.headerStyle, fallback.headerStyle),
+    headerImages: normalizeDocumentPageImages(value?.headerImages === undefined ? fallback.headerImages : value.headerImages),
     footerText: normalizeDocumentPageText(value?.footerText ?? fallback.footerText),
     footerStyle: normalizeDocumentPageTextStyle(value?.footerStyle, fallback.footerStyle),
+    footerImages: normalizeDocumentPageImages(value?.footerImages === undefined ? fallback.footerImages : value.footerImages),
     headerPageNumberTemplate,
     footerPageNumberTemplate,
     headerPageNumberSeparate: Boolean(headerPageNumberTemplate) && (value?.headerPageNumberSeparate === undefined ? fallback.headerPageNumberSeparate : Boolean(value.headerPageNumberSeparate)),
@@ -509,10 +550,72 @@ function PageTextFormatControls(props: {
   </div>;
 }
 
+function PageImageSettings(props: {
+  label: string;
+  images: DocumentPageImage[];
+  text: string;
+  onChange: (images: DocumentPageImage[]) => void;
+  uploadPageImage: (file: File) => Promise<DocumentPageImage>;
+}) {
+  const updateImage = (id: string, patch: Partial<DocumentPageImage>) => props.onChange(props.images.map((image) => image.id === id ? { ...image, ...patch } : image));
+  const upload = async (file: File | null) => {
+    if (!file) return;
+    const image = await props.uploadPageImage(file);
+    props.onChange([...props.images, { ...image, paragraphIndex: Math.max(0, props.text.split("\n").length - 1) }]);
+  };
+  return <div className="page-image-settings">
+    <div className="page-image-heading"><span>{props.label}图片</span><label className="page-image-upload" title={`上传${props.label}图片`}><ImageIcon size={14} />添加<input className="hidden-file-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={(event) => { void upload(event.target.files?.[0] || null); event.currentTarget.value = ""; }} /></label></div>
+    {props.images.map((image, index) => <div className="page-image-item" key={image.id}>
+      <img src={image.src} alt={image.alt} />
+      <div className="page-image-fields">
+        <label>宽<input aria-label={`${props.label}图片${index + 1}宽度`} type="number" min="1" max="602" value={image.widthPx} onChange={(event) => updateImage(image.id, { widthPx: Math.max(1, Math.min(Number(event.target.value), 602)) })} /></label>
+        <label>高<input aria-label={`${props.label}图片${index + 1}高度`} type="number" min="1" max="400" value={image.heightPx} onChange={(event) => updateImage(image.id, { heightPx: Math.max(1, Math.min(Number(event.target.value), 400)) })} /></label>
+        <label>段落<input aria-label={`${props.label}图片${index + 1}段落`} type="number" min="1" max="50" value={image.paragraphIndex + 1} onChange={(event) => updateImage(image.id, { paragraphIndex: Math.max(0, Math.min(Math.round(Number(event.target.value)) - 1, 49)) })} /></label>
+        <select aria-label={`${props.label}图片${index + 1}对齐`} value={image.alignment} onChange={(event) => updateImage(image.id, { alignment: event.target.value as DocumentPageImage["alignment"] })}><option value="left">左</option><option value="center">中</option><option value="right">右</option></select>
+        <select aria-label={`${props.label}图片${index + 1}位置`} value={image.placement} onChange={(event) => updateImage(image.id, { placement: event.target.value as DocumentPageImage["placement"] })}><option value="beforeText">文字前</option><option value="afterText">文字后</option></select>
+      </div>
+      <button type="button" className="page-image-delete" title={`删除${props.label}图片`} aria-label={`删除${props.label}图片${index + 1}`} onClick={() => props.onChange(props.images.filter((item) => item.id !== image.id))}><Trash2 size={14} /></button>
+    </div>)}
+  </div>;
+}
+
+function PagePartContent(props: {
+  text: string;
+  images: DocumentPageImage[];
+  pageNumberTemplate: string;
+  pageNumberSeparate: boolean;
+  pageNumber: number;
+  pageCount: number;
+  pageNumberFormat: DocumentPageLayout["pageNumberFormat"];
+}) {
+  const lines = props.text ? props.text.split("\n") : [];
+  const lastImageParagraph = props.images.reduce((maximum, image) => Math.max(maximum, image.paragraphIndex), -1);
+  const paragraphCount = Math.max(lines.length, lastImageParagraph + 1);
+  const rows = Array.from({ length: paragraphCount }, (_, paragraphIndex) => ({
+    text: lines[paragraphIndex] || "",
+    images: props.images.filter((image) => image.paragraphIndex === paragraphIndex)
+  }));
+  const pageNumberText = pageNumberTemplateText(props.pageNumberTemplate, props.pageNumber, props.pageCount, props.pageNumberFormat);
+  const renderImage = (image: DocumentPageImage) => <img key={image.id} src={image.src} alt={image.alt} style={{ width: `${image.widthPx}px`, height: `${image.heightPx}px` }} />;
+  return <>
+    {rows.map((row, index) => {
+      const before = row.images.filter((image) => image.placement === "beforeText");
+      const after = row.images.filter((image) => image.placement !== "beforeText");
+      const alignment = row.images[0]?.alignment;
+      const appendPageNumber = props.pageNumberTemplate && !props.pageNumberSeparate && index === rows.length - 1;
+      return <div className="page-part-line" style={alignment ? { justifyContent: alignment === "left" ? "flex-start" : alignment === "right" ? "flex-end" : "center" } : undefined} key={index}>
+        {before.map(renderImage)}{row.text ? <span>{row.text}</span> : null}{appendPageNumber && row.text ? <span aria-hidden="true">·</span> : null}{appendPageNumber ? <span>{pageNumberText}</span> : null}{after.map(renderImage)}
+      </div>;
+    })}
+    {props.pageNumberTemplate && (props.pageNumberSeparate || !rows.length) ? <div className="page-part-line"><span>{pageNumberText}</span></div> : null}
+  </>;
+}
+
 function PageVariantSettings(props: {
   title: string;
   variant: DocumentPageVariant;
   onChange: (variant: DocumentPageVariant) => void;
+  uploadPageImage: (file: File) => Promise<DocumentPageImage>;
 }) {
   const update = (patch: Partial<DocumentPageVariant>) => props.onChange(normalizeDocumentPageVariant({ ...props.variant, ...patch }, props.variant));
   const ariaPrefix = props.title === "默认页" ? "默认" : props.title;
@@ -521,11 +624,13 @@ function PageVariantSettings(props: {
     <strong>{props.title}</strong>
     <label>页眉<textarea aria-label={`${ariaPrefix}页眉文字`} maxLength={2000} rows={2} value={props.variant.headerText} onChange={(event) => props.onChange({ ...props.variant, headerText: event.target.value.slice(0, 2000) })} /></label>
     <PageTextFormatControls label={`${ariaPrefix}页眉`} value={props.variant.headerStyle} onChange={(headerStyle) => update({ headerStyle })} />
+    <PageImageSettings label={`${ariaPrefix}页眉`} text={props.variant.headerText} images={props.variant.headerImages} onChange={(headerImages) => update({ headerImages })} uploadPageImage={props.uploadPageImage} />
     <label className="page-number-toggle"><input type="checkbox" aria-label={`${pageNumberPrefix}页眉页码`} checked={Boolean(props.variant.headerPageNumberTemplate)} onChange={(event) => update({ headerPageNumberTemplate: event.target.checked ? defaultDocumentPageNumberTemplate : "" })} />页眉页码</label>
     {props.variant.headerPageNumberTemplate ? <label>页眉页码格式<input type="text" aria-label={`${pageNumberPrefix}页眉页码格式`} maxLength={500} value={props.variant.headerPageNumberTemplate} onChange={(event) => update({ headerPageNumberTemplate: event.target.value })} /></label> : null}
     {props.variant.headerPageNumberTemplate && props.variant.headerText ? <label className="page-number-toggle"><input type="checkbox" aria-label={`${pageNumberPrefix}页眉页码独立一行`} checked={props.variant.headerPageNumberSeparate} onChange={(event) => update({ headerPageNumberSeparate: event.target.checked })} />页码独立一行</label> : null}
     <label>页脚<textarea aria-label={`${ariaPrefix}页脚文字`} maxLength={2000} rows={2} value={props.variant.footerText} onChange={(event) => props.onChange({ ...props.variant, footerText: event.target.value.slice(0, 2000) })} /></label>
     <PageTextFormatControls label={`${ariaPrefix}页脚`} value={props.variant.footerStyle} onChange={(footerStyle) => update({ footerStyle })} />
+    <PageImageSettings label={`${ariaPrefix}页脚`} text={props.variant.footerText} images={props.variant.footerImages} onChange={(footerImages) => update({ footerImages })} uploadPageImage={props.uploadPageImage} />
     <label className="page-number-toggle"><input type="checkbox" aria-label={`${pageNumberPrefix}页脚页码`} checked={Boolean(props.variant.footerPageNumberTemplate)} onChange={(event) => update({ footerPageNumberTemplate: event.target.checked ? defaultDocumentPageNumberTemplate : "" })} />页脚页码</label>
     {props.variant.footerPageNumberTemplate ? <label>页脚页码格式<input type="text" aria-label={`${pageNumberPrefix}页脚页码格式`} maxLength={500} value={props.variant.footerPageNumberTemplate} onChange={(event) => update({ footerPageNumberTemplate: event.target.value })} /></label> : null}
     {props.variant.footerPageNumberTemplate && props.variant.footerText ? <label className="page-number-toggle"><input type="checkbox" aria-label={`${pageNumberPrefix}页脚页码独立一行`} checked={props.variant.footerPageNumberSeparate} onChange={(event) => update({ footerPageNumberSeparate: event.target.checked })} />页码独立一行</label> : null}
@@ -1329,6 +1434,22 @@ function App() {
     [content, currentDocumentId, currentTitle, loadRecentDocuments, outline, pageLayout, selectedTemplate, selectedType, tone]
   );
 
+  const uploadPageImage = React.useCallback(async (file: File) => {
+    if (!currentDocumentId) throw new Error("请先创建或打开文档，再添加页眉页脚图片。");
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await fetch(`/api/documents/${currentDocumentId}/images`, { method: "POST", body: formData });
+      const result = await readApiJson(response);
+      setAiError("");
+      return result.image as DocumentPageImage;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "页面图片上传失败";
+      setAiError(message);
+      throw error;
+    }
+  }, [currentDocumentId]);
+
   React.useEffect(() => {
     if (!currentDocumentId || activePanel !== "editor") return;
     setSaveStatus("自动保存中");
@@ -1611,6 +1732,7 @@ function App() {
           setOutline={setOutline}
           generateBody={generateBody}
           editContent={editContent}
+          uploadPageImage={uploadPageImage}
           saveDocument={(latestContent) => saveDocument({ content: latestContent, saveVersion: true, versionNote: "手动保存" })}
           exportWord={exportWord}
           currentTitle={currentTitle}
@@ -1809,6 +1931,7 @@ function Editor(props: {
   setOutline: (value: OutlineItem[]) => void;
   generateBody: () => void;
   editContent: (action: AiAction, source: string) => Promise<string>;
+  uploadPageImage: (file: File) => Promise<DocumentPageImage>;
   saveDocument: (latestContent?: string) => Promise<ApiDocument | null>;
   exportWord: (latestContent?: string) => void;
   currentTitle: string;
@@ -2436,15 +2559,15 @@ function Editor(props: {
                   </div>
                 </div>
                 <div className="page-layout-section">
-                  <PageVariantSettings title="默认页" variant={activeSectionLayout} onChange={(variant) => updateCurrentSectionLayout((current) => ({ ...current, ...variant }))} />
+                  <PageVariantSettings title="默认页" variant={activeSectionLayout} uploadPageImage={props.uploadPageImage} onChange={(variant) => updateCurrentSectionLayout((current) => ({ ...current, ...variant }))} />
                 </div>
                 <label className="page-number-toggle page-layout-switch"><input type="checkbox" checked={activeSectionLayout.firstPageDifferent} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, firstPageDifferent: event.target.checked }))} />首页不同</label>
                 {activeSectionLayout.firstPageDifferent ? <div className="page-layout-section page-layout-variant">
-                  <PageVariantSettings title="首页" variant={activeSectionLayout.firstPage} onChange={(firstPage) => updateCurrentSectionLayout((current) => ({ ...current, firstPage }))} />
+                  <PageVariantSettings title="首页" variant={activeSectionLayout.firstPage} uploadPageImage={props.uploadPageImage} onChange={(firstPage) => updateCurrentSectionLayout((current) => ({ ...current, firstPage }))} />
                 </div> : null}
                 <label className="page-number-toggle page-layout-switch"><input type="checkbox" checked={activeSectionLayout.oddEvenDifferent} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, oddEvenDifferent: event.target.checked }))} />奇偶页不同</label>
                 {activeSectionLayout.oddEvenDifferent ? <div className="page-layout-section page-layout-variant">
-                  <PageVariantSettings title="偶数页" variant={activeSectionLayout.evenPage} onChange={(evenPage) => updateCurrentSectionLayout((current) => ({ ...current, evenPage }))} />
+                  <PageVariantSettings title="偶数页" variant={activeSectionLayout.evenPage} uploadPageImage={props.uploadPageImage} onChange={(evenPage) => updateCurrentSectionLayout((current) => ({ ...current, evenPage }))} />
                 </div> : null}
               </div>
             </details>
@@ -2523,18 +2646,14 @@ function Editor(props: {
                 {previewPages.map((page, index) => {
                   const pageVariant = pageVariantForPage(page.layout, index, page.sectionPageIndex);
                   return <article className="page-sheet" data-section-index={page.sectionIndex} style={pageGeometryStyle(page.layout)} key={index}>
-                    {pageVariant.headerText || pageVariant.headerPageNumberTemplate ? <div className={`page-header${pageVariant.headerText.includes("\n") || (pageVariant.headerText && pageVariant.headerPageNumberTemplate && pageVariant.headerPageNumberSeparate) ? " multiline" : ""}${pageVariant.headerText && pageVariant.headerPageNumberTemplate && pageVariant.headerPageNumberSeparate ? " page-number-separate" : ""}`} style={pageTextCssStyle(pageVariant.headerStyle)}>
-                      {pageVariant.headerText ? <span>{pageVariant.headerText}</span> : null}
-                      {pageVariant.headerText && pageVariant.headerPageNumberTemplate && !pageVariant.headerText.includes("\n") && !pageVariant.headerPageNumberSeparate ? <span aria-hidden="true">·</span> : null}
-                      {pageVariant.headerPageNumberTemplate ? <span>{pageNumberTemplateText(pageVariant.headerPageNumberTemplate, previewDisplayPageNumbers[index], previewPages.length, page.layout.pageNumberFormat)}</span> : null}
+                    {pageVariant.headerText || pageVariant.headerImages.length || pageVariant.headerPageNumberTemplate ? <div className="page-header multiline" style={pageTextCssStyle(pageVariant.headerStyle)}>
+                      <PagePartContent text={pageVariant.headerText} images={pageVariant.headerImages} pageNumberTemplate={pageVariant.headerPageNumberTemplate} pageNumberSeparate={pageVariant.headerPageNumberSeparate} pageNumber={previewDisplayPageNumbers[index]} pageCount={previewPages.length} pageNumberFormat={page.layout.pageNumberFormat} />
                     </div> : null}
                     <div className="page-body">
                       {page.blocks.map((html, blockIndex) => <div className="page-block" key={`${index}-${blockIndex}`} dangerouslySetInnerHTML={{ __html: html }} />)}
                     </div>
-                    {pageVariant.footerText || pageVariant.footerPageNumberTemplate ? <div className={`page-footer${pageVariant.footerText.includes("\n") || (pageVariant.footerText && pageVariant.footerPageNumberTemplate && pageVariant.footerPageNumberSeparate) ? " multiline" : ""}${pageVariant.footerText && pageVariant.footerPageNumberTemplate && pageVariant.footerPageNumberSeparate ? " page-number-separate" : ""}`} style={pageTextCssStyle(pageVariant.footerStyle)}>
-                      {pageVariant.footerText ? <span>{pageVariant.footerText}</span> : null}
-                      {pageVariant.footerText && pageVariant.footerPageNumberTemplate && !pageVariant.footerText.includes("\n") && !pageVariant.footerPageNumberSeparate ? <span aria-hidden="true">·</span> : null}
-                      {pageVariant.footerPageNumberTemplate ? <span>{pageNumberTemplateText(pageVariant.footerPageNumberTemplate, previewDisplayPageNumbers[index], previewPages.length, page.layout.pageNumberFormat)}</span> : null}
+                    {pageVariant.footerText || pageVariant.footerImages.length || pageVariant.footerPageNumberTemplate ? <div className="page-footer multiline" style={pageTextCssStyle(pageVariant.footerStyle)}>
+                      <PagePartContent text={pageVariant.footerText} images={pageVariant.footerImages} pageNumberTemplate={pageVariant.footerPageNumberTemplate} pageNumberSeparate={pageVariant.footerPageNumberSeparate} pageNumber={previewDisplayPageNumbers[index]} pageCount={previewPages.length} pageNumberFormat={page.layout.pageNumberFormat} />
                     </div> : null}
                   </article>;
                 })}

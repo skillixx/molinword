@@ -4,7 +4,7 @@ import { createDocxBuffer, parseImportedDocument } from "../server/index.js";
 
 const tinyPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lT3g6wAAAABJRU5ErkJggg==";
 const defaultPageTextStyle = { alignment: "center", fontFamily: "Microsoft YaHei", fontSizePt: 9, color: "#6B7280", bold: false, italic: false };
-const emptyPageVariant = { headerText: "", headerStyle: defaultPageTextStyle, footerText: "", footerStyle: defaultPageTextStyle, headerPageNumberTemplate: "", footerPageNumberTemplate: "", headerPageNumberSeparate: false, footerPageNumberSeparate: false, pageNumberEnabled: false, pageNumberPosition: "footer" };
+const emptyPageVariant = { headerText: "", headerStyle: defaultPageTextStyle, headerImages: [], footerText: "", footerStyle: defaultPageTextStyle, footerImages: [], headerPageNumberTemplate: "", footerPageNumberTemplate: "", headerPageNumberSeparate: false, footerPageNumberSeparate: false, pageNumberEnabled: false, pageNumberPosition: "footer" };
 
 async function buildFormattedDocxFixture() {
   const zip = new JSZip();
@@ -308,6 +308,21 @@ const multiParagraphRoundTripImported = await parseImportedDocument({ originalna
 assert.equal(multiParagraphRoundTripImported.pageLayout.headerText, multiParagraphHeaderImported.pageLayout.headerText);
 assert.deepEqual(multiParagraphRoundTripImported.pageLayout.headerStyle, multiParagraphHeaderImported.pageLayout.headerStyle);
 
+const headerImageZip = await JSZip.loadAsync(buffer);
+headerImageZip.folder("word").folder("_rels").file("header1.xml.rels", `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdLogo" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/header-logo.png"/></Relationships>`);
+headerImageZip.folder("word").folder("media").file("header-logo.png", tinyPngBase64, { base64: true });
+headerImageZip.file("word/header1.xml", `<?xml version="1.0" encoding="UTF-8"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:drawing><wp:inline><wp:extent cx="1143000" cy="571500"/><wp:docPr id="1" name="Header Logo" descr="企业标识"/><a:graphic><a:graphicData><a:blip r:embed="rIdLogo"/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r><w:r><w:t>项目页眉</w:t></w:r></w:p></w:hdr>`);
+const headerImageBuffer = await headerImageZip.generateAsync({ type: "nodebuffer" });
+const headerImageImported = await parseImportedDocument({ originalname: "header-image.docx", buffer: headerImageBuffer, mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: headerImageBuffer.length });
+assert.equal(headerImageImported.pageLayout.headerImages.length, 1);
+assert.match(headerImageImported.pageLayout.headerImages[0].src, /^data:image\/png;base64,/);
+assert.deepEqual({ widthPx: headerImageImported.pageLayout.headerImages[0].widthPx, heightPx: headerImageImported.pageLayout.headerImages[0].heightPx, paragraphIndex: headerImageImported.pageLayout.headerImages[0].paragraphIndex, placement: headerImageImported.pageLayout.headerImages[0].placement, alignment: headerImageImported.pageLayout.headerImages[0].alignment }, { widthPx: 120, heightPx: 60, paragraphIndex: 0, placement: "beforeText", alignment: "left" });
+assert.doesNotMatch(headerImageImported.warnings.join(" "), /图片.*暂未完整恢复/);
+const headerImageRoundTripBuffer = await createDocxBuffer({ title: "Header image round trip", content: "<p>Body</p>", pageLayout: headerImageImported.pageLayout });
+const headerImageRoundTrip = await parseImportedDocument({ originalname: "header-image-round-trip.docx", buffer: headerImageRoundTripBuffer, mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: headerImageRoundTripBuffer.length });
+assert.equal(headerImageRoundTrip.pageLayout.headerImages.length, 1);
+assert.deepEqual({ widthPx: headerImageRoundTrip.pageLayout.headerImages[0].widthPx, heightPx: headerImageRoundTrip.pageLayout.headerImages[0].heightPx, placement: headerImageRoundTrip.pageLayout.headerImages[0].placement }, { widthPx: 120, heightPx: 60, placement: "beforeText" });
+
 const complexLayoutZip = await JSZip.loadAsync(buffer);
 const complexHeaderXml = await complexLayoutZip.file("word/header1.xml")?.async("string") || "";
 complexLayoutZip.file("word/header1.xml", complexHeaderXml.replace("<w:b/>", "<w:b/><w:u w:val=\"single\"/>"));
@@ -366,8 +381,10 @@ assert.match(imported.content, /<td><p[^>]*>Import Cell 1<\/p><ol><li>Table orde
 assert.deepEqual(imported.pageLayout, {
   headerText: "导入页眉",
   headerStyle: { alignment: "right", fontFamily: "Microsoft YaHei", fontSizePt: 12, color: "#1F4E79", bold: true, italic: true },
+  headerImages: [],
   footerText: "导入页脚",
   footerStyle: { alignment: "left", fontFamily: "SimSun", fontSizePt: 10.5, color: "#C00000", bold: false, italic: false },
+  footerImages: [],
   headerPageNumberTemplate: "",
   footerPageNumberTemplate: "第 {PAGE} 页 / 共 {NUMPAGES} 页",
   headerPageNumberSeparate: false,
@@ -420,8 +437,10 @@ assert.match(atLeastRoundTripXml, /<w:spacing[^>]+w:lineRule="atLeast"/);
 const variantPageLayout = {
   headerText: "奇数页页眉",
   headerStyle: defaultPageTextStyle,
+  headerImages: [],
   footerText: "奇数页页脚",
   footerStyle: defaultPageTextStyle,
+  footerImages: [],
   headerPageNumberTemplate: "",
   footerPageNumberTemplate: "第 {PAGE} 页 / 共 {NUMPAGES} 页",
   headerPageNumberSeparate: false,
