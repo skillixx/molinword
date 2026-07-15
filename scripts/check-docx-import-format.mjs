@@ -132,6 +132,11 @@ async function buildFormattedDocxFixture() {
       <w:r><w:t>Tab project</w:t><w:tab/><w:t>Tab amount</w:t><w:tab/><w:t>100.00</w:t></w:r>
     </w:p>
     <w:tbl>
+      <w:tblPr><w:tblW w:type="dxa" w:w="6000"/><w:tblLayout w:type="fixed"/></w:tblPr>
+      <w:tblGrid><w:gridCol w:w="1800"/><w:gridCol w:w="4200"/></w:tblGrid>
+      <w:tr><w:tc><w:tcPr><w:tcW w:type="dxa" w:w="1800"/></w:tcPr><w:p><w:r><w:t>Geometry A</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:tcW w:type="dxa" w:w="4200"/></w:tcPr><w:p><w:r><w:t>Geometry B</w:t></w:r></w:p></w:tc></w:tr>
+    </w:tbl>
+    <w:tbl>
       <w:tr>
         <w:tc><w:p><w:r><w:t>Header A</w:t></w:r></w:p></w:tc>
         <w:tc><w:p><w:r><w:t>Header B</w:t></w:r></w:p></w:tc>
@@ -393,7 +398,15 @@ assert.match(importedTabParagraph, /data-tab-stops="[^\"]*1440[^\"]*5760[^\"]*"/
 assert.equal((importedTabParagraph.match(/data-docx-tab="true"/g) || []).length, 2);
 assert.match(importedTabParagraph, /data-tab-position="1440"[^>]+data-tab-alignment="left"/);
 assert.match(importedTabParagraph, /data-tab-position="5760"[^>]+data-tab-alignment="right"/);
-assert.match(imported.content, /<table>/);
+const importedGeometryTable = (imported.content.match(/<table(?:\s[^>]*)?>[\s\S]*?<\/table>/g) || []).find((table) => table.includes("Geometry A")) || "";
+assert.match(importedGeometryTable, /data-table-width-type="dxa"/);
+assert.match(importedGeometryTable, /data-table-width-value="6000"/);
+assert.match(importedGeometryTable, /data-table-grid-width="6000"/);
+assert.match(importedGeometryTable, /data-table-layout="fixed"/);
+assert.match(importedGeometryTable, /style="width:\s*400px;\s*table-layout:\s*fixed"/);
+assert.match(importedGeometryTable, /colwidth="120"/);
+assert.match(importedGeometryTable, /colwidth="280"/);
+assert.match(imported.content, /<table(?:\s|>)/);
 assert.match(imported.content, /<th>/);
 assert.match(imported.content, /<td>/);
 assert.match(imported.content, /Import Cell 1/);
@@ -465,6 +478,12 @@ assert.match(widowDisabledRoundTripXml, /<w:widowControl w:val="false"\/>/);
 const tabRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Tab project")) || "";
 assert.match(tabRoundTripXml, /<w:tabs><w:tab w:val="left" w:pos="1440"\/><w:tab w:val="right" w:pos="5760"\/><\/w:tabs>/);
 assert.equal((tabRoundTripXml.match(/<w:tab\/>/g) || []).length, 2);
+const geometryRoundTripXml = (roundTripXml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/g) || []).find((table) => table.includes("Geometry A")) || "";
+assert.match(geometryRoundTripXml, /<w:tblW w:type="dxa" w:w="6000"\/>/);
+assert.match(geometryRoundTripXml, /<w:tblLayout w:type="fixed"\/>/);
+assert.match(geometryRoundTripXml, /<w:tblGrid><w:gridCol w:w="1800"\/><w:gridCol w:w="4200"\/><\/w:tblGrid>/);
+assert.match(geometryRoundTripXml, /<w:tcW w:type="dxa" w:w="1800"\/>/);
+assert.match(geometryRoundTripXml, /<w:tcW w:type="dxa" w:w="4200"\/>/);
 const roundTripImported = await parseImportedDocument({
   originalname: "round-trip-format.docx",
   buffer: roundTripBuffer,
@@ -483,6 +502,10 @@ const roundTripImportedTabParagraph = (roundTripImported.content.match(/<p(?:\s[
 assert.equal((roundTripImportedTabParagraph.match(/data-docx-tab="true"/g) || []).length, 2);
 assert.match(roundTripImportedTabParagraph, /data-tab-position="1440"[^>]+data-tab-alignment="left"/);
 assert.match(roundTripImportedTabParagraph, /data-tab-position="5760"[^>]+data-tab-alignment="right"/);
+const roundTripImportedGeometryTable = (roundTripImported.content.match(/<table(?:\s[^>]*)?>[\s\S]*?<\/table>/g) || []).find((table) => table.includes("Geometry A")) || "";
+assert.match(roundTripImportedGeometryTable, /style="width:\s*400px;\s*table-layout:\s*fixed"/);
+assert.match(roundTripImportedGeometryTable, /colwidth="120"/);
+assert.match(roundTripImportedGeometryTable, /colwidth="280"/);
 assert.deepEqual(roundTripImported.pageLayout, imported.pageLayout);
 const atLeastRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || [])
   .find((paragraph) => paragraph.includes(">At least spacing</w:t>")) || "";

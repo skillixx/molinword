@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import express from "express";
-import { AlignmentType, Document, Footer, Header, HeadingLevel, ImageRun, LevelFormat, LineRuleType, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, Tab, Table, TableCell, TableRow, TextRun, WidthType } from "docx";
+import { AlignmentType, Document, Footer, Header, HeadingLevel, ImageRun, LevelFormat, LineRuleType, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, Tab, Table, TableCell, TableLayoutType, TableRow, TextRun, WidthType } from "docx";
 import { imageSize } from "image-size";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
@@ -347,8 +347,9 @@ function sanitizeImportedHtml(value = "") {
       li: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops"],
       span: ["style", "class", "data-docx-tab", "data-tab-position", "data-tab-alignment"],
       mark: ["data-highlight", "style"],
-      th: ["colspan", "rowspan"],
-      td: ["colspan", "rowspan"],
+      table: ["style", "data-table-width-type", "data-table-width-value", "data-table-grid-width", "data-table-layout"],
+      th: ["colspan", "rowspan", "colwidth"],
+      td: ["colspan", "rowspan", "colwidth"],
       img: ["src", "alt", "style"],
       div: ["data-page-break", "data-section-break", "data-section-layout", "class"]
     },
@@ -375,6 +376,10 @@ function sanitizeImportedHtml(value = "") {
         "max-width": [/^100%$/],
         display: [/^block$/],
         margin: [/^0 auto$/]
+      },
+      table: {
+        width: [/^\d+(?:\.\d+)?(?:px|%)$/],
+        "table-layout": [/^(?:fixed|auto)$/]
       }
     }
   });
@@ -1044,15 +1049,30 @@ async function parseStyledDocxTableCell(cellNode, context, tagName) {
   const verticalMergeNode = xmlChild(tcPr, "w:vMerge");
   const verticalMerge = verticalMergeNode ? (xmlVal(verticalMergeNode) || "continue") : "";
   const columnSpan = Number(gridSpan) > 1 ? Math.min(Math.round(Number(gridSpan)), 50) : 1;
+  const cellWidthNode = xmlChild(tcPr, "w:tcW");
+  const cellWidth = firstValue(cellWidthNode?.attribs, ["w:type", "type"]) === "dxa"
+    ? Math.max(0, Math.round(Number(firstValue(cellWidthNode?.attribs, ["w:w", "w"])) || 0))
+    : 0;
 
   const parsedParagraphs = await Promise.all(xmlChildren(cellNode, "w:p")
     .map((paragraph) => parseStyledDocxParagraph(paragraph, context)));
   // 中文注解：单元格内同样可能包含连续编号段落，必须在表格结构内恢复 ol/ul，不能退化为普通 p。
   const paragraphs = renderDocxParagraphs(parsedParagraphs) || "<p><br></p>";
-  return { tagName, paragraphs, columnSpan, rowSpan: 1, verticalMerge };
+  return { tagName, paragraphs, columnSpan, rowSpan: 1, verticalMerge, cellWidth, columnWidths: [] };
 }
 
 async function parseStyledDocxTable(tableNode, context) {
+  const tableProperties = xmlChild(tableNode, "w:tblPr");
+  const tableWidthNode = xmlChild(tableProperties, "w:tblW");
+  const rawWidthType = firstValue(tableWidthNode?.attribs, ["w:type", "type"]);
+  const tableWidthType = ["dxa", "pct", "auto"].includes(rawWidthType) ? rawWidthType : "auto";
+  const tableWidthValue = Math.max(0, Math.round(Number(firstValue(tableWidthNode?.attribs, ["w:w", "w"])) || 0));
+  const tableLayout = firstValue(xmlChild(tableProperties, "w:tblLayout")?.attribs, ["w:type", "type"]) === "fixed" ? "fixed" : "autofit";
+  const gridWidths = xmlChildren(xmlChild(tableNode, "w:tblGrid"), "w:gridCol")
+    .map((column) => Math.max(0, Math.round(Number(firstValue(column.attribs, ["w:w", "w"])) || 0)))
+    .filter((width) => width > 0)
+    .slice(0, 50);
+  const gridWidth = gridWidths.reduce((total, width) => total + width, 0);
   const rows = [];
   let activeVerticalMerges = new Map();
   for (const [rowIndex, rowNode] of xmlChildren(tableNode, "w:tr").entries()) {
@@ -1062,6 +1082,9 @@ async function parseStyledDocxTable(tableNode, context) {
     const nextVerticalMerges = new Map();
     let columnIndex = 0;
     for (const cell of parsedCells) {
+      const gridSlice = gridWidths.slice(columnIndex, columnIndex + cell.columnSpan);
+      if (gridSlice.length === cell.columnSpan) cell.columnWidths = gridSlice;
+      else if (cell.cellWidth > 0) cell.columnWidths = Array.from({ length: cell.columnSpan }, () => Math.round(cell.cellWidth / cell.columnSpan));
       if (cell.verticalMerge === "continue") {
         const origin = activeVerticalMerges.get(columnIndex);
         if (origin) {
@@ -1087,12 +1110,26 @@ async function parseStyledDocxTable(tableNode, context) {
       const attrs = [];
       if (cell.columnSpan > 1) attrs.push(`colspan="${cell.columnSpan}"`);
       if (cell.rowSpan > 1) attrs.push(`rowspan="${cell.rowSpan}"`);
+      if (cell.columnWidths.length) attrs.push(`colwidth="${cell.columnWidths.map((width) => Math.max(25, Math.round(width * 96 / 1440))).join(",")}"`);
       return `<${cell.tagName}${attrs.length ? ` ${attrs.join(" ")}` : ""}>${cell.paragraphs}</${cell.tagName}>`;
     }).join("");
     return html ? `<tr>${html}</tr>` : "";
   }).filter(Boolean);
-  // 中文注解：Word 的 vMerge continuation 单元格不在 HTML 中重复渲染，而是累加到起始单元格的 rowspan。
-  return renderedRows.length ? `<table><tbody>${renderedRows.join("")}</tbody></table>` : "";
+  if (!renderedRows.length) return "";
+  const widthStyle = tableWidthType === "pct" && tableWidthValue > 0
+    ? `width: ${Math.min(100, Math.round(tableWidthValue / 50 * 100) / 100)}%`
+    : (tableWidthType === "dxa" ? tableWidthValue : gridWidth) > 0
+      ? `width: ${Math.round((tableWidthType === "dxa" ? tableWidthValue : gridWidth) * 96 / 1440 * 100) / 100}px`
+      : "width: 100%";
+  const attributes = [
+    `data-table-width-type="${tableWidthType}"`,
+    `data-table-width-value="${tableWidthValue}"`,
+    `data-table-grid-width="${gridWidth}"`,
+    `data-table-layout="${tableLayout}"`,
+    `style="${widthStyle}; table-layout: ${tableLayout === "fixed" ? "fixed" : "auto"}"`
+  ];
+  // 中文注解：tblGrid 是 Word 实际分页使用的列几何，转换为 colwidth 后由编辑器、分页器和再次导出共同使用。
+  return `<table ${attributes.join(" ")}><tbody>${renderedRows.join("")}</tbody></table>`;
 }
 
 function renderDocxListItems(items) {
@@ -1901,6 +1938,8 @@ function appendListParagraphs(listNode, blocks, level, orderedInstance) {
 
 function tableFromNode(tableNode, listState) {
   const rowNodes = (tableNode.children || []).flatMap((child) => child.name === "tbody" || child.name === "thead" ? child.children || [] : [child]).filter((child) => child.name === "tr");
+  const firstRowColumnWidths = [];
+  let firstRowHasCompleteWidths = true;
   const rows = rowNodes.map((rowNode) => {
     const cellNodes = (rowNode.children || []).filter((child) => ["td", "th"].includes(child.name));
     if (!cellNodes.length) return null;
@@ -1908,10 +1947,20 @@ function tableFromNode(tableNode, listState) {
       children: cellNodes.map((cellNode) => {
         const columnSpan = Math.max(1, Math.min(Math.round(Number(cellNode.attribs?.colspan) || 1), 50));
         const rowSpan = Math.max(1, Math.min(Math.round(Number(cellNode.attribs?.rowspan) || 1), 100));
+        const pixelWidths = String(cellNode.attribs?.colwidth || "").split(",")
+          .map((value) => Number.parseFloat(value))
+          .filter((value) => Number.isFinite(value) && value > 0)
+          .slice(0, columnSpan);
+        const columnWidths = pixelWidths.length === columnSpan ? pixelWidths.map((width) => Math.max(1, Math.round(width * 1440 / 96))) : [];
+        if (rowNode === rowNodes[0]) {
+          if (columnWidths.length) firstRowColumnWidths.push(...columnWidths);
+          else firstRowHasCompleteWidths = false;
+        }
         return new TableCell({
           children: tableCellChildrenFromNode(cellNode, listState),
           columnSpan: columnSpan > 1 ? columnSpan : undefined,
           rowSpan: rowSpan > 1 ? rowSpan : undefined,
+          width: columnWidths.length ? { size: columnWidths.reduce((total, width) => total + width, 0), type: WidthType.DXA } : undefined,
           shading: cellNode.name === "th" ? { fill: "F3F6F8" } : undefined
         });
       })
@@ -1919,9 +1968,24 @@ function tableFromNode(tableNode, listState) {
   }).filter(Boolean);
   if (!rows.length) return null;
 
-  // 中文注解：colspan/rowspan 直接映射 Word 的 gridSpan/vMerge，表格按页面内容宽度铺满。
+  const resolvedColumnWidths = firstRowHasCompleteWidths ? firstRowColumnWidths : [];
+  const originalGridWidth = Math.max(0, Math.round(Number(tableNode.attribs?.["data-table-grid-width"]) || 0));
+  const currentGridWidth = resolvedColumnWidths.reduce((total, width) => total + width, 0);
+  const widthType = tableNode.attribs?.["data-table-width-type"];
+  const widthValue = Math.max(0, Math.round(Number(tableNode.attribs?.["data-table-width-value"]) || 0));
+  const columnsChanged = originalGridWidth > 0 && currentGridWidth > 0 && Math.abs(currentGridWidth - originalGridWidth) > 15;
+  const width = columnsChanged || widthType === "dxa"
+    ? { size: currentGridWidth || widthValue || originalGridWidth, type: WidthType.DXA }
+    : widthType === "pct" && widthValue > 0
+      ? { size: widthValue / 50, type: WidthType.PERCENTAGE }
+      : currentGridWidth > 0
+        ? { size: currentGridWidth, type: WidthType.DXA }
+        : { size: 100, type: WidthType.PERCENTAGE };
+  // 中文注解：拖拽后的 colwidth 优先写回 tblGrid；未编辑时则保留原表格宽度类型，兼顾可编辑性和 Word 语义。
   return new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
+    width,
+    columnWidths: resolvedColumnWidths.length ? resolvedColumnWidths : undefined,
+    layout: tableNode.attribs?.["data-table-layout"] === "fixed" ? TableLayoutType.FIXED : TableLayoutType.AUTOFIT,
     rows
   });
 }

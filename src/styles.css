@@ -1343,7 +1343,8 @@ textarea {
 .page-body td,
 .pagination-measurer th,
 .pagination-measurer td {
-  min-width: 72px;
+  /* 中文注解：与 Tiptap 的最小列宽保持一致，避免窄列被 CSS 强制放大后改变 Word 表格分页。 */
+  min-width: 25px;
   border: 1px solid #9aa6b2;
   padding: 6px 8px;
   vertical-align: top;

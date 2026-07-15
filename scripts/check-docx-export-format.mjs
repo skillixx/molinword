@@ -33,6 +33,7 @@ const content = `
   <p data-keep-next="true" data-keep-lines="true" data-page-break-before="true" data-widow-control="true">Pagination controlled paragraph</p>
   <p data-widow-control="false">Widow control disabled paragraph</p>
   <p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab project<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Tab amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p>
+  <table data-table-width-type="dxa" data-table-width-value="6000" data-table-grid-width="6000" data-table-layout="fixed" style="width:400px;table-layout:fixed"><tbody><tr><th colwidth="120"><p>Geometry A</p></th><th colwidth="280"><p>Geometry B</p></th></tr><tr><td colwidth="120"><p>Short</p></td><td colwidth="280"><p>Wide content</p></td></tr></tbody></table>
   <ol>
     <li>Ordered item 1<ol><li>Nested ordered item</li></ol></li>
     <li>Ordered item 2</li>
@@ -211,6 +212,12 @@ assert.match(widowDisabledParagraphXml, /<w:widowControl w:val="false"\/>/);
 const tabParagraphXml = paragraphXmlForText("Tab project");
 assert.match(tabParagraphXml, /<w:tabs><w:tab w:val="left" w:pos="1440"\/><w:tab w:val="right" w:pos="5760"\/><\/w:tabs>/);
 assert.equal((tabParagraphXml.match(/<w:tab\/>/g) || []).length, 2);
+const geometryTableXml = (documentXml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/g) || []).find((table) => table.includes("Geometry A")) || "";
+assert.match(geometryTableXml, /<w:tblW w:type="dxa" w:w="6000"\/>/);
+assert.match(geometryTableXml, /<w:tblLayout w:type="fixed"\/>/);
+assert.match(geometryTableXml, /<w:tblGrid><w:gridCol w:w="1800"\/><w:gridCol w:w="4200"\/><\/w:tblGrid>/);
+assert.match(geometryTableXml, /<w:tcW w:type="dxa" w:w="1800"\/>/);
+assert.match(geometryTableXml, /<w:tcW w:type="dxa" w:w="4200"\/>/);
 
 // 中文注解：编号列表、嵌套层级和项目符号必须保留各自语义，不能统一退化为一级圆点。
 assert.match(documentXml, /<w:numPr><w:ilvl w:val="0"\/><w:numId w:val="\d+"\/><\/w:numPr>/);

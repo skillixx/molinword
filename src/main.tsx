@@ -2,9 +2,10 @@
 import { createRoot } from "react-dom/client";
 import { Extension, Mark, Node as TiptapNode, type CommandProps } from "@tiptap/core";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
+import type { EditorView } from "@tiptap/pm/view";
 import { EditorContent, useEditor, type Editor as TiptapEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import { Table } from "@tiptap/extension-table";
+import { Table, TableView } from "@tiptap/extension-table";
 import { TableCell } from "@tiptap/extension-table-cell";
 import { TableHeader } from "@tiptap/extension-table-header";
 import { TableRow } from "@tiptap/extension-table-row";
@@ -714,6 +715,20 @@ function normalizeParagraphTabStops(value: unknown) {
   }
 }
 
+function normalizeDocumentTableStyle(value: unknown) {
+  const declarations = String(value || "").split(";").map((item) => item.trim()).filter(Boolean);
+  const styles: string[] = [];
+  for (const declaration of declarations) {
+    const separator = declaration.indexOf(":");
+    if (separator === -1) continue;
+    const name = declaration.slice(0, separator).trim().toLowerCase();
+    const styleValue = declaration.slice(separator + 1).trim();
+    if (name === "width" && /^\d+(?:\.\d+)?(?:px|%)$/.test(styleValue)) styles.push(`width: ${styleValue}`);
+    if (name === "table-layout" && /^(?:fixed|auto)$/.test(styleValue)) styles.push(`table-layout: ${styleValue}`);
+  }
+  return styles.length ? styles.join("; ") : null;
+}
+
 const ImportedTextStyle = Mark.create({
   name: "importedTextStyle",
   addAttributes() {
@@ -828,6 +843,62 @@ const DocxTab = TiptapNode.create({
     };
   }
 });
+
+class DocumentTableView extends TableView {
+  constructor(node: ProseMirrorNode, cellMinWidth: number, view?: EditorView, HTMLAttributes: Record<string, unknown> = {}) {
+    super(node, cellMinWidth, view, HTMLAttributes);
+    this.applyDocumentGeometry(node);
+  }
+
+  update(node: ProseMirrorNode) {
+    const updated = super.update(node);
+    if (updated) this.applyDocumentGeometry(node);
+    return updated;
+  }
+
+  private applyDocumentGeometry(node: ProseMirrorNode) {
+    const style = normalizeDocumentTableStyle(node.attrs.style);
+    if (!style) return;
+    // 中文注解：Tiptap 的可调整列宽视图会重写 table.width，这里重新应用 Word 原表宽，确保编辑态和分页态一致。
+    this.table.style.cssText = style;
+  }
+}
+
+const DocumentTable = Table.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      style: {
+        default: null,
+        parseHTML: (element) => normalizeDocumentTableStyle(element.getAttribute("style")),
+        renderHTML: (attributes) => {
+          const style = normalizeDocumentTableStyle(attributes.style);
+          return style ? { style } : {};
+        }
+      },
+      tableWidthType: {
+        default: "auto",
+        parseHTML: (element) => ["dxa", "pct", "auto"].includes(element.getAttribute("data-table-width-type") || "") ? element.getAttribute("data-table-width-type") : "auto",
+        renderHTML: (attributes) => ({ "data-table-width-type": ["dxa", "pct", "auto"].includes(attributes.tableWidthType) ? attributes.tableWidthType : "auto" })
+      },
+      tableWidthValue: {
+        default: 0,
+        parseHTML: (element) => Math.max(0, Math.round(Number(element.getAttribute("data-table-width-value")) || 0)),
+        renderHTML: (attributes) => ({ "data-table-width-value": Math.max(0, Math.round(Number(attributes.tableWidthValue) || 0)) })
+      },
+      tableGridWidth: {
+        default: 0,
+        parseHTML: (element) => Math.max(0, Math.round(Number(element.getAttribute("data-table-grid-width")) || 0)),
+        renderHTML: (attributes) => ({ "data-table-grid-width": Math.max(0, Math.round(Number(attributes.tableGridWidth) || 0)) })
+      },
+      tableLayout: {
+        default: "autofit",
+        parseHTML: (element) => element.getAttribute("data-table-layout") === "fixed" ? "fixed" : "autofit",
+        renderHTML: (attributes) => ({ "data-table-layout": attributes.tableLayout === "fixed" ? "fixed" : "autofit" })
+      }
+    };
+  }
+}).configure({ resizable: true, View: DocumentTableView });
 
 const ParagraphIndent = Extension.create({
   name: "paragraphIndent",
@@ -2205,7 +2276,7 @@ function Editor(props: {
   }, [props.pageLayout]);
 
   const editor = useEditor({
-    extensions: [StarterKit, ImageExtension.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DocxTab, ParagraphIndent, PageBreak, SectionBreak, Table.configure({ resizable: true }), TableRow, TableHeader, TableCell],
+    extensions: [StarterKit, ImageExtension.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DocxTab, ParagraphIndent, PageBreak, SectionBreak, DocumentTable, TableRow, TableHeader, TableCell],
     content: props.content,
     editorProps: { attributes: { class: "word-editor" } },
     onCreate({ editor }) { updateOutlineFromEditor(editor); syncActiveSectionFromEditor(editor); },

@@ -21,7 +21,7 @@ const fixtureDocument = {
   tone: "正式",
   templateId: 3,
   outline: ["超长结构分页"],
-  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table><tbody><tr><th>审批阶段</th><th>状态</th></tr><tr><td>商务评审</td><td>通过</td></tr><tr><td>归档确认</td><td>完成</td></tr></tbody></table><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p><p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab workflow<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p><p>Tab keyboard</p><p>${widowText}</p>`,
+  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table data-table-width-type="dxa" data-table-width-value="7200" data-table-grid-width="7200" data-table-layout="fixed" style="width:480px;table-layout:fixed"><tbody><tr><th colwidth="120">审批阶段</th><th colwidth="360">状态</th></tr><tr><td colwidth="120">商务评审</td><td colwidth="360">通过</td></tr><tr><td colwidth="120">归档确认</td><td colwidth="360">完成</td></tr></tbody></table><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p><p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab workflow<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p><p>Tab keyboard</p><p>${widowText}</p>`,
   // 中文注解：模拟升级前数据库里的旧页面设置，确保真实历史文档开启高级页眉时不会崩溃。
   pageLayout: { headerText: "", footerText: "", pageNumberEnabled: false },
   status: "draft",
@@ -258,6 +258,12 @@ try {
 
   const sourceTables = editor.locator("table");
   assert.equal(await sourceTables.count(), 2);
+  const sourceGeometry = await sourceTables.last().evaluate((table) => ({
+    width: Math.round(table.getBoundingClientRect().width),
+    columns: Array.from(table.querySelectorAll("tr:first-child > th, tr:first-child > td")).map((cell) => Math.round(cell.getBoundingClientRect().width))
+  }));
+  assert.ok(sourceGeometry.width >= 480 && sourceGeometry.width <= 481);
+  assert.deepEqual(sourceGeometry.columns, [120, 360]);
   const firstTable = sourceTables.first();
   const headerCells = firstTable.locator("th");
   assert.equal(await headerCells.count(), 2);
@@ -444,6 +450,10 @@ try {
   assert.match(documentXml, /<w:gridSpan w:val="2"\/>/);
   assert.match(documentXml, /<w:vMerge w:val="restart"\/>/);
   assert.match(documentXml, /<w:vMerge w:val="continue"\/>/);
+  const geometryTable = (documentXml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/g) || []).find((table) => table.includes("商务评审")) || "";
+  assert.match(geometryTable, /<w:tblW w:type="dxa" w:w="7200"\/>/);
+  assert.match(geometryTable, /<w:tblLayout w:type="fixed"\/>/);
+  assert.match(geometryTable, /<w:tblGrid><w:gridCol w:w="1800"\/><w:gridCol w:w="5400"\/><\/w:tblGrid>/);
   assert.match(documentXml, /<w:highlight w:val="yellow"\/>/);
   assert.match(documentXml, /<w:vertAlign w:val="superscript"\/>/);
   assert.match(documentXml, /<w:vertAlign w:val="subscript"\/>/);
@@ -527,6 +537,14 @@ try {
       sourceTabCount: document.querySelectorAll(".word-editor .docx-tab").length,
       previewTabCount: document.querySelectorAll(".page-body .docx-tab").length,
       previewTabWidths: Array.from(document.querySelectorAll(".page-body .docx-tab")).map((tab) => tab.getBoundingClientRect().width),
+      tableGeometry: (() => {
+        const preview = Array.from(document.querySelectorAll(".page-body table")).find((table) => table.textContent?.includes("商务评审"));
+        const widths = (table) => table ? Array.from(table.querySelectorAll("tr:first-child > th, tr:first-child > td")).map((cell) => Math.round(cell.getBoundingClientRect().width)) : [];
+        return {
+          previewWidth: preview ? Math.round(preview.getBoundingClientRect().width) : 0,
+          previewColumns: widths(preview)
+        };
+      })(),
       paginationControlStartsPage: Array.from(document.querySelectorAll(".page-sheet")).some((page) => {
         const blocks = Array.from(page.querySelectorAll(":scope > .page-body > .page-block"));
         return blocks[0]?.textContent?.includes("分页控制段落") && !page.textContent?.includes("分页控制前置段落");
@@ -580,6 +598,8 @@ try {
   assert.ok(result.previewRowSpanCount > 0, "分页预览应保留纵向合并单元格");
   assert.equal(result.previewTabCount, result.sourceTabCount, "分页预览应完整保留在线编辑器中的制表位");
   assert.ok(result.previewTabWidths.every((width) => width >= 2), "分页预览中的制表位应按 Word 位置完成布局");
+  assert.ok(result.tableGeometry.previewWidth >= 480 && result.tableGeometry.previewWidth <= 481);
+  assert.deepEqual(result.tableGeometry.previewColumns, [120, 360]);
   assert.equal(result.paginationControlStartsPage, true, "段前分页段落应成为新页首段");
   assert.equal(result.paginationControlKeepsNext, true, "与下段同页应保留后续段落在同一页");
   assert.ok(result.widowFragmentLineCounts.length > 1, "孤行控制夹具应跨越多个页面");
