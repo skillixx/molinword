@@ -33,7 +33,7 @@ const content = `
   <p data-keep-next="true" data-keep-lines="true" data-page-break-before="true" data-widow-control="true">Pagination controlled paragraph</p>
   <p data-widow-control="false">Widow control disabled paragraph</p>
   <p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab project<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Tab amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p>
-  <table data-table-width-type="dxa" data-table-width-value="6000" data-table-grid-width="6000" data-table-layout="fixed" style="width:400px;table-layout:fixed"><tbody><tr><th colwidth="120"><p>Geometry A</p></th><th colwidth="280"><p>Geometry B</p></th></tr><tr><td colwidth="120"><p>Short</p></td><td colwidth="280"><p>Wide content</p></td></tr></tbody></table>
+  <table data-table-width-type="dxa" data-table-width-value="6000" data-table-grid-width="6000" data-table-layout="fixed" style="width:400px;table-layout:fixed"><tbody><tr><th colwidth="120" data-docx-cell="true" data-cell-margins='{"top":100,"right":600,"bottom":300,"left":400}' data-cell-vertical-align="center" data-cell-shading="#D9EAD3" style="padding-top:6.67px;padding-right:40px;padding-bottom:20px;padding-left:26.67px;vertical-align:middle;background-color:#D9EAD3"><p>Geometry A</p></th><th colwidth="280" data-docx-cell="true"><p>Geometry B</p></th></tr><tr><td colwidth="120"><p>Short</p></td><td colwidth="280"><p>Wide content</p></td></tr></tbody></table>
   <ol>
     <li>Ordered item 1<ol><li>Nested ordered item</li></ol></li>
     <li>Ordered item 2</li>
@@ -218,6 +218,10 @@ assert.match(geometryTableXml, /<w:tblLayout w:type="fixed"\/>/);
 assert.match(geometryTableXml, /<w:tblGrid><w:gridCol w:w="1800"\/><w:gridCol w:w="4200"\/><\/w:tblGrid>/);
 assert.match(geometryTableXml, /<w:tcW w:type="dxa" w:w="1800"\/>/);
 assert.match(geometryTableXml, /<w:tcW w:type="dxa" w:w="4200"\/>/);
+const geometryCellXml = (geometryTableXml.match(/<w:tc>[\s\S]*?<\/w:tc>/g) || []).find((cell) => cell.includes("Geometry A")) || "";
+for (const [side, width] of [["top", 100], ["right", 600], ["bottom", 300], ["left", 400]]) assert.match(geometryCellXml, new RegExp(`<w:${side} w:type="dxa" w:w="${width}"\\/>`));
+assert.match(geometryCellXml, /<w:shd w:fill="D9EAD3"\/>/);
+assert.match(geometryCellXml, /<w:vAlign w:val="center"\/>/);
 
 // 中文注解：编号列表、嵌套层级和项目符号必须保留各自语义，不能统一退化为一级圆点。
 assert.match(documentXml, /<w:numPr><w:ilvl w:val="0"\/><w:numId w:val="\d+"\/><\/w:numPr>/);

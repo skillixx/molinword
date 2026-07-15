@@ -1357,6 +1357,13 @@ textarea {
   font-weight: 700;
 }
 
+.word-editor th[data-docx-cell="true"],
+.page-body th[data-docx-cell="true"],
+.pagination-measurer th[data-docx-cell="true"] {
+  /* 中文注解：导入 Word 的首行不等于有底色的表头，只有原文明确携带 shd 时才着色。 */
+  background-color: transparent;
+}
+
 .word-editor img,
 .page-body img,
 .pagination-measurer img {

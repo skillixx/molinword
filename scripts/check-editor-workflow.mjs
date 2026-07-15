@@ -264,6 +264,36 @@ try {
   }));
   assert.ok(sourceGeometry.width >= 480 && sourceGeometry.width <= 481);
   assert.deepEqual(sourceGeometry.columns, [120, 360]);
+  const businessReviewCell = sourceTables.last().locator("td").filter({ hasText: "商务评审" });
+  await businessReviewCell.click();
+  await page.locator('label[title="设置当前单元格垂直对齐"] select').selectOption("bottom");
+  await page.locator('label[title="设置当前单元格内边距"] select').selectOption("180");
+  await page.locator('label[title="设置当前单元格底色"] select').selectOption("#FFF2CC");
+  const sourceCellFormat = await businessReviewCell.evaluate((cell) => ({
+    margins: cell.getAttribute("data-cell-margins"),
+    verticalAlign: cell.getAttribute("data-cell-vertical-align"),
+    shading: cell.getAttribute("data-cell-shading"),
+    style: {
+      paddingTop: getComputedStyle(cell).paddingTop,
+      paddingRight: getComputedStyle(cell).paddingRight,
+      paddingBottom: getComputedStyle(cell).paddingBottom,
+      paddingLeft: getComputedStyle(cell).paddingLeft,
+      verticalAlign: getComputedStyle(cell).verticalAlign,
+      backgroundColor: getComputedStyle(cell).backgroundColor
+    }
+  }));
+  // 中文注解：单元格语义属性负责 Word 导出，计算样式负责在线编辑和分页，两套结果必须同步。
+  assert.deepEqual(JSON.parse(sourceCellFormat.margins || "{}"), { top: 180, right: 180, bottom: 180, left: 180 });
+  assert.equal(sourceCellFormat.verticalAlign, "bottom");
+  assert.equal(sourceCellFormat.shading, "#FFF2CC");
+  assert.deepEqual(sourceCellFormat.style, {
+    paddingTop: "12px",
+    paddingRight: "12px",
+    paddingBottom: "12px",
+    paddingLeft: "12px",
+    verticalAlign: "bottom",
+    backgroundColor: "rgb(255, 242, 204)"
+  });
   const firstTable = sourceTables.first();
   const headerCells = firstTable.locator("th");
   assert.equal(await headerCells.count(), 2);
@@ -421,6 +451,7 @@ try {
   assert.match(reopenedHtml, /data-section-break="nextPage"/);
   assert.match(reopenedHtml, /第二节横向内容/);
   assert.equal((reopenedHtml.match(/data-docx-tab="true"/g) || []).length, 4);
+  assert.match(reopenedHtml, /<td[^>]+data-cell-margins="[^"]*&quot;top&quot;:180[^"]*"[^>]+data-cell-vertical-align="bottom"[^>]+data-cell-shading="#FFF2CC"[^>]*>.*商务评审/s);
 
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "导出 Word", exact: true }).click();
@@ -454,6 +485,14 @@ try {
   assert.match(geometryTable, /<w:tblW w:type="dxa" w:w="7200"\/>/);
   assert.match(geometryTable, /<w:tblLayout w:type="fixed"\/>/);
   assert.match(geometryTable, /<w:tblGrid><w:gridCol w:w="1800"\/><w:gridCol w:w="5400"\/><\/w:tblGrid>/);
+  const businessReviewCellXml = (geometryTable.match(/<w:tc>[\s\S]*?<\/w:tc>/g) || []).find((cell) => cell.includes("商务评审")) || "";
+  const businessReviewMarginsXml = businessReviewCellXml.match(/<w:tcMar>[\s\S]*?<\/w:tcMar>/)?.[0] || "";
+  // 中文注解：docx 库可能调整四边节点顺序，按边分别验证可避免把等价 XML 误判为失败。
+  for (const side of ["top", "right", "bottom", "left"]) {
+    assert.match(businessReviewMarginsXml, new RegExp(`<w:${side} w:type="dxa" w:w="180"\\/>`));
+  }
+  assert.match(businessReviewCellXml, /<w:shd w:fill="FFF2CC"\/>/);
+  assert.match(businessReviewCellXml, /<w:vAlign w:val="bottom"\/>/);
   assert.match(documentXml, /<w:highlight w:val="yellow"\/>/);
   assert.match(documentXml, /<w:vertAlign w:val="superscript"\/>/);
   assert.match(documentXml, /<w:vertAlign w:val="subscript"\/>/);
@@ -545,6 +584,18 @@ try {
           previewColumns: widths(preview)
         };
       })(),
+      previewBusinessCellFormat: (() => {
+        const cell = Array.from(document.querySelectorAll(".page-body td, .page-body th")).find((item) => item.textContent?.includes("商务评审"));
+        const style = cell ? getComputedStyle(cell) : null;
+        return style ? {
+          paddingTop: style.paddingTop,
+          paddingRight: style.paddingRight,
+          paddingBottom: style.paddingBottom,
+          paddingLeft: style.paddingLeft,
+          verticalAlign: style.verticalAlign,
+          backgroundColor: style.backgroundColor
+        } : null;
+      })(),
       paginationControlStartsPage: Array.from(document.querySelectorAll(".page-sheet")).some((page) => {
         const blocks = Array.from(page.querySelectorAll(":scope > .page-body > .page-block"));
         return blocks[0]?.textContent?.includes("分页控制段落") && !page.textContent?.includes("分页控制前置段落");
@@ -600,6 +651,14 @@ try {
   assert.ok(result.previewTabWidths.every((width) => width >= 2), "分页预览中的制表位应按 Word 位置完成布局");
   assert.ok(result.tableGeometry.previewWidth >= 480 && result.tableGeometry.previewWidth <= 481);
   assert.deepEqual(result.tableGeometry.previewColumns, [120, 360]);
+  assert.deepEqual(result.previewBusinessCellFormat, {
+    paddingTop: "12px",
+    paddingRight: "12px",
+    paddingBottom: "12px",
+    paddingLeft: "12px",
+    verticalAlign: "bottom",
+    backgroundColor: "rgb(255, 242, 204)"
+  });
   assert.equal(result.paginationControlStartsPage, true, "段前分页段落应成为新页首段");
   assert.equal(result.paginationControlKeepsNext, true, "与下段同页应保留后续段落在同一页");
   assert.ok(result.widowFragmentLineCounts.length > 1, "孤行控制夹具应跨越多个页面");

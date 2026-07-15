@@ -495,6 +495,22 @@ const lineSpacingOptions = [
   { label: "双倍", value: "2" }
 ];
 const paragraphSpacingOptions = ["0pt", "6pt", "12pt", "18pt", "24pt"].map((value) => ({ label: value, value }));
+const tableCellVerticalAlignOptions = [
+  { label: "顶部", value: "top" },
+  { label: "居中", value: "center" },
+  { label: "底部", value: "bottom" }
+];
+const tableCellPaddingOptions = [
+  { label: "紧凑", value: "72" },
+  { label: "标准", value: "108" },
+  { label: "宽松", value: "180" }
+];
+const tableCellShadingOptions = [
+  { label: "无底色", value: "none" },
+  { label: "浅灰", value: "#F3F6F8" },
+  { label: "浅绿", value: "#E8F3F0" },
+  { label: "浅黄", value: "#FFF2CC" }
+];
 
 function pageTextCssStyle(style: DocumentPageTextStyle): React.CSSProperties {
   return {
@@ -729,6 +745,50 @@ function normalizeDocumentTableStyle(value: unknown) {
   return styles.length ? styles.join("; ") : null;
 }
 
+function normalizeTableCellMargins(value: unknown) {
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    const margins: Record<string, number> = {};
+    for (const side of ["top", "right", "bottom", "left"]) {
+      const width = Number(parsed?.[side]);
+      if (Number.isFinite(width) && width >= 0 && width <= 31680) margins[side] = Math.round(width);
+    }
+    return Object.keys(margins).length ? JSON.stringify(margins) : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeTableCellStyle(value: unknown) {
+  const declarations = String(value || "").split(";").map((item) => item.trim()).filter(Boolean);
+  const styles: string[] = [];
+  for (const declaration of declarations) {
+    const separator = declaration.indexOf(":");
+    if (separator === -1) continue;
+    const name = declaration.slice(0, separator).trim().toLowerCase();
+    const styleValue = declaration.slice(separator + 1).trim();
+    if (/^padding-(?:top|right|bottom|left)$/.test(name) && /^\d+(?:\.\d+)?px$/.test(styleValue)) styles.push(`${name}: ${styleValue}`);
+    if (name === "vertical-align" && /^(?:top|middle|bottom)$/.test(styleValue)) styles.push(`${name}: ${styleValue}`);
+    if (name === "background-color" && /^#[0-9a-f]{6}$/i.test(styleValue)) styles.push(`${name}: ${styleValue.toUpperCase()}`);
+  }
+  return styles.length ? styles.join("; ") : null;
+}
+
+function tableCellStyle(cellMargins: string | null, verticalAlign: string, shading: string) {
+  const styles: string[] = [];
+  try {
+    const margins = JSON.parse(cellMargins || "{}");
+    for (const side of ["top", "right", "bottom", "left"]) {
+      if (Number.isFinite(Number(margins[side]))) styles.push(`padding-${side}: ${Math.round(Number(margins[side]) * 96 / 1440 * 100) / 100}px`);
+    }
+  } catch {
+    // 中文注解：损坏的历史属性不应阻断表格继续编辑，忽略后由用户重新设置。
+  }
+  if (["top", "center", "bottom"].includes(verticalAlign)) styles.push(`vertical-align: ${verticalAlign === "center" ? "middle" : verticalAlign}`);
+  if (/^#[0-9a-f]{6}$/i.test(shading)) styles.push(`background-color: ${shading.toUpperCase()}`);
+  return styles.length ? styles.join("; ") : null;
+}
+
 const ImportedTextStyle = Mark.create({
   name: "importedTextStyle",
   addAttributes() {
@@ -899,6 +959,60 @@ const DocumentTable = Table.extend({
     };
   }
 }).configure({ resizable: true, View: DocumentTableView });
+
+function documentTableCellAttributes() {
+  return {
+    importedCell: {
+      default: false,
+      parseHTML: (element: HTMLElement) => element.getAttribute("data-docx-cell") === "true",
+      renderHTML: (attributes: Record<string, unknown>) => attributes.importedCell ? { "data-docx-cell": "true" } : {}
+    },
+    cellMargins: {
+      default: null,
+      parseHTML: (element: HTMLElement) => normalizeTableCellMargins(element.getAttribute("data-cell-margins")),
+      renderHTML: (attributes: Record<string, unknown>) => {
+        const margins = normalizeTableCellMargins(attributes.cellMargins);
+        return margins ? { "data-cell-margins": margins } : {};
+      }
+    },
+    cellVerticalAlign: {
+      default: null,
+      parseHTML: (element: HTMLElement) => ["top", "center", "bottom"].includes(element.getAttribute("data-cell-vertical-align") || "") ? element.getAttribute("data-cell-vertical-align") : null,
+      renderHTML: (attributes: Record<string, unknown>) => ["top", "center", "bottom"].includes(String(attributes.cellVerticalAlign)) ? { "data-cell-vertical-align": attributes.cellVerticalAlign } : {}
+    },
+    cellShading: {
+      default: null,
+      parseHTML: (element: HTMLElement) => /^#[0-9a-f]{6}$/i.test(element.getAttribute("data-cell-shading") || "") ? element.getAttribute("data-cell-shading")?.toUpperCase() : null,
+      renderHTML: (attributes: Record<string, unknown>) => /^#[0-9a-f]{6}$/i.test(String(attributes.cellShading || "")) ? { "data-cell-shading": String(attributes.cellShading).toUpperCase() } : {}
+    },
+    style: {
+      default: null,
+      parseHTML: (element: HTMLElement) => normalizeTableCellStyle(element.getAttribute("style")),
+      renderHTML: (attributes: Record<string, unknown>) => {
+        const semanticStyle = tableCellStyle(
+          normalizeTableCellMargins(attributes.cellMargins),
+          String(attributes.cellVerticalAlign || ""),
+          String(attributes.cellShading || "")
+        );
+        // 中文注解：合并、拆分单元格后 Tiptap 可能重建通用 style，优先由 Word 语义属性还原完整视觉格式。
+        const style = semanticStyle || normalizeTableCellStyle(attributes.style);
+        return style ? { style } : {};
+      }
+    }
+  };
+}
+
+const DocumentTableCell = TableCell.extend({
+  addAttributes() {
+    return { ...this.parent?.(), ...documentTableCellAttributes() };
+  }
+});
+
+const DocumentTableHeader = TableHeader.extend({
+  addAttributes() {
+    return { ...this.parent?.(), ...documentTableCellAttributes() };
+  }
+});
 
 const ParagraphIndent = Extension.create({
   name: "paragraphIndent",
@@ -2276,7 +2390,7 @@ function Editor(props: {
   }, [props.pageLayout]);
 
   const editor = useEditor({
-    extensions: [StarterKit, ImageExtension.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DocxTab, ParagraphIndent, PageBreak, SectionBreak, DocumentTable, TableRow, TableHeader, TableCell],
+    extensions: [StarterKit, ImageExtension.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DocxTab, ParagraphIndent, PageBreak, SectionBreak, DocumentTable, TableRow, DocumentTableHeader, DocumentTableCell],
     content: props.content,
     editorProps: { attributes: { class: "word-editor" } },
     onCreate({ editor }) { updateOutlineFromEditor(editor); syncActiveSectionFromEditor(editor); },
@@ -2708,6 +2822,29 @@ function Editor(props: {
     setSelectionHint(applied ? `已切换${label}。` : "请把光标放到段落或标题中，再设置分页控制。");
   };
 
+  const updateCurrentTableCell = (patch: { margin?: number; verticalAlign?: string | null; shading?: string | null }, label: string) => {
+    if (!editor || !editor.isActive("table")) {
+      setSelectionHint("请先把光标放到需要设置的表格单元格中。");
+      return;
+    }
+    const nodeType = editor.isActive("tableHeader") ? "tableHeader" : "tableCell";
+    const current = editor.getAttributes(nodeType);
+    const margins = patch.margin === undefined
+      ? normalizeTableCellMargins(current.cellMargins)
+      : normalizeTableCellMargins({ top: patch.margin, right: patch.margin, bottom: patch.margin, left: patch.margin });
+    const verticalAlign = patch.verticalAlign === undefined ? String(current.cellVerticalAlign || "") : String(patch.verticalAlign || "");
+    const shading = patch.shading === undefined ? String(current.cellShading || "") : String(patch.shading || "");
+    const style = tableCellStyle(margins, verticalAlign, shading);
+    const applied = editor.chain().focus()
+      .setCellAttribute("cellMargins", margins)
+      .setCellAttribute("cellVerticalAlign", verticalAlign || null)
+      .setCellAttribute("cellShading", shading || null)
+      .setCellAttribute("style", style)
+      .run();
+    // 中文注解：语义属性用于 Word 导出，style 用于编辑器和分页预览，两者必须在同一事务中更新。
+    setSelectionHint(applied ? `已设置${label}。` : "当前单元格无法应用该格式。");
+  };
+
   const insertImageFile = (file: File | null) => {
     if (!editor || !file) return;
     if (!file.type.startsWith("image/")) {
@@ -2978,6 +3115,9 @@ function Editor(props: {
             <button onClick={() => editor?.chain().focus().mergeCells().run()} disabled={!editor?.can().mergeCells()} title="合并选中的单元格"><Combine size={16} />合并</button>
             <button onClick={() => editor?.chain().focus().splitCell().run()} disabled={!editor?.can().splitCell()} title="拆分当前合并单元格"><Split size={16} />拆分</button>
             <button onClick={() => editor?.chain().focus().toggleHeaderCell().run()} disabled={!editor?.isActive("table")} title="切换当前单元格为表头"><PanelTop size={16} />表头</button>
+            <FormatSelect title="设置当前单元格垂直对齐" placeholder="单元格对齐" options={tableCellVerticalAlignOptions} onSelect={(value, label) => updateCurrentTableCell({ verticalAlign: value }, `单元格${label}对齐`)} />
+            <FormatSelect title="设置当前单元格内边距" placeholder="单元格边距" options={tableCellPaddingOptions} onSelect={(value, label) => updateCurrentTableCell({ margin: Number(value) }, `${label}单元格边距`)} />
+            <FormatSelect title="设置当前单元格底色" placeholder="单元格底色" options={tableCellShadingOptions} onSelect={(value, label) => updateCurrentTableCell({ shading: value === "none" ? null : value }, `单元格${label}`)} />
             <button onClick={() => imageInputRef.current?.click()} title="插入图片"><ImageIcon size={16} />图片</button>
             <input ref={imageInputRef} className="hidden-file-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={(event) => { insertImageFile(event.target.files?.[0] || null); event.currentTarget.value = ""; }} />
             <span className="format-divider" />
