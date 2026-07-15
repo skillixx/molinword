@@ -12,6 +12,7 @@
     "check:editor-workflow": "npm run build && node scripts/check-editor-workflow.mjs",
     "check:editor-pagination": "npm run check:editor-workflow",
     "db:migrate:document-template": "node database/migrate-document-template-binding.mjs",
+    "db:migrate:document-page-layout": "node database/migrate-document-page-layout.mjs",
     "db:seed:templates": "node database/seed-document-templates.mjs",
     "template-agent": "node scripts/template-agent.mjs",
     "preview": "vite preview --host 127.0.0.1"

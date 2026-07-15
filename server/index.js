@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import express from "express";
-import { AlignmentType, Document, HeadingLevel, ImageRun, LevelFormat, LineRuleType, Packer, PageBreak as DocxPageBreak, Paragraph, Table, TableCell, TableRow, TextRun, WidthType } from "docx";
+import { AlignmentType, Document, Footer, Header, HeadingLevel, ImageRun, LevelFormat, LineRuleType, Packer, PageBreak as DocxPageBreak, PageNumber, Paragraph, Table, TableCell, TableRow, TextRun, WidthType } from "docx";
 import { imageSize } from "image-size";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
@@ -23,6 +23,21 @@ const docxPage = {
   marginTwip: 1440
 };
 const orderedListReference = "online-ordered-list";
+const defaultPageLayout = Object.freeze({ headerText: "", footerText: "", pageNumberEnabled: false });
+
+function normalizePageText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, 500);
+}
+
+function normalizePageLayout(value, fallback = defaultPageLayout) {
+  const source = value && typeof value === "object" ? value : {};
+  const base = fallback && typeof fallback === "object" ? fallback : defaultPageLayout;
+  return {
+    headerText: normalizePageText(source.headerText ?? base.headerText),
+    footerText: normalizePageText(source.footerText ?? base.footerText),
+    pageNumberEnabled: source.pageNumberEnabled === undefined ? Boolean(base.pageNumberEnabled) : Boolean(source.pageNumberEnabled)
+  };
+}
 
 const app = express();
 const port = Number(process.env.LOCAL_API_PORT || process.env.APP_PORT || process.env.PORT || 3001);
@@ -678,6 +693,55 @@ async function parseStyledDocxToHtml(buffer) {
   return chunks.join("");
 }
 
+function docxPartPlainText(xml = "") {
+  if (!xml.trim()) return "";
+  const document = parseDocument(xml, { xmlMode: true });
+  return xmlDescendants(document, "w:p")
+    .map((paragraph) => xmlDescendants(paragraph, "w:r").map(docxTextFromRun).join(""))
+    .map(normalizePageText)
+    .filter(Boolean)
+    .join(" ");
+}
+
+async function parseDocxPageLayout(buffer) {
+  const zip = await JSZip.loadAsync(buffer);
+  const documentXml = await zip.file("word/document.xml")?.async("string");
+  const relationshipsXml = await zip.file("word/_rels/document.xml.rels")?.async("string");
+  if (!documentXml || !relationshipsXml) return { pageLayout: { ...defaultPageLayout }, warnings: [] };
+  const relationships = parseDocxRelationships(relationshipsXml);
+  const document = parseDocument(documentXml, { xmlMode: true });
+  const section = xmlDescendants(document, "w:sectPr")[0];
+
+  // 中文注解：页眉页脚通过节属性中的关系 ID 指向独立 XML 部件，不能假设文件名固定为 header1/footer1。
+  const readReferencedPart = async (referenceName) => {
+    const references = xmlDescendants(section, referenceName);
+    const reference = references.find((item) => firstValue(item.attribs, ["w:type", "type"]) === "default") || references[0];
+    const relationshipId = firstValue(reference?.attribs, ["r:id", "id"]);
+    const target = relationships.get(relationshipId);
+    if (!target) return "";
+    const path = target.startsWith("/") ? target.slice(1) : `word/${target.replace(/^\.?\//, "")}`;
+    return zip.file(path)?.async("string") || "";
+  };
+
+  const headerXml = await readReferencedPart("w:headerReference");
+  const footerXml = await readReferencedPart("w:footerReference");
+  const sectionCount = xmlDescendants(document, "w:sectPr").length;
+  const references = [...xmlDescendants(document, "w:headerReference"), ...xmlDescendants(document, "w:footerReference")];
+  const hasVariantReference = references.some((item) => !["", "default"].includes(firstValue(item.attribs, ["w:type", "type"]) || ""));
+  // 中文注解：当前页面模型只保存纯文本；只要发现字体、字号、颜色、对齐或其他富格式，就明确提示用户可能丢失样式。
+  const hasRichHeaderFooter = /<w:(?:drawing|pict|tbl|shd|tabs|rFonts|color|sz|jc|b|i|u|strike)\b/i.test(`${headerXml}${footerXml}`);
+  const hasMultipleParagraphs = [headerXml, footerXml].some((xml) => (xml.match(/<w:p(?:\s|>)/g) || []).length > 1);
+  const warnings = sectionCount > 1 || hasVariantReference || hasRichHeaderFooter || hasMultipleParagraphs
+    ? ["该 DOCX 包含多节或复杂页眉页脚；当前已导入默认节纯文本，图片、格式或奇偶页差异暂未恢复。"]
+    : [];
+  const pageNumberEnabled = /(?:<w:instrText[^>]*>[^<]*(?:PAGE|NUMPAGES)|<w:fldSimple[^>]+w:instr="[^"]*(?:PAGE|NUMPAGES))/i.test(footerXml);
+  const footerText = docxPartPlainText(footerXml)
+    .replace(/(?:\s*[·|]\s*)?第\s*页\s*\/\s*共\s*页/gu, "")
+    .trim();
+  // 中文注解：页码字段与页脚正文分开保存，在线预览才能按真实页数重新渲染。
+  return { pageLayout: normalizePageLayout({ headerText: docxPartPlainText(headerXml), footerText, pageNumberEnabled }), warnings };
+}
+
 function extractImportedOutline(html = "") {
   const headings = [...String(html).matchAll(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/gi)]
     .map((match) => match[1].replace(/<[^>]+>/g, "").trim())
@@ -717,7 +781,7 @@ async function parseImportedDocument(file) {
     if (!text?.trim()) {
       throw createPublicError("该 DOC 文件未识别到可编辑文字，文件可能为空、损坏或已加密。", 400);
     }
-    return { content: legacyDocTextToHtml(text), outline: extractPlainTextOutline(text), documentType: "Word 文档" };
+    return { content: legacyDocTextToHtml(text), outline: extractPlainTextOutline(text), documentType: "Word 文档", pageLayout: { ...defaultPageLayout }, warnings: [] };
   }
   if (extension === "docx") {
     let rawHtml = "";
@@ -732,14 +796,15 @@ async function parseImportedDocument(file) {
       rawHtml = result.value;
     }
     const content = sanitizeImportedHtml(rawHtml);
-    return { content: content || "<p></p>", outline: extractImportedOutline(content), documentType: "Word 文档" };
+    const pageLayoutResult = await parseDocxPageLayout(file.buffer).catch(() => ({ pageLayout: { ...defaultPageLayout }, warnings: ["页眉页脚结构未能识别，正文已正常导入。"] }));
+    return { content: content || "<p></p>", outline: extractImportedOutline(content), documentType: "Word 文档", ...pageLayoutResult };
   }
   if (extension === "pdf") {
     const result = await pdf(file.buffer);
     if (!result.text?.trim()) {
       throw createPublicError("该 PDF 未识别到可编辑文字，扫描件需要接入 OCR 后才能导入。", 400);
     }
-    return { content: importedTextToHtml(result.text), outline: [], documentType: "PDF 导入" };
+    return { content: importedTextToHtml(result.text), outline: [], documentType: "PDF 导入", pageLayout: { ...defaultPageLayout }, warnings: [] };
   }
   throw createPublicError("仅支持导入 .docx 和文字型 .pdf 文件。", 400);
 }
@@ -1213,7 +1278,25 @@ function createDocxStyles(templateStyle = {}) {
   };
 }
 
-async function createDocxBuffer({ title, content, templateStyle = null }) {
+function createDocxHeaderFooter(pageLayout, templateStyle = {}) {
+  const layout = normalizePageLayout(pageLayout);
+  const runStyle = { font: templateStyle.fontFamily || "Microsoft YaHei", size: 18, color: "6B7280" };
+  // 中文注解：仅在用户启用内容时创建部件，避免空页眉页脚改变 Word 的节结构和版心表现。
+  const headers = layout.headerText
+    ? { default: new Header({ children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: layout.headerText, ...runStyle })] })] }) }
+    : undefined;
+  const footerChildren = [];
+  if (layout.footerText) footerChildren.push(layout.footerText);
+  if (layout.footerText && layout.pageNumberEnabled) footerChildren.push(" · ");
+  if (layout.pageNumberEnabled) footerChildren.push("第 ", PageNumber.CURRENT, " 页 / 共 ", PageNumber.TOTAL_PAGES, " 页");
+  const footers = footerChildren.length
+    ? { default: new Footer({ children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ children: footerChildren, ...runStyle })] })] }) }
+    : undefined;
+  return { headers, footers };
+}
+
+async function createDocxBuffer({ title, content, templateStyle = null, pageLayout = null }) {
+  const headerFooter = createDocxHeaderFooter(pageLayout, templateStyle || {});
   const document = new Document({
     styles: createDocxStyles(templateStyle || {}),
     numbering: {
@@ -1233,6 +1316,8 @@ async function createDocxBuffer({ title, content, templateStyle = null }) {
     },
     sections: [
       {
+        ...(headerFooter.headers ? { headers: headerFooter.headers } : {}),
+        ...(headerFooter.footers ? { footers: headerFooter.footers } : {}),
         properties: {
           page: {
             size: { width: docxPage.widthTwip, height: docxPage.heightTwip },
@@ -1290,6 +1375,7 @@ function toDocument(row) {
     templateId: row.template_id == null ? null : Number(row.template_id),
     outline: parseJson(row.outline_json, []),
     content: row.content || "",
+    pageLayout: normalizePageLayout(parseJson(row.page_layout_json, defaultPageLayout)),
     status: row.status,
     wordCount: row.word_count,
     lastOpenedAt: row.last_opened_at,
@@ -1401,15 +1487,15 @@ async function ensureDb() {
   return dbPool;
 }
 
-async function createDocumentVersion(connection, documentId, outline, content, versionNote = "手动保存") {
+async function createDocumentVersion(connection, documentId, outline, content, pageLayout, versionNote = "手动保存") {
   const [[versionRow]] = await connection.query(
     "SELECT COALESCE(MAX(version_no), 0) + 1 AS next_version FROM document_versions WHERE document_id = ?",
     [documentId]
   );
 
   await connection.query(
-    "INSERT INTO document_versions (document_id, version_no, outline_json, content, version_note) VALUES (?, ?, ?, ?, ?)",
-    [documentId, versionRow.next_version, jsonString(outline || []), content || "", versionNote]
+    "INSERT INTO document_versions (document_id, version_no, outline_json, content, page_layout_json, version_note) VALUES (?, ?, ?, ?, ?, ?)",
+    [documentId, versionRow.next_version, jsonString(outline || []), content || "", jsonString(normalizePageLayout(pageLayout)), versionNote]
   );
 }
 
@@ -2051,7 +2137,7 @@ app.get("/api/documents", async (request, response) => {
     const pool = await ensureDb();
     const currentUser = await getCurrentUser(request);
     const [rows] = await pool.query(
-      `SELECT id, user_id, title, document_type, tone, template_id, outline_json, content, status,
+      `SELECT id, user_id, title, document_type, tone, template_id, outline_json, content, page_layout_json, status,
         word_count, last_opened_at, created_at, updated_at
        FROM documents
        WHERE user_id = ? AND status <> 'deleted'
@@ -2076,9 +2162,9 @@ app.post("/api/documents/import", authenticateDocumentImport, receiveImportedDoc
     const title = request.file.originalname.replace(/\.(docx?|pdf)$/i, "").trim() || "导入文档";
     const [result] = await pool.query(
       `INSERT INTO documents
-        (user_id, title, document_type, tone, outline_json, content, status, word_count, last_opened_at)
-       VALUES (?, ?, ?, '正式', ?, ?, 'draft', ?, NOW())`,
-      [currentUser.userId, title, imported.documentType, jsonString(imported.outline), imported.content, countWords(imported.content)]
+        (user_id, title, document_type, tone, outline_json, content, page_layout_json, status, word_count, last_opened_at)
+       VALUES (?, ?, ?, '正式', ?, ?, ?, 'draft', ?, NOW())`,
+      [currentUser.userId, title, imported.documentType, jsonString(imported.outline), imported.content, jsonString(imported.pageLayout), countWords(imported.content)]
     );
 
     let sourceStored = false;
@@ -2109,14 +2195,14 @@ app.post("/api/documents/import", authenticateDocumentImport, receiveImportedDoc
     }
 
     const [[row]] = await pool.query("SELECT * FROM documents WHERE id = ? AND user_id = ?", [result.insertId, currentUser.userId]);
-    response.status(201).json({ document: toDocument(row), sourceStored });
+    response.status(201).json({ document: toDocument(row), sourceStored, warnings: imported.warnings || [] });
   } catch (error) {
     sendError(response, error, error?.httpStatus || 500, "文档导入失败，请检查文件格式后重试。");
   }
 });
 
 app.post("/api/documents", async (request, response) => {
-  const { title, documentType, tone, templateId, outline, content } = request.body;
+  const { title, documentType, tone, templateId, outline, content, pageLayout } = request.body;
 
   try {
     const pool = await ensureDb();
@@ -2124,8 +2210,8 @@ app.post("/api/documents", async (request, response) => {
     const normalizedTemplateId = await normalizeActiveTemplateId(pool, templateId);
     const [result] = await pool.query(
       `INSERT INTO documents
-        (user_id, title, document_type, tone, template_id, outline_json, content, status, word_count, last_opened_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, NOW())`,
+        (user_id, title, document_type, tone, template_id, outline_json, content, page_layout_json, status, word_count, last_opened_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, NOW())`,
       [
         currentUser.userId,
         title || "未命名文档",
@@ -2134,6 +2220,7 @@ app.post("/api/documents", async (request, response) => {
         normalizedTemplateId,
         jsonString(outline || []),
         content || "",
+        jsonString(normalizePageLayout(pageLayout)),
         countWords(content || "")
       ]
     );
@@ -2168,7 +2255,7 @@ app.get("/api/documents/:id", async (request, response) => {
 });
 
 app.patch("/api/documents/:id", async (request, response) => {
-  const { title, documentType, tone, templateId, outline, content, status, saveVersion, versionNote } = request.body;
+  const { title, documentType, tone, templateId, outline, content, pageLayout, status, saveVersion, versionNote } = request.body;
 
   let connection;
   try {
@@ -2190,6 +2277,8 @@ app.patch("/api/documents/:id", async (request, response) => {
 
     const nextOutline = outline ?? parseJson(current.outline_json, []);
     const nextContent = content ?? current.content ?? "";
+    const currentPageLayout = normalizePageLayout(parseJson(current.page_layout_json, defaultPageLayout));
+    const nextPageLayout = pageLayout === undefined ? currentPageLayout : normalizePageLayout(pageLayout, currentPageLayout);
     // 中文注解：未传 templateId 时保留原绑定，显式传 null 时恢复默认版式。
     const nextTemplateId = templateId === undefined
       ? current.template_id
@@ -2198,7 +2287,7 @@ app.patch("/api/documents/:id", async (request, response) => {
     await connection.query(
       `UPDATE documents
        SET title = ?, document_type = ?, tone = ?, template_id = ?, outline_json = ?, content = ?,
-         status = ?, word_count = ?, updated_at = NOW()
+         page_layout_json = ?, status = ?, word_count = ?, updated_at = NOW()
        WHERE id = ? AND user_id = ?`,
       [
         title ?? current.title,
@@ -2207,6 +2296,7 @@ app.patch("/api/documents/:id", async (request, response) => {
         nextTemplateId,
         jsonString(nextOutline),
         nextContent,
+        jsonString(nextPageLayout),
         status ?? current.status,
         countWords(nextContent),
         request.params.id,
@@ -2215,7 +2305,7 @@ app.patch("/api/documents/:id", async (request, response) => {
     );
 
     if (saveVersion) {
-      await createDocumentVersion(connection, request.params.id, nextOutline, nextContent, versionNote || "手动保存");
+      await createDocumentVersion(connection, request.params.id, nextOutline, nextContent, nextPageLayout, versionNote || "手动保存");
     }
 
     const [[row]] = await connection.query("SELECT * FROM documents WHERE id = ? AND user_id = ?", [request.params.id, currentUser.userId]);
@@ -2260,8 +2350,8 @@ app.post("/api/documents/:id/duplicate", async (request, response) => {
 
     const [result] = await pool.query(
       `INSERT INTO documents
-        (user_id, title, document_type, tone, template_id, outline_json, content, status, word_count, last_opened_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, NOW())`,
+        (user_id, title, document_type, tone, template_id, outline_json, content, page_layout_json, status, word_count, last_opened_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, NOW())`,
       [
         currentUser.userId,
         `${source.title} 副本`,
@@ -2271,6 +2361,7 @@ app.post("/api/documents/:id/duplicate", async (request, response) => {
         // 中文注解：MySQL JSON 可能已经被解析成对象，复制前统一重新序列化。
         jsonString(parseJson(source.outline_json, [])),
         source.content,
+        jsonString(normalizePageLayout(parseJson(source.page_layout_json, defaultPageLayout))),
         source.word_count
       ]
     );
@@ -2305,7 +2396,8 @@ app.post("/api/documents/:id/export-docx", async (request, response) => {
     const exportContent = typeof content === "string" ? content : documentRow.content || "";
     // 中文注解：导出只读取文档已保存的模板绑定，防止浏览器状态与服务端版式不一致。
     const templateStyle = await readTemplateStyle(pool, storage, documentRow.template_id);
-    const buffer = await createDocxBuffer({ title: documentRow.title, content: exportContent, templateStyle });
+    const pageLayout = normalizePageLayout(parseJson(documentRow.page_layout_json, defaultPageLayout));
+    const buffer = await createDocxBuffer({ title: documentRow.title, content: exportContent, templateStyle, pageLayout });
     const exportedAt = new Date();
     const baseName = safeFileName(documentRow.title);
     const fileName = `${baseName}-${exportedAt.getTime()}.docx`;

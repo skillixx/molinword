@@ -16,6 +16,8 @@ async function buildFormattedDocxFixture() {
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
   <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
+  <Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
+  <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
 </Types>`
   );
   zip.folder("_rels").file(
@@ -30,8 +32,12 @@ async function buildFormattedDocxFixture() {
     `<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rIdImage1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/>
+  <Relationship Id="rIdHeader1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>
+  <Relationship Id="rIdFooter1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>
 </Relationships>`
   );
+  zip.folder("word").file("header1.xml", `<?xml version="1.0" encoding="UTF-8"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>导入页眉</w:t></w:r></w:p></w:hdr>`);
+  zip.folder("word").file("footer1.xml", `<?xml version="1.0" encoding="UTF-8"?><w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>导入页脚 · 第 </w:t><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="end"/><w:t> 页 / 共 </w:t><w:fldChar w:fldCharType="begin"/><w:instrText>NUMPAGES</w:instrText><w:fldChar w:fldCharType="end"/><w:t> 页</w:t></w:r></w:p></w:ftr>`);
   zip.folder("word").folder("media").file("image1.png", tinyPngBase64, { base64: true });
   zip.folder("word").file(
     "numbering.xml",
@@ -152,6 +158,7 @@ async function buildFormattedDocxFixture() {
         </w:drawing>
       </w:r>
     </w:p>
+    <w:sectPr><w:headerReference w:type="default" r:id="rIdHeader1"/><w:footerReference w:type="default" r:id="rIdFooter1"/></w:sectPr>
   </w:body>
 </w:document>`
   );
@@ -165,6 +172,19 @@ const imported = await parseImportedDocument({
   mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   size: buffer.length
 });
+
+const complexLayoutZip = await JSZip.loadAsync(buffer);
+const complexHeaderXml = await complexLayoutZip.file("word/header1.xml")?.async("string") || "";
+complexLayoutZip.file("word/header1.xml", complexHeaderXml.replace("<w:r>", "<w:r><w:rPr><w:b/></w:rPr>"));
+const complexLayoutBuffer = await complexLayoutZip.generateAsync({ type: "nodebuffer" });
+const complexLayoutImported = await parseImportedDocument({
+  originalname: "complex-header-fixture.docx",
+  buffer: complexLayoutBuffer,
+  mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  size: complexLayoutBuffer.length
+});
+// 中文注解：当前模型无法完整承载多节和富格式页眉时必须明确提示，不能静默宣称完全恢复。
+assert.match(complexLayoutImported.warnings.join(" "), /复杂页眉页脚/);
 
 // 中文注解：这个检查覆盖用户反馈的核心症状，导入后段落、字体、表格和图片不能被洗掉。
 assert.match(imported.content, /text-align:\s*center/);
@@ -191,6 +211,7 @@ assert.match(imported.content, /<ol><li>Ordered item 1<ol><li>Nested ordered ite
 assert.match(imported.content, /<ul><li>Bullet item<\/li><\/ul>/);
 assert.match(imported.content, /<ol><li>Override ordered item<\/li><\/ol><ol><li>Restart ordered item<\/li><\/ol>/);
 assert.match(imported.content, /<td><p[^>]*>Import Cell 1<\/p><ol><li>Table ordered item<\/li><\/ol><\/td>/);
+assert.deepEqual(imported.pageLayout, { headerText: "导入页眉", footerText: "导入页脚", pageNumberEnabled: true });
 
 const inheritedParagraph = imported.content.match(/<p[^>]*>Inherited spacing<\/p>/)?.[0] || "";
 assert.match(inheritedParagraph, /line-height:\s*1\.15/);
@@ -200,7 +221,7 @@ const atLeastParagraph = imported.content.match(/<p[^>]*>At least spacing<\/p>/)
 assert.match(atLeastParagraph, /line-height:\s*18pt/);
 assert.match(atLeastParagraph, /--word-line-rule:\s*atLeast/);
 
-const roundTripBuffer = await createDocxBuffer({ title: "Spacing round trip", content: imported.content });
+const roundTripBuffer = await createDocxBuffer({ title: "Spacing round trip", content: imported.content, pageLayout: imported.pageLayout });
 const roundTripZip = await JSZip.loadAsync(roundTripBuffer);
 const roundTripXml = await roundTripZip.file("word/document.xml")?.async("string") || "";
 const decoratedRoundTripXml = (roundTripXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || [])
@@ -216,6 +237,7 @@ const roundTripImported = await parseImportedDocument({
 });
 // 中文注解：docx 会写出 b=false 等显式关闭标记，再导入时不能把未加粗文本误判成粗体。
 assert.match(roundTripImported.content, /<s><em><u>斜体下划线删除线文本<\/u><\/em><\/s>/);
+assert.deepEqual(roundTripImported.pageLayout, imported.pageLayout);
 const atLeastRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || [])
   .find((paragraph) => paragraph.includes(">At least spacing</w:t>")) || "";
 // 中文注解：最小行距往返后仍必须是 atLeast，避免大字号文字被固定行高裁切并改变分页。

@@ -786,6 +786,85 @@ textarea {
   min-height: 59px;
 }
 
+.page-layout-menu {
+  position: relative;
+  z-index: 8;
+}
+
+.page-layout-menu summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid #cfd8e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #24313c;
+  cursor: pointer;
+  list-style: none;
+  font-size: 13px;
+}
+
+.page-layout-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.page-layout-menu[open] summary {
+  border-color: #2e7d6f;
+  background: #e8f3f0;
+  color: #17594f;
+}
+
+.page-layout-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: grid;
+  width: 280px;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #cfd8e1;
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow: 0 10px 24px rgba(23, 33, 43, 0.16);
+}
+
+.page-layout-popover label:not(.page-number-toggle) {
+  display: grid;
+  gap: 5px;
+  color: #53616d;
+  font-size: 12px;
+}
+
+.page-layout-popover input[type="text"] {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  border: 1px solid #cfd8e1;
+  border-radius: 4px;
+  padding: 0 9px;
+  color: #17212b;
+  font: inherit;
+}
+
+.page-number-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #24313c;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.page-number-toggle input {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+}
+
 .editor-scroll {
   flex: 1;
   min-height: 0;
@@ -858,16 +937,30 @@ textarea {
   margin: 96px;
 }
 
-.page-number {
+.page-header,
+.page-footer {
   position: absolute;
   left: 96px;
   right: 96px;
-  bottom: 34px;
-  border-top: 1px solid #edf1f4;
-  padding-top: 10px;
   color: #87929d;
   text-align: center;
+  font-family: var(--document-font-family, "Microsoft YaHei"), sans-serif;
   font-size: 12px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-header {
+  top: 34px;
+}
+
+.page-footer {
+  bottom: 34px;
+  display: flex;
+  justify-content: center;
+  gap: 6px;
 }
 
 .page-block {

@@ -36,16 +36,24 @@ const content = `
   <img src="data:image/png;base64,${tinyPngBase64}" style="width:120px;max-width:100%;height:auto" alt="export image" />
 `;
 
-const buffer = await createDocxBuffer({ title: "导出格式保持测试", content });
+const buffer = await createDocxBuffer({
+  title: "导出格式保持测试",
+  content,
+  pageLayout: { headerText: "导出页眉", footerText: "导出页脚", pageNumberEnabled: true }
+});
 const zip = await JSZip.loadAsync(buffer);
 const documentXml = await zip.file("word/document.xml")?.async("string");
 const relationshipsXml = await zip.file("word/_rels/document.xml.rels")?.async("string");
 const numberingXml = await zip.file("word/numbering.xml")?.async("string");
+const headerXml = await zip.file("word/header1.xml")?.async("string");
+const footerXml = await zip.file("word/footer1.xml")?.async("string");
 const mediaFiles = zip.file(/^word\/media\/.+\.(?:png|jpe?g|gif|webp)$/i);
 
 assert.ok(documentXml, "document.xml should exist");
 assert.ok(relationshipsXml, "document relationships should exist");
 assert.ok(numberingXml, "numbering.xml should exist");
+assert.ok(headerXml, "header.xml should exist");
+assert.ok(footerXml, "footer.xml should exist");
 
 // 中文注解：直接检查 DOCX XML，确保在线编辑样式没有在 HTML -> Word 转换中被抹掉。
 assert.match(documentXml, /<w:jc w:val="center"\/>/);
@@ -67,6 +75,10 @@ assert.match(documentXml, /<w:br w:type="page"\/>/);
 // 中文注解：在线纸张固定使用 A4 和 1 英寸页边距，导出结构必须保持同一可用内容区域。
 assert.match(documentXml, /<w:pgSz[^>]+w:w="11906"[^>]+w:h="16838"/);
 assert.match(documentXml, /<w:pgMar[^>]+w:top="1440"[^>]+w:right="1440"[^>]+w:bottom="1440"[^>]+w:left="1440"/);
+assert.match(headerXml, /导出页眉/);
+assert.match(footerXml, /导出页脚/);
+assert.match(footerXml, /<w:instrText[^>]*>PAGE<\/w:instrText>/);
+assert.match(footerXml, /<w:instrText[^>]*>NUMPAGES<\/w:instrText>/);
 
 function paragraphXmlForText(text) {
   return (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || [])

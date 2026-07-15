@@ -60,6 +60,8 @@ type EditorViewMode = "edit" | "page";
 type ParagraphSpacingProperty = "line-height" | "margin-top" | "margin-bottom" | "--word-line-rule";
 type ParagraphSpacingStyles = Partial<Record<ParagraphSpacingProperty, string>>;
 type FormatSelectOption = { label: string; value: string };
+type DocumentPageLayout = { headerText: string; footerText: string; pageNumberEnabled: boolean };
+const defaultDocumentPageLayout: DocumentPageLayout = { headerText: "", footerText: "", pageNumberEnabled: false };
 
 type RecentDocument = {
   id: number;
@@ -77,6 +79,7 @@ type ApiDocument = {
   templateId: number | null;
   outline: string[];
   content: string;
+  pageLayout: DocumentPageLayout;
   wordCount: number;
   updatedAt: string;
 };
@@ -760,6 +763,7 @@ function App() {
   const [pointsRefreshing, setPointsRefreshing] = React.useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = React.useState(false);
   const [isOutlineCollapsed, setIsOutlineCollapsed] = React.useState(false);
+  const [pageLayout, setPageLayout] = React.useState<DocumentPageLayout>({ ...defaultDocumentPageLayout });
   const saveQueueRef = React.useRef<Promise<unknown>>(Promise.resolve());
 
   const loadSession = React.useCallback(async () => {
@@ -898,7 +902,7 @@ function App() {
       const response = await fetch("/api/documents", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...payload, templateId: selectedTemplate?.id ?? null })
+        body: JSON.stringify({ ...payload, templateId: selectedTemplate?.id ?? null, pageLayout: defaultDocumentPageLayout })
       });
       const result = await readApiJson(response);
       return result.document as ApiDocument;
@@ -930,6 +934,7 @@ function App() {
       setCurrentDocumentId(created.id);
       setCurrentTitle(created.title);
       setContent(created.content || plainTextToHtml(defaultContent));
+      setPageLayout(created.pageLayout || { ...defaultDocumentPageLayout });
       setSaveStatus("已创建");
       await loadRecentDocuments();
     }
@@ -953,6 +958,7 @@ function App() {
               templateId: selectedTemplate?.id ?? null,
               outline: outline.map((item) => item.title),
               content: options.content ?? content,
+              pageLayout,
               saveVersion: options.saveVersion ?? false,
               versionNote: options.versionNote
             })
@@ -972,7 +978,7 @@ function App() {
       saveQueueRef.current = request.then(() => undefined, () => undefined);
       return request;
     },
-    [content, currentDocumentId, currentTitle, loadRecentDocuments, outline, selectedTemplate, selectedType, tone]
+    [content, currentDocumentId, currentTitle, loadRecentDocuments, outline, pageLayout, selectedTemplate, selectedType, tone]
   );
 
   React.useEffect(() => {
@@ -1059,6 +1065,7 @@ function App() {
       setTone(document.tone);
       setOutline(toOutlineItems(document.outline || []));
       setContent(document.content || "<p></p>");
+      setPageLayout(document.pageLayout || { ...defaultDocumentPageLayout });
       setSelectedTemplate(documentTemplate);
       setActivePanel("editor");
       setSaveStatus("已打开");
@@ -1080,7 +1087,11 @@ function App() {
       const result = await readApiJson(response);
       await loadRecentDocuments();
       const opened = await openDocument((result.document as ApiDocument).id);
-      if (opened && !result.sourceStored) setAiError("文档已成功导入；原文件暂未归档到 MinIO，不影响编辑。");
+      if (opened) {
+        const messages = Array.isArray(result.warnings) ? result.warnings.filter(Boolean) : [];
+        if (!result.sourceStored) messages.push("原文件暂未归档到 MinIO，不影响编辑。");
+        if (messages.length) setAiError(messages.join(" "));
+      }
     } catch (error) {
       setAiError(error instanceof Error ? error.message : "文档导入失败");
     } finally {
@@ -1120,6 +1131,7 @@ function App() {
       setCurrentDocumentId(null);
       setCurrentTitle("AI Word 文档助手本地开发方案");
       setContent(plainTextToHtml(defaultContent));
+      setPageLayout({ ...defaultDocumentPageLayout });
       setOutline(defaultOutline);
       setSelectedTemplate(null);
       setActivePanel("workspace");
@@ -1182,6 +1194,7 @@ function App() {
     setRequirement(template.requirement);
     setOutline(toOutlineItems(template.outline));
     setContent(plainTextToHtml(`${template.topic}\n\n${template.outline.map((item) => `${item}\n请在此补充内容。`).join("\n\n")}`));
+    setPageLayout({ ...defaultDocumentPageLayout });
     setCurrentTitle(template.topic);
     setCurrentDocumentId(null);
     setSaveStatus("未保存");
@@ -1243,6 +1256,8 @@ function App() {
         <Editor
           outline={outline}
           content={content}
+          pageLayout={pageLayout}
+          setPageLayout={setPageLayout}
           setContent={setContent}
           setOutline={setOutline}
           generateBody={generateBody}
@@ -1439,6 +1454,8 @@ function TemplateLibrary(props: { applyTemplate: (template: TemplateItem) => voi
 function Editor(props: {
   outline: OutlineItem[];
   content: string;
+  pageLayout: DocumentPageLayout;
+  setPageLayout: React.Dispatch<React.SetStateAction<DocumentPageLayout>>;
   setContent: (value: string) => void;
   setOutline: (value: OutlineItem[]) => void;
   generateBody: () => void;
@@ -1931,6 +1948,14 @@ function Editor(props: {
               <button className={viewMode === "edit" ? "active-format" : ""} onClick={() => setViewMode("edit")} title="切换到可编辑的 A4 视图">编辑</button>
               <button className={viewMode === "page" ? "active-format" : ""} onClick={() => setViewMode("page")} title="按导出 Word 的页面尺寸预览分页">分页</button>
             </div>
+            <details className="page-layout-menu">
+              <summary title="设置页眉、页脚和页码"><FileText size={16} />页面设置</summary>
+              <div className="page-layout-popover">
+                <label>页眉<input type="text" aria-label="页眉文字" maxLength={500} value={props.pageLayout.headerText} onChange={(event) => props.setPageLayout((current) => ({ ...current, headerText: event.target.value }))} /></label>
+                <label>页脚<input type="text" aria-label="页脚文字" maxLength={500} value={props.pageLayout.footerText} onChange={(event) => props.setPageLayout((current) => ({ ...current, footerText: event.target.value }))} /></label>
+                <label className="page-number-toggle"><input type="checkbox" checked={props.pageLayout.pageNumberEnabled} onChange={(event) => props.setPageLayout((current) => ({ ...current, pageNumberEnabled: event.target.checked }))} />显示页码</label>
+              </div>
+            </details>
             {viewMode === "edit" ? <>
             <button onClick={() => editor?.chain().focus().undo().run()} disabled={!editor?.can().undo()} title="撤销" aria-label="撤销"><Undo2 size={16} /></button>
             <button onClick={() => editor?.chain().focus().redo().run()} disabled={!editor?.can().redo()} title="重做" aria-label="重做"><Redo2 size={16} /></button>
@@ -2004,10 +2029,15 @@ function Editor(props: {
               <div className="paged-preview" aria-label="分页预览">
                 {previewPages.map((page, index) => (
                   <article className="page-sheet" key={index}>
+                    {props.pageLayout.headerText ? <div className="page-header">{props.pageLayout.headerText}</div> : null}
                     <div className="page-body">
                       {page.map((html, blockIndex) => <div className="page-block" key={`${index}-${blockIndex}`} dangerouslySetInnerHTML={{ __html: html }} />)}
                     </div>
-                    <div className="page-number">第 {index + 1} 页 / 共 {previewPages.length} 页</div>
+                    {props.pageLayout.footerText || props.pageLayout.pageNumberEnabled ? <div className="page-footer">
+                      {props.pageLayout.footerText ? <span>{props.pageLayout.footerText}</span> : null}
+                      {props.pageLayout.footerText && props.pageLayout.pageNumberEnabled ? <span aria-hidden="true">·</span> : null}
+                      {props.pageLayout.pageNumberEnabled ? <span>第 {index + 1} 页 / 共 {previewPages.length} 页</span> : null}
+                    </div> : null}
                   </article>
                 ))}
               </div>

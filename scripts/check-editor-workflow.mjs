@@ -18,6 +18,7 @@ const fixtureDocument = {
   templateId: 3,
   outline: ["超长结构分页"],
   content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table>`,
+  pageLayout: { headerText: "", footerText: "", pageNumberEnabled: false },
   status: "draft",
   wordCount: listText.length + cellA.length + cellB.length,
   updatedAt: new Date().toISOString()
@@ -83,7 +84,7 @@ async function apiResponse(request, response) {
   if (request.method === "POST" && url.pathname === `/api/documents/${fixtureDocument.id}/export-docx`) {
     const body = await readJsonBody(request);
     const content = typeof body.content === "string" ? body.content : storedDocument.content;
-    exportedDocxBuffer = await createDocxBuffer({ title: storedDocument.title, content, templateStyle: fixtureWordStyle });
+    exportedDocxBuffer = await createDocxBuffer({ title: storedDocument.title, content, templateStyle: fixtureWordStyle, pageLayout: storedDocument.pageLayout });
     sendJson(response, { file: { id: 1, documentId: storedDocument.id, fileName: "editor-parity.docx", fileType: "docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", fileSize: exportedDocxBuffer.length, downloadUrl: "/api/files/1/download" } }, 201);
     return true;
   }
@@ -190,6 +191,12 @@ try {
   await page.locator('label[title="设置当前段落样式"] select').selectOption("heading-2");
   assert.match(await editor.innerHTML(), /<h2[^>]*>.*保留小号红字.*<\/h2>/);
 
+  await page.getByText("页面设置", { exact: true }).click();
+  await page.getByLabel("页眉文字", { exact: true }).fill("西部教育资源云平台项目");
+  await page.getByLabel("页脚文字", { exact: true }).fill("内部办公文档");
+  await page.getByLabel("显示页码", { exact: true }).check();
+  await page.getByText("页面设置", { exact: true }).click();
+
   const manualSaveCountBeforeShortcut = manualSaveRequestCount;
   await page.keyboard.press("Control+S");
   await page.keyboard.press("Control+S");
@@ -199,6 +206,7 @@ try {
   assert.match(storedDocument.content, /<h2[^>]*>.*保留小号红字.*<\/h2>/);
   assert.match(storedDocument.content, /font-family:\s*SimSun/);
   assert.match(storedDocument.content, /font-size:\s*12pt/);
+  assert.deepEqual(storedDocument.pageLayout, { headerText: "西部教育资源云平台项目", footerText: "内部办公文档", pageNumberEnabled: true });
 
   await page.reload({ waitUntil: "networkidle" });
   await page.getByText(storedDocument.title, { exact: true }).click();
@@ -220,7 +228,14 @@ try {
   const downloadedBuffer = await readFile(downloadedPath);
   const archive = await JSZip.loadAsync(downloadedBuffer);
   const documentXml = await archive.file("word/document.xml")?.async("string");
+  const headerXml = await archive.file("word/header1.xml")?.async("string");
+  const footerXml = await archive.file("word/footer1.xml")?.async("string");
   assert.ok(documentXml, "导出的 DOCX 应包含 document.xml");
+  assert.ok(headerXml && footerXml, "导出的 DOCX 应包含页眉和页脚部件");
+  assert.match(headerXml, /西部教育资源云平台项目/);
+  assert.match(footerXml, /内部办公文档/);
+  assert.match(footerXml, /<w:instrText[^>]*>PAGE<\/w:instrText>/);
+  assert.match(footerXml, /<w:instrText[^>]*>NUMPAGES<\/w:instrText>/);
   // 中文注解：检查在线编辑后的具体文字，证明保存、重开和导出使用的是同一份格式数据。
   const paragraphs = documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || [];
   const headingParagraph = paragraphs.find((paragraph) => paragraph.includes(">保留小号红字</w:t>"));
@@ -273,7 +288,9 @@ try {
       previewTableImageCount: document.querySelectorAll(".page-body table img").length,
       templateLabelVisible: document.body.textContent?.includes("模板样式：商业计划书") || false,
       fontVariable: getComputedStyle(document.querySelector(".editor-scroll")).getPropertyValue("--document-font-family").trim(),
-      lineVariable: getComputedStyle(document.querySelector(".editor-scroll")).getPropertyValue("--document-line-height").trim()
+      lineVariable: getComputedStyle(document.querySelector(".editor-scroll")).getPropertyValue("--document-line-height").trim(),
+      headerTexts: Array.from(document.querySelectorAll(".page-header")).map((item) => item.textContent || ""),
+      footerTexts: Array.from(document.querySelectorAll(".page-footer")).map((item) => item.textContent || "")
     };
   });
 
@@ -295,6 +312,10 @@ try {
   assert.equal(result.templateLabelVisible, true);
   assert.equal(result.fontVariable, '"SimSun"');
   assert.equal(result.lineVariable, "1.5833");
+  assert.equal(result.headerTexts.length, result.pageCount);
+  assert.ok(result.headerTexts.every((text) => text === "西部教育资源云平台项目"));
+  assert.equal(result.footerTexts.length, result.pageCount);
+  assert.ok(result.footerTexts.every((text, index) => text.includes("内部办公文档") && text.includes(`第 ${index + 1} 页 / 共 ${result.pageCount} 页`)));
   assert.equal(maxConcurrentSaveRequestCount, 1);
 
   const desktopNavigation = await page.evaluate(() => {

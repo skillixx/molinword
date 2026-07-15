@@ -141,6 +141,9 @@ npm run build
 npm run check:editor-workflow
 npm run check:docx-export-format
 npm run check:docx-import-format
+npm run db:migrate:document-page-layout
 ```
 
-`check:editor-workflow` 会启动自包含的浏览器测试，验证常用格式编辑、快捷键保存、防并发保存、刷新重开、DOCX 下载与格式一致性，以及 A4 分页、超长结构、模板样式、移动端宽度和长文档固定菜单。原 `check:editor-pagination` 命令保留为兼容别名。
+`check:editor-workflow` 会启动自包含的浏览器测试，验证常用格式编辑、页眉页脚页码、快捷键保存、防并发保存、刷新重开、DOCX 下载与格式一致性，以及 A4 分页、超长结构、模板样式、移动端宽度和长文档固定菜单。原 `check:editor-pagination` 命令保留为兼容别名。
+
+历史数据库首次升级到页面设置功能时运行 `db:migrate:document-page-layout`；新数据库由 `database/init-mysql.sql` 直接创建对应字段。
