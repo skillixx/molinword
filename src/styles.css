@@ -1231,8 +1231,17 @@ textarea {
 }
 
 .page-body {
-  min-height: var(--page-content-height, 931px);
+  height: var(--page-content-height, 931px);
   margin: var(--page-margin-top, 96px) var(--page-margin-right, 96px) var(--page-margin-bottom, 96px) var(--page-margin-left, 96px);
+  column-count: var(--page-column-count, 1);
+  column-gap: var(--page-column-gap, 48px);
+  column-rule: var(--page-column-rule, none);
+  column-fill: auto;
+  overflow: hidden;
+}
+
+.page-body > .page-block {
+  break-inside: auto;
 }
 
 .page-header,

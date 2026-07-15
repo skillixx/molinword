@@ -51,6 +51,7 @@ const defaultPageLayout = Object.freeze({
   pageNumberStart: null,
   headerDistance: 708,
   footerDistance: 708,
+  columns: Object.freeze({ count: 1, space: 720, separate: false }),
   margins: defaultPageMargins
 });
 
@@ -167,6 +168,14 @@ function normalizePageMargins(value, fallback = defaultPageMargins, orientation 
   return margins;
 }
 
+function normalizePageColumns(value, fallback = defaultPageLayout.columns) {
+  const source = value && typeof value === "object" ? value : {};
+  const base = fallback && typeof fallback === "object" ? fallback : { count: 1, space: 720, separate: false };
+  const count = Math.max(1, Math.min(8, Math.round(Number(source.count ?? base.count) || 1)));
+  const space = Math.max(0, Math.min(7200, Math.round(Number(source.space ?? base.space) || 0)));
+  return { count, space, separate: source.separate === undefined ? Boolean(base.separate) : Boolean(source.separate) };
+}
+
 function normalizePageLayout(value, fallback = defaultPageLayout) {
   const source = value && typeof value === "object" ? value : {};
   const base = fallback && typeof fallback === "object" ? fallback : defaultPageLayout;
@@ -175,6 +184,12 @@ function normalizePageLayout(value, fallback = defaultPageLayout) {
   const pageNumberFormats = ["decimal", "upperRoman", "lowerRoman", "upperLetter", "lowerLetter"];
   const rawPageNumberStart = source.pageNumberStart === undefined ? base.pageNumberStart : source.pageNumberStart;
   const pageNumberStartValue = Number(rawPageNumberStart);
+  const margins = normalizePageMargins(source.margins, base.margins || defaultPageMargins, orientation);
+  const columns = normalizePageColumns(source.columns, base.columns);
+  const pageWidth = orientation === "landscape" ? docxPage.heightTwip : docxPage.widthTwip;
+  const availableWidth = Math.max(720, pageWidth - margins.left - margins.right);
+  const maximumColumnSpace = columns.count > 1 ? Math.max(0, Math.floor((availableWidth - columns.count * 720) / (columns.count - 1))) : columns.space;
+  columns.space = Math.min(columns.space, maximumColumnSpace);
   return {
     ...normalizedDefault,
     firstPageDifferent: source.firstPageDifferent === undefined ? Boolean(base.firstPageDifferent) : Boolean(source.firstPageDifferent),
@@ -186,7 +201,8 @@ function normalizePageLayout(value, fallback = defaultPageLayout) {
     pageNumberStart: rawPageNumberStart === null || rawPageNumberStart === "" || !Number.isFinite(pageNumberStartValue) ? null : Math.max(0, Math.min(Math.round(pageNumberStartValue), 999999)),
     headerDistance: normalizePageMargin(source.headerDistance, normalizePageMargin(base.headerDistance, 708)),
     footerDistance: normalizePageMargin(source.footerDistance, normalizePageMargin(base.footerDistance, 708)),
-    margins: normalizePageMargins(source.margins, base.margins || defaultPageMargins, orientation)
+    columns,
+    margins
   };
 }
 
@@ -1766,6 +1782,10 @@ function parseDocxPageGeometry(section, fallback = defaultPageLayout) {
   const pageNumberType = xmlChild(section, "w:pgNumType");
   const pageNumberFormat = firstValue(pageNumberType?.attribs, ["w:fmt", "fmt"]);
   const pageNumberStart = firstValue(pageNumberType?.attribs, ["w:start", "start"]);
+  const columnsNode = xmlChild(section, "w:cols");
+  const customColumns = xmlChildren(columnsNode, "w:col");
+  const columnCountValue = firstValue(columnsNode?.attribs, ["w:num", "num"]);
+  const columnSpaceValue = firstValue(columnsNode?.attribs, ["w:space", "space"]);
   const orientation = explicitOrientation === "landscape" || (!explicitOrientation && width > height)
     ? "landscape"
     : (pageSize ? "portrait" : fallback.orientation);
@@ -1779,6 +1799,13 @@ function parseDocxPageGeometry(section, fallback = defaultPageLayout) {
     pageNumberStart: pageNumberStart === "" ? null : Number(pageNumberStart),
     headerDistance: normalizePageMargin(marginValue("header"), fallback.headerDistance ?? 708),
     footerDistance: normalizePageMargin(marginValue("footer"), fallback.footerDistance ?? 708),
+    columns: normalizePageColumns({
+      count: columnCountValue === "" ? (customColumns.length || fallback.columns?.count) : Number(columnCountValue),
+      space: columnSpaceValue === "" ? fallback.columns?.space : Number(columnSpaceValue),
+      separate: columnsNode
+        ? wordOnOffEnabled(firstValue(columnsNode.attribs, ["w:sep", "sep"]) !== "" ? { attribs: { "w:val": firstValue(columnsNode.attribs, ["w:sep", "sep"]) } } : null)
+        : fallback.columns?.separate
+    }, fallback.columns),
     margins: normalizePageMargins({
       top: marginValue("top"),
       right: marginValue("right"),
@@ -1849,6 +1876,10 @@ async function parseDocxPageLayout(buffer) {
   const hasMixedHeaderFooterStyles = pageParts.some((xml) => docxPartHasMixedTextStyles(xml, styleContext));
   const dynamicFieldInstructions = pageParts.flatMap(docxFieldInstructions);
   const hasFlattenedDynamicFields = dynamicFieldInstructions.some((instruction) => !isPageNumberFieldInstruction(instruction));
+  const hasUnequalColumns = sections.some((section) => {
+    const columns = xmlChild(section, "w:cols");
+    return columns && (firstValue(columns.attribs, ["w:equalWidth", "equalWidth"]) === "0" || xmlChildren(columns, "w:col").length > 0);
+  });
   const warnings = [];
   if (rawSectionBreakTypes.some((type) => !["nextPage", "continuous", "oddPage", "evenPage"].includes(type))) {
     warnings.push("文档包含暂不支持的分栏分节符，已按下一页分节符恢复；其他分节类型已保留。");
@@ -1858,6 +1889,7 @@ async function parseDocxPageLayout(buffer) {
   }
   if (hasUnsupportedHeaderFooter || hasMixedHeaderFooterStyles) warnings.push("页眉页脚中的浮动对象、表格、混合字符样式或高级格式暂未完整恢复；内联图片、多段落、基础字体、字号、颜色、加粗、斜体、对齐和页码已保留。");
   if (hasFlattenedDynamicFields) warnings.push("页眉页脚中的日期、文件名或其他动态域已按当前显示值恢复为普通文字，再次导出后不会自动更新。");
+  if (hasUnequalColumns) warnings.push("文档包含不等宽自定义分栏；分栏数量、栏间距和分隔线已保留，在线预览暂按等宽栏显示。");
   // 中文注解：首节保存在文档页面设置中，后续节由正文分节节点携带，编辑、预览和再次导出共用同一顺序。
   return {
     pageLayout: sectionLayouts[0] || normalizePageLayout(defaultPageLayout),
@@ -2738,6 +2770,7 @@ function createDocxSectionProperties(pageLayout, isFirstSection, breakType = "ne
   return {
     ...(!isFirstSection ? { type: sectionTypes[normalizeSectionBreakType(breakType)] } : {}),
     titlePage: layout.firstPageDifferent,
+    column: { count: layout.columns.count, space: layout.columns.space, separate: layout.columns.separate, equalWidth: true },
     page: {
       size: {
         width: docxPage.widthTwip,

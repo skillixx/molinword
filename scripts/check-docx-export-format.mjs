@@ -59,7 +59,8 @@ const buffer = await createDocxBuffer({
     oddEvenDifferent: true,
     evenPage: { headerText: "偶数页眉", footerText: "偶数页脚", pageNumberEnabled: true },
     headerDistance: 480,
-    footerDistance: 840
+    footerDistance: 840,
+    columns: { count: 2, space: 720, separate: true }
   }
 });
 const zip = await JSZip.loadAsync(buffer);
@@ -168,6 +169,7 @@ assert.match(documentXml, /<w:br w:type="page"\/>/);
 assert.match(documentXml, /<w:pgSz[^>]+w:w="11906"[^>]+w:h="16838"/);
 assert.match(documentXml, /<w:pgMar[^>]+w:top="1440"[^>]+w:right="1440"[^>]+w:bottom="1440"[^>]+w:left="1440"/);
 assert.match(documentXml, /<w:pgMar[^>]+w:header="480"[^>]+w:footer="840"/);
+assert.match(documentXml, /<w:cols[^>]+w:space="720"[^>]+w:num="2"[^>]+w:sep="true"[^>]+w:equalWidth="true"/);
 assert.match(documentXml, /<w:headerReference w:type="first"/);
 assert.match(documentXml, /<w:headerReference w:type="even"/);
 assert.match(documentXml, /<w:titlePg\/>/);
@@ -301,6 +303,7 @@ const secondSectionLayout = {
   oddEvenDifferent: false,
   evenPage: { headerText: "", footerText: "", pageNumberEnabled: false },
   orientation: "landscape",
+  columns: { count: 3, space: 360, separate: true },
   margins: { top: 720, right: 900, bottom: 720, left: 900 }
 };
 const sectionLayoutAttribute = JSON.stringify(secondSectionLayout)
@@ -329,6 +332,8 @@ assert.equal((sectionDocumentXml.match(/<w:sectPr(?:\s|>)/g) || []).length, 2);
 assert.match(sectionDocumentXml, /<w:type w:val="nextPage"\/>/);
 assert.match(sectionDocumentXml, /<w:pgSz[^>]+w:w="16838"[^>]+w:h="11906"[^>]+w:orient="landscape"/);
 assert.match(sectionDocumentXml, /<w:pgMar[^>]+w:top="720"[^>]+w:right="900"[^>]+w:bottom="720"[^>]+w:left="900"/);
+const landscapeSectionXml = (sectionDocumentXml.match(/<w:sectPr>[\s\S]*?<\/w:sectPr>/g) || []).find((section) => /w:orient="landscape"/.test(section)) || "";
+assert.match(landscapeSectionXml, /<w:cols[^>]+w:space="360"[^>]+w:num="3"[^>]+w:sep="true"[^>]+w:equalWidth="true"/);
 assert.ok(sectionHeaders.some((xml) => xml.includes("Portrait section header")));
 assert.ok(sectionHeaders.some((xml) => xml.includes("Landscape section header")));
 // 中文注解：奇偶页开关是文档级，第二节关闭差异时仍需显式生成与默认页相同的偶数页部件，阻断前节继承。

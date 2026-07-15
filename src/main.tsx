@@ -198,6 +198,7 @@ type DocumentPageVariant = {
   pageNumberPosition: "header" | "footer";
 };
 type DocumentPageMargins = { top: number; right: number; bottom: number; left: number };
+type DocumentPageColumns = { count: number; space: number; separate: boolean };
 type SectionBreakType = "nextPage" | "oddPage" | "evenPage";
 type DocumentPageLayout = DocumentPageVariant & {
   firstPageDifferent: boolean;
@@ -209,6 +210,7 @@ type DocumentPageLayout = DocumentPageVariant & {
   pageNumberStart: number | null;
   headerDistance: number;
   footerDistance: number;
+  columns: DocumentPageColumns;
   margins: DocumentPageMargins;
 };
 const defaultDocumentPageTextStyle: DocumentPageTextStyle = { alignment: "center", fontFamily: "Microsoft YaHei", fontSizePt: 9, color: "#6B7280", bold: false, italic: false };
@@ -240,6 +242,7 @@ const defaultDocumentPageLayout: DocumentPageLayout = {
   pageNumberStart: null,
   headerDistance: 708,
   footerDistance: 708,
+  columns: { count: 1, space: 720, separate: false },
   margins: { ...defaultDocumentPageMargins }
 };
 
@@ -324,6 +327,9 @@ function normalizeDocumentPageLayout(value: Partial<DocumentPageLayout> | null |
   const pageNumberStartValue = Number(value?.pageNumberStart);
   const pageWidth = orientation === "landscape" ? a4PageTwip.height : a4PageTwip.width;
   const pageHeight = orientation === "landscape" ? a4PageTwip.width : a4PageTwip.height;
+  const columnCount = Math.max(1, Math.min(8, Math.round(Number(value?.columns?.count) || 1)));
+  const columnSpaceValue = Number(value?.columns?.space ?? 720);
+  const columnSpace = Math.max(0, Math.min(7200, Math.round(Number.isFinite(columnSpaceValue) ? columnSpaceValue : 720)));
   const fitPair = (first: number, second: number, maximum: number) => {
     const total = first + second;
     if (total <= maximum || total <= 0) return [first, second];
@@ -333,6 +339,9 @@ function normalizeDocumentPageLayout(value: Partial<DocumentPageLayout> | null |
   // 中文注解：前后端使用同一联合约束，为 A4 正文保留至少 0.5 英寸，避免浏览器与 Word 各自修正非法页距。
   [margins.left, margins.right] = fitPair(margins.left, margins.right, pageWidth - 720);
   [margins.top, margins.bottom] = fitPair(margins.top, margins.bottom, pageHeight - 720);
+  const availableWidth = Math.max(720, pageWidth - margins.left - margins.right);
+  const maximumColumnSpace = columnCount > 1 ? Math.max(0, Math.floor((availableWidth - columnCount * 720) / (columnCount - 1))) : columnSpace;
+  const columns = { count: columnCount, space: Math.min(columnSpace, maximumColumnSpace), separate: columnCount > 1 && Boolean(value?.columns?.separate) };
   return {
     ...normalizeDocumentPageVariant(value),
     firstPageDifferent: Boolean(value?.firstPageDifferent),
@@ -344,6 +353,7 @@ function normalizeDocumentPageLayout(value: Partial<DocumentPageLayout> | null |
     pageNumberStart: value?.pageNumberStart === null || value?.pageNumberStart === undefined || !Number.isFinite(pageNumberStartValue) ? null : Math.max(0, Math.min(Math.round(pageNumberStartValue), 999999)),
     headerDistance: Number.isFinite(Number(value?.headerDistance)) ? Math.max(0, Math.min(Math.round(Number(value?.headerDistance)), 7200)) : 708,
     footerDistance: Number.isFinite(Number(value?.footerDistance)) ? Math.max(0, Math.min(Math.round(Number(value?.footerDistance)), 7200)) : 708,
+    columns,
     margins
   };
 }
@@ -519,11 +529,17 @@ function pageGeometry(layout: DocumentPageLayout) {
     bottom: layout.margins.bottom * docxPagePreview.twipToPx,
     left: layout.margins.left * docxPagePreview.twipToPx
   };
+  const contentWidthPx = Math.max(96, widthPx - margins.left - margins.right);
+  const columnCount = Math.max(1, layout.columns.count);
+  const columnGapPx = layout.columns.space * docxPagePreview.twipToPx;
   return {
     widthPx,
     heightPx,
     margins,
-    contentWidthPx: Math.max(96, widthPx - margins.left - margins.right),
+    contentWidthPx,
+    columnCount,
+    columnGapPx,
+    columnWidthPx: Math.max(48, (contentWidthPx - columnGapPx * (columnCount - 1)) / columnCount),
     contentHeightPx: Math.max(96, heightPx - margins.top - margins.bottom)
   };
 }
@@ -540,7 +556,10 @@ function pageGeometryStyle(layout: DocumentPageLayout): React.CSSProperties {
     "--page-header-distance": `${layout.headerDistance * docxPagePreview.twipToPx}px`,
     "--page-footer-distance": `${layout.footerDistance * docxPagePreview.twipToPx}px`,
     "--page-content-width": `${geometry.contentWidthPx}px`,
-    "--page-content-height": `${geometry.contentHeightPx}px`
+    "--page-content-height": `${geometry.contentHeightPx}px`,
+    "--page-column-count": String(geometry.columnCount),
+    "--page-column-gap": `${geometry.columnGapPx}px`,
+    "--page-column-rule": layout.columns.separate && geometry.columnCount > 1 ? "1px solid #87929d" : "none"
   } as React.CSSProperties;
 }
 
@@ -2780,7 +2799,7 @@ function Editor(props: {
     const sourceHtml = buildExportPreviewHtml(props.currentTitle, props.content);
     let currentLayout = normalizeDocumentPageLayout(props.pageLayout);
     let currentGeometry = pageGeometry(currentLayout);
-    measureElement.style.width = `${currentGeometry.contentWidthPx}px`;
+    measureElement.style.width = `${currentGeometry.columnWidthPx}px`;
     measureElement.innerHTML = sourceHtml;
     layoutDocxTabs(measureElement);
     const pendingImages = Array.from(measureElement.querySelectorAll("img")).filter((image) => !image.complete);
@@ -2803,7 +2822,7 @@ function Editor(props: {
       return;
     }
     const sourceBlocks = Array.from(measureElement.children).map((child) => child.cloneNode(true) as HTMLElement);
-    let pageContentHeight = currentGeometry.contentHeightPx;
+    let pageContentHeight = currentGeometry.contentHeightPx * currentGeometry.columnCount;
     let currentSectionIndex = 0;
     let currentSectionPageIndex = 0;
     const nextPages: PreviewPage[] = [{ blocks: [], sectionIndex: 0, sectionPageIndex: 0, layout: currentLayout }];
@@ -2825,20 +2844,20 @@ function Editor(props: {
       }
       currentLayout = parseSectionPageLayout(layoutValue, currentLayout);
       currentGeometry = pageGeometry(currentLayout);
-      pageContentHeight = currentGeometry.contentHeightPx;
+      pageContentHeight = currentGeometry.contentHeightPx * currentGeometry.columnCount;
       currentSectionIndex += 1;
       currentSectionPageIndex = 0;
       nextPages.push({ blocks: [], sectionIndex: currentSectionIndex, sectionPageIndex: 0, layout: currentLayout });
       currentHeight = 0;
     };
     const measureHtml = (html: string) => {
-      measureElement.style.width = `${currentGeometry.contentWidthPx}px`;
+      measureElement.style.width = `${currentGeometry.columnWidthPx}px`;
       measureElement.innerHTML = html;
       layoutDocxTabs(measureElement);
       return measuredBlockHeight(measureElement.firstElementChild);
     };
     const measureTextLineCount = (html: string) => {
-      measureElement.style.width = `${currentGeometry.contentWidthPx}px`;
+      measureElement.style.width = `${currentGeometry.columnWidthPx}px`;
       measureElement.innerHTML = html;
       layoutDocxTabs(measureElement);
       const element = measureElement.firstElementChild;
@@ -3527,6 +3546,11 @@ function Editor(props: {
                     <label>页眉距纸边（厘米）<input type="number" aria-label="当前节页眉距纸边" min="0" max="12.7" step="0.1" value={twipToCentimeter(activeSectionLayout.headerDistance)} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, headerDistance: centimeterToTwip(event.target.value, current.headerDistance) }))} /></label>
                     <label>页脚距纸边（厘米）<input type="number" aria-label="当前节页脚距纸边" min="0" max="12.7" step="0.1" value={twipToCentimeter(activeSectionLayout.footerDistance)} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, footerDistance: centimeterToTwip(event.target.value, current.footerDistance) }))} /></label>
                   </div>
+                  <div className="page-margin-grid">
+                    <label>分栏<select aria-label="当前节分栏数" value={activeSectionLayout.columns.count} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, columns: { ...current.columns, count: Number(event.target.value) } }))}>{Array.from({ length: 8 }, (_, index) => <option key={index + 1} value={index + 1}>{index + 1} 栏</option>)}</select></label>
+                    <label>栏间距（厘米）<input type="number" aria-label="当前节栏间距" min="0" max="12.7" step="0.1" value={twipToCentimeter(activeSectionLayout.columns.space)} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, columns: { ...current.columns, space: centimeterToTwip(event.target.value, current.columns.space) } }))} /></label>
+                  </div>
+                  <label className="page-number-toggle"><input type="checkbox" aria-label="当前节分栏分隔线" checked={activeSectionLayout.columns.separate} disabled={activeSectionLayout.columns.count <= 1} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, columns: { ...current.columns, separate: event.target.checked } }))} />分隔线</label>
                   <div className="page-margin-grid">
                     <label>页码格式<select aria-label="当前节页码格式" value={activeSectionLayout.pageNumberFormat} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, pageNumberFormat: event.target.value as DocumentPageLayout["pageNumberFormat"] }))}><option value="decimal">1, 2, 3</option><option value="upperRoman">I, II, III</option><option value="lowerRoman">i, ii, iii</option><option value="upperLetter">A, B, C</option><option value="lowerLetter">a, b, c</option></select></label>
                     <label>起始页码<input type="number" aria-label="当前节起始页码" min="0" max="999999" placeholder="续前节" value={activeSectionLayout.pageNumberStart ?? ""} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, pageNumberStart: event.target.value === "" ? null : Math.max(0, Math.min(Math.round(Number(event.target.value)), 999999)) }))} /></label>

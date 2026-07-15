@@ -452,6 +452,9 @@ try {
   await page.getByLabel("当前节下边距", { exact: true }).fill("1.27");
   await page.getByLabel("当前节页眉距纸边", { exact: true }).fill("0.85");
   await page.getByLabel("当前节页脚距纸边", { exact: true }).fill("1.48");
+  await page.getByLabel("当前节分栏数", { exact: true }).selectOption("2");
+  await page.getByLabel("当前节栏间距", { exact: true }).fill("0.8");
+  await page.getByLabel("当前节分栏分隔线", { exact: true }).check();
   await page.getByLabel("当前节页码格式", { exact: true }).selectOption("upperRoman");
   await page.getByLabel("当前节起始页码", { exact: true }).fill("3");
   const secondSectionHeaderInput = page.getByLabel("默认页眉文字", { exact: true });
@@ -509,6 +512,7 @@ try {
   assert.equal(storedSectionLayout.footerDistance, 839);
   assert.equal(storedSectionLayout.pageNumberFormat, "upperRoman");
   assert.equal(storedSectionLayout.pageNumberStart, 3);
+  assert.deepEqual(storedSectionLayout.columns, { count: 2, space: 454, separate: true });
   assert.deepEqual(storedSectionLayout.margins, { top: 720, right: 1440, bottom: 720, left: 1440 });
   assert.deepEqual(storedDocument.pageLayout, {
     headerText: "奇数页项目页眉",
@@ -532,6 +536,7 @@ try {
     pageNumberStart: null,
     headerDistance: 708,
     footerDistance: 708,
+    columns: { count: 1, space: 720, separate: false },
     margins: { top: 1440, right: 1440, bottom: 1440, left: 1440 }
   });
 
@@ -586,6 +591,8 @@ try {
   assert.match(documentXml, /<w:pgMar[^>]+w:top="720"[^>]+w:right="1440"[^>]+w:bottom="720"[^>]+w:left="1440"/);
   assert.match(documentXml, /<w:pgMar[^>]+w:header="482"[^>]+w:footer="839"/);
   assert.match(documentXml, /<w:pgNumType[^>]+w:start="3"[^>]*w:fmt="upperRoman"/);
+  const exportedLandscapeSection = (documentXml.match(/<w:sectPr>[\s\S]*?<\/w:sectPr>/g) || []).find((section) => /w:orient="landscape"/.test(section)) || "";
+  assert.match(exportedLandscapeSection, /<w:cols[^>]+w:space="454"[^>]+w:num="2"[^>]+w:sep="true"[^>]+w:equalWidth="true"/);
   assert.match(documentXml, /<w:titlePg\/>/);
   assert.match(settingsXml, /<w:evenAndOddHeaders\/>/);
   assert.match(documentXml, /<w:gridSpan w:val="2"\/>/);
@@ -703,6 +710,12 @@ try {
       }).filter(Boolean),
       sectionIndexes: pages.map((page) => Number(page.getAttribute("data-section-index") || 0)),
       pageSizes: pages.map((page) => ({ width: Math.round(page.getBoundingClientRect().width), height: Math.round(page.getBoundingClientRect().height) })),
+      secondSectionColumns: (() => {
+        const page = pages.find((item) => item.getAttribute("data-section-index") === "1");
+        const body = page?.querySelector(".page-body");
+        const style = body ? getComputedStyle(body) : null;
+        return style ? { count: style.columnCount, gap: Number.parseFloat(style.columnGap), ruleStyle: style.columnRuleStyle } : null;
+      })(),
       firstPageHasList: Boolean(pages[0]?.querySelector("ol")),
       firstPageText: pages[0]?.textContent || "",
       firstPageRemainingHeight: (() => {
@@ -831,6 +844,9 @@ try {
   const secondSectionFirstPage = result.sectionIndexes.indexOf(1);
   assert.ok(secondSectionFirstPage > 0);
   assert.deepEqual(result.pageSizes[secondSectionFirstPage], { width: 1123, height: 794 });
+  assert.equal(result.secondSectionColumns?.count, "2");
+  assert.ok(Math.abs((result.secondSectionColumns?.gap || 0) - 30.27) < 0.1);
+  assert.equal(result.secondSectionColumns?.ruleStyle, "solid");
   assert.equal(result.headerTexts.length, result.pageCount);
   assert.ok(result.headerImageCount > 0, "分页预览应显示在线设置的页眉图片");
   assert.equal(result.headerTexts[0], "首页项目封面");
