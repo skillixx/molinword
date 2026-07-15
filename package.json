@@ -9,6 +9,7 @@
     "build": "tsc -b && vite build",
     "check:docx-export-format": "node scripts/check-docx-export-format.mjs",
     "check:docx-import-format": "node scripts/check-docx-import-format.mjs",
+    "db:migrate:document-template": "node database/migrate-document-template-binding.mjs",
     "db:seed:templates": "node database/seed-document-templates.mjs",
     "template-agent": "node scripts/template-agent.mjs",
     "preview": "vite preview --host 127.0.0.1"

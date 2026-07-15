@@ -1266,6 +1266,7 @@ function toDocument(row) {
     title: row.title,
     documentType: row.document_type,
     tone: row.tone,
+    templateId: row.template_id == null ? null : Number(row.template_id),
     outline: parseJson(row.outline_json, []),
     content: row.content || "",
     status: row.status,
@@ -1355,6 +1356,21 @@ async function readTemplateStyle(pool, storage, templateId) {
   const objectStream = await storage.getObject(styleRow.bucket, styleRow.object_key);
   const buffer = await streamToBuffer(objectStream);
   return parseJson(buffer.toString("utf8"), null);
+}
+
+async function normalizeActiveTemplateId(connection, templateId) {
+  if (templateId == null || templateId === "") return null;
+  const normalizedId = Number(templateId);
+  if (!Number.isSafeInteger(normalizedId) || normalizedId <= 0) {
+    throw createPublicError("文档模板参数无效。", 400);
+  }
+
+  const [[templateRow]] = await connection.query(
+    "SELECT id FROM document_templates WHERE id = ? AND status = 'active'",
+    [normalizedId]
+  );
+  if (!templateRow) throw createPublicError("所选模板不存在或已停用。", 400);
+  return normalizedId;
 }
 
 async function ensureDb() {
@@ -2014,7 +2030,7 @@ app.get("/api/documents", async (request, response) => {
     const pool = await ensureDb();
     const currentUser = await getCurrentUser(request);
     const [rows] = await pool.query(
-      `SELECT id, user_id, title, document_type, tone, outline_json, content, status,
+      `SELECT id, user_id, title, document_type, tone, template_id, outline_json, content, status,
         word_count, last_opened_at, created_at, updated_at
        FROM documents
        WHERE user_id = ? AND status <> 'deleted'
@@ -2079,20 +2095,22 @@ app.post("/api/documents/import", authenticateDocumentImport, receiveImportedDoc
 });
 
 app.post("/api/documents", async (request, response) => {
-  const { title, documentType, tone, outline, content } = request.body;
+  const { title, documentType, tone, templateId, outline, content } = request.body;
 
   try {
     const pool = await ensureDb();
     const currentUser = await getCurrentUser(request);
+    const normalizedTemplateId = await normalizeActiveTemplateId(pool, templateId);
     const [result] = await pool.query(
       `INSERT INTO documents
-        (user_id, title, document_type, tone, outline_json, content, status, word_count, last_opened_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, NOW())`,
+        (user_id, title, document_type, tone, template_id, outline_json, content, status, word_count, last_opened_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, NOW())`,
       [
         currentUser.userId,
         title || "未命名文档",
         documentType || "Word 文档",
         tone || "正式",
+        normalizedTemplateId,
         jsonString(outline || []),
         content || "",
         countWords(content || "")
@@ -2103,7 +2121,7 @@ app.post("/api/documents", async (request, response) => {
     const [[row]] = await pool.query("SELECT * FROM documents WHERE id = ? AND user_id = ?", [documentId, currentUser.userId]);
     response.status(201).json({ document: toDocument(row) });
   } catch (error) {
-    sendError(response, error, 500, "创建文档失败，请稍后重试。");
+    sendError(response, error, error?.httpStatus || 500, "创建文档失败，请稍后重试。");
   }
 });
 
@@ -2129,7 +2147,7 @@ app.get("/api/documents/:id", async (request, response) => {
 });
 
 app.patch("/api/documents/:id", async (request, response) => {
-  const { title, documentType, tone, outline, content, status, saveVersion, versionNote } = request.body;
+  const { title, documentType, tone, templateId, outline, content, status, saveVersion, versionNote } = request.body;
 
   let connection;
   try {
@@ -2151,16 +2169,21 @@ app.patch("/api/documents/:id", async (request, response) => {
 
     const nextOutline = outline ?? parseJson(current.outline_json, []);
     const nextContent = content ?? current.content ?? "";
+    // 中文注解：未传 templateId 时保留原绑定，显式传 null 时恢复默认版式。
+    const nextTemplateId = templateId === undefined
+      ? current.template_id
+      : await normalizeActiveTemplateId(connection, templateId);
 
     await connection.query(
       `UPDATE documents
-       SET title = ?, document_type = ?, tone = ?, outline_json = ?, content = ?,
+       SET title = ?, document_type = ?, tone = ?, template_id = ?, outline_json = ?, content = ?,
          status = ?, word_count = ?, updated_at = NOW()
        WHERE id = ? AND user_id = ?`,
       [
         title ?? current.title,
         documentType ?? current.document_type,
         tone ?? current.tone,
+        nextTemplateId,
         jsonString(nextOutline),
         nextContent,
         status ?? current.status,
@@ -2179,7 +2202,7 @@ app.patch("/api/documents/:id", async (request, response) => {
     response.json({ document: toDocument(row) });
   } catch (error) {
     if (connection) await connection.rollback();
-    sendError(response, error, 500, "保存文档失败，请稍后重试。");
+    sendError(response, error, error?.httpStatus || 500, "保存文档失败，请稍后重试。");
   } finally {
     if (connection) connection.release();
   }
@@ -2216,13 +2239,14 @@ app.post("/api/documents/:id/duplicate", async (request, response) => {
 
     const [result] = await pool.query(
       `INSERT INTO documents
-        (user_id, title, document_type, tone, outline_json, content, status, word_count, last_opened_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, NOW())`,
+        (user_id, title, document_type, tone, template_id, outline_json, content, status, word_count, last_opened_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, NOW())`,
       [
         currentUser.userId,
         `${source.title} 副本`,
         source.document_type,
         source.tone,
+        source.template_id,
         // 中文注解：MySQL JSON 可能已经被解析成对象，复制前统一重新序列化。
         jsonString(parseJson(source.outline_json, [])),
         source.content,
@@ -2238,7 +2262,7 @@ app.post("/api/documents/:id/duplicate", async (request, response) => {
 });
 
 app.post("/api/documents/:id/export-docx", async (request, response) => {
-  const { content, templateId } = request.body;
+  const { content } = request.body;
   let pointHold = null;
 
   try {
@@ -2258,7 +2282,8 @@ app.post("/api/documents/:id/export-docx", async (request, response) => {
     // 中文注解：Word 导出先预占 1 积分；文件真正写入成功后再结算，失败则释放预占。
     pointHold = await reservePoints(currentUser, "word_export_docx", 1, request.params.id);
     const exportContent = typeof content === "string" ? content : documentRow.content || "";
-    const templateStyle = await readTemplateStyle(pool, storage, templateId);
+    // 中文注解：导出只读取文档已保存的模板绑定，防止浏览器状态与服务端版式不一致。
+    const templateStyle = await readTemplateStyle(pool, storage, documentRow.template_id);
     const buffer = await createDocxBuffer({ title: documentRow.title, content: exportContent, templateStyle });
     const exportedAt = new Date();
     const baseName = safeFileName(documentRow.title);

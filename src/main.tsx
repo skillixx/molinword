@@ -70,6 +70,7 @@ type ApiDocument = {
   title: string;
   documentType: DocumentType;
   tone: string;
+  templateId: number | null;
   outline: string[];
   content: string;
   wordCount: number;
@@ -694,6 +695,23 @@ function App() {
     }
   }, []);
 
+  const hydrateTemplateStyle = React.useCallback(async (template: TemplateItem, preserveIdOnFailure: boolean) => {
+    const styleAsset = template.assets?.find((asset) => asset.purpose === "template_style");
+    if (!styleAsset?.url) return template;
+
+    try {
+      const response = await fetch(styleAsset.url);
+      const style = safeTemplateWordStyle(await readApiJson(response));
+      if (!style) throw new Error("模板样式内容无效");
+      return { ...template, wordStyle: style };
+    } catch {
+      // 中文注解：打开历史文档时保留绑定 ID，避免自动保存误清空；新套用模板失败则降级为默认版式。
+      return preserveIdOnFailure
+        ? { ...template, wordStyle: undefined }
+        : { ...template, id: undefined, wordStyle: undefined };
+    }
+  }, []);
+
   const refreshPoints = React.useCallback(async () => {
     setPointsRefreshing(true);
     try {
@@ -775,7 +793,7 @@ function App() {
       const response = await fetch("/api/documents", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({ ...payload, templateId: selectedTemplate?.id ?? null })
       });
       const result = await readApiJson(response);
       return result.document as ApiDocument;
@@ -825,6 +843,7 @@ function App() {
             title: options.title ?? currentTitle,
             documentType: selectedType,
             tone,
+            templateId: selectedTemplate?.id ?? null,
             outline: outline.map((item) => item.title),
             content: options.content ?? content,
             saveVersion: options.saveVersion ?? false,
@@ -841,7 +860,7 @@ function App() {
         return null;
       }
     },
-    [content, currentDocumentId, currentTitle, loadRecentDocuments, outline, selectedType, tone]
+    [content, currentDocumentId, currentTitle, loadRecentDocuments, outline, selectedTemplate, selectedType, tone]
   );
 
   React.useEffect(() => {
@@ -893,6 +912,34 @@ function App() {
       const response = await fetch(`/api/documents/${documentId}`);
       const result = await readApiJson(response);
       const document = result.document as ApiDocument;
+      let documentTemplate: TemplateItem | null = null;
+      if (document.templateId) {
+        try {
+          let template = templates.find((item) => item.id === document.templateId);
+          if (!template) {
+            const templateResponse = await fetch(`/api/templates/${document.templateId}`);
+            const templateResult = await readApiJson(templateResponse);
+            template = templateResult.template as ApiTemplate;
+          }
+          documentTemplate = await hydrateTemplateStyle(template, true);
+          if (documentTemplate.hasStyle && !documentTemplate.wordStyle) {
+            setAiError("文档模板样式加载失败，已保留模板绑定；请刷新后重试，当前暂不能导出 Word。");
+          }
+        } catch {
+          // 中文注解：模板接口短暂异常时仍允许打开正文，同时用占位模板保留绑定并阻止错误导出。
+          documentTemplate = {
+            id: document.templateId,
+            name: `模板 #${document.templateId}（样式待恢复）`,
+            category: "已绑定模板",
+            documentType: document.documentType,
+            topic: document.title,
+            requirement: "",
+            outline: document.outline || [],
+            hasStyle: true
+          };
+          setAiError("模板详情暂时无法读取，正文已正常打开；请刷新后恢复样式，当前暂不能导出 Word。");
+        }
+      }
       setCurrentDocumentId(document.id);
       setCurrentTitle(document.title);
       setTopic(document.title);
@@ -900,7 +947,7 @@ function App() {
       setTone(document.tone);
       setOutline(toOutlineItems(document.outline || []));
       setContent(document.content || "<p></p>");
-      setSelectedTemplate(null);
+      setSelectedTemplate(documentTemplate);
       setActivePanel("editor");
       setSaveStatus("已打开");
       await loadRecentDocuments();
@@ -986,6 +1033,10 @@ function App() {
       return;
     }
     if (!hasEnoughPoints(usageCosts.exportDocx, "导出 Word")) return;
+    if (selectedTemplate?.id && selectedTemplate.hasStyle && !selectedTemplate.wordStyle) {
+      setAiError("模板样式尚未加载，暂不能导出 Word，请刷新页面后重试。");
+      return;
+    }
     try {
       setExportStatus("导出中");
       const saved = await saveDocument({ content: exportContent, saveVersion: true, versionNote: "导出 Word 前保存" });
@@ -993,7 +1044,7 @@ function App() {
       const response = await fetch(`/api/documents/${currentDocumentId}/export-docx`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: exportContent, templateId: selectedTemplate?.id ?? null })
+        body: JSON.stringify({ content: exportContent })
       });
       const result = await readApiJson(response);
       const anchor = document.createElement("a");
@@ -1011,19 +1062,7 @@ function App() {
   };
 
   const applyTemplate = async (template: TemplateItem) => {
-    let templateWithStyle = template;
-    const styleAsset = template.assets?.find((asset) => asset.purpose === "template_style");
-    if (styleAsset?.url) {
-      try {
-        const response = await fetch(styleAsset.url);
-        const style = safeTemplateWordStyle(await readApiJson(response));
-        if (!style) throw new Error("模板样式内容无效");
-        templateWithStyle = { ...template, wordStyle: style };
-      } catch {
-        // 中文注解：样式读取失败时不再向导出端传模板 ID，保证在线默认版式与 DOCX 一致降级。
-        templateWithStyle = { ...template, id: undefined, wordStyle: undefined };
-      }
-    }
+    const templateWithStyle = await hydrateTemplateStyle(template, false);
     setSelectedTemplate(templateWithStyle);
     setSelectedType(template.documentType);
     setTopic(template.topic);

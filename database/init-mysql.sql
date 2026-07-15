@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS documents (
   title VARCHAR(255) NOT NULL COMMENT '文档标题',
   document_type VARCHAR(50) NOT NULL COMMENT '文档类型，例如工作总结、会议纪要、商业计划书',
   tone VARCHAR(50) NOT NULL DEFAULT '正式' COMMENT '写作语气',
+  template_id BIGINT UNSIGNED NULL COMMENT '关联模板 ID，空值表示使用默认文档样式',
   outline_json JSON NULL COMMENT '文档大纲 JSON',
   content LONGTEXT NULL COMMENT '文档正文 HTML',
   status VARCHAR(30) NOT NULL DEFAULT 'draft' COMMENT '状态：draft 草稿，completed 已完成，deleted 已删除',
@@ -33,7 +34,8 @@ CREATE TABLE IF NOT EXISTS documents (
   PRIMARY KEY (id),
   KEY idx_documents_user_updated (user_id, updated_at),
   KEY idx_documents_user_status (user_id, status),
-  KEY idx_documents_type (document_type)
+  KEY idx_documents_type (document_type),
+  KEY idx_documents_template (template_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='文档主表';
 
 -- 中文注解：文档版本表，用于保存手动保存、导出前保存等关键版本。
