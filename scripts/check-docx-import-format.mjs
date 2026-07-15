@@ -85,6 +85,11 @@ async function buildFormattedDocxFixture() {
       </w:tr>
     </w:tbl>
     <w:p>
+      <w:r><w:t>分页符前</w:t></w:r>
+      <w:r><w:br w:type="page"/></w:r>
+      <w:r><w:t>分页符后</w:t></w:r>
+    </w:p>
+    <w:p>
       <w:r>
         <w:drawing>
           <a:graphic>
@@ -123,6 +128,7 @@ assert.match(imported.content, /<table>/);
 assert.match(imported.content, /<th>/);
 assert.match(imported.content, /<td>/);
 assert.match(imported.content, /Import Cell 1/);
+assert.match(imported.content, /data-page-break="true"/);
 assert.match(imported.content, /<img[^>]+src="data:image\/png;base64,/);
 
 console.log("DOCX import format check passed");

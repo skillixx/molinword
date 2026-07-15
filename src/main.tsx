@@ -1,6 +1,6 @@
 ﻿import React from "react";
 import { createRoot } from "react-dom/client";
-import { Extension, Mark, type CommandProps } from "@tiptap/core";
+import { Extension, Mark, Node as TiptapNode, type CommandProps } from "@tiptap/core";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import { EditorContent, useEditor, type Editor as TiptapEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -349,6 +349,20 @@ const ParagraphIndent = Extension.create({
           return { importedStyle };
         })
     };
+  }
+});
+
+const PageBreak = TiptapNode.create({
+  name: "pageBreak",
+  group: "block",
+  atom: true,
+  selectable: true,
+  parseHTML() {
+    return [{ tag: 'div[data-page-break="true"]' }];
+  },
+  renderHTML() {
+    // 中文注解：分页符作为独立块保存，分页预览和后端 DOCX 导出都用同一个标记识别强制分页。
+    return ["div", { "data-page-break": "true", class: "page-break-marker" }];
   }
 });
 
@@ -1137,7 +1151,7 @@ function Editor(props: {
   }, [props]);
 
   const editor = useEditor({
-    extensions: [StarterKit, UnderlineExtension, ImageExtension.configure({ inline: false, allowBase64: true }), ImportedTextStyle, ParagraphIndent, Table.configure({ resizable: true }), TableRow, TableHeader, TableCell],
+    extensions: [StarterKit, UnderlineExtension, ImageExtension.configure({ inline: false, allowBase64: true }), ImportedTextStyle, ParagraphIndent, PageBreak, Table.configure({ resizable: true }), TableRow, TableHeader, TableCell],
     content: props.content,
     editorProps: { attributes: { class: "word-editor" } },
     onCreate({ editor }) { updateOutlineFromEditor(editor); },
@@ -1166,6 +1180,12 @@ function Editor(props: {
     let currentHeight = 0;
 
     Array.from(measureElement.children).forEach((child) => {
+      if (child instanceof HTMLElement && child.dataset.pageBreak === "true") {
+        // 中文注解：手动分页符直接强制开启新页，保证在线分页位置和 DOCX 导出的分页位置一致。
+        if (nextPages[nextPages.length - 1].length) nextPages.push([]);
+        currentHeight = 0;
+        return;
+      }
       const styles = window.getComputedStyle(child);
       const blockHeight = child.getBoundingClientRect().height + Number.parseFloat(styles.marginTop || "0") + Number.parseFloat(styles.marginBottom || "0");
       // 中文注解：分页按块级内容切页，尽量模拟 Word 的自然分页；超长单块保留在当前页，避免截断用户内容。
@@ -1240,6 +1260,13 @@ function Editor(props: {
       setSelectionHint("已插入图片。");
     };
     reader.readAsDataURL(file);
+  };
+
+  const insertManualPageBreak = () => {
+    if (!editor) return;
+    // 中文注解：分页符后立刻补一个空段落，用户继续输入时会落在下一页，而不是替换分页符本身。
+    editor.chain().focus().insertContent([{ type: "pageBreak" }, { type: "paragraph" }]).run();
+    setSelectionHint("已插入分页符。");
   };
 
   const applyAiFirstLineIndent = (level: number) => {
@@ -1324,6 +1351,7 @@ function Editor(props: {
           <div className="format-bar">
             <button className={viewMode === "edit" ? "active-format" : ""} onClick={() => setViewMode("edit")} title="切换到可编辑的连续视图">编辑视图</button>
             <button className={viewMode === "page" ? "active-format" : ""} onClick={() => setViewMode("page")} title="按导出 Word 的页面尺寸预览分页">分页预览</button>
+            <button onClick={insertManualPageBreak} title="在当前位置插入分页符"><FileText size={16} />分页符</button>
             <span className="format-divider" />
             <button className={editor?.isActive("paragraph") ? "active-format" : ""} onClick={() => editor?.chain().focus().setParagraph().run()} title="设置为正文"><AlignLeft size={16} />正文</button>
             <button className={editor?.isActive("heading", { level: 2 }) ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()} title="设置为标题">标题</button>

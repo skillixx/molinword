@@ -17,6 +17,8 @@ const content = `
       <tr><td><p><strong>单元格 1</strong></p></td><td><p>单元格 2</p></td></tr>
     </tbody>
   </table>
+  <div data-page-break="true" class="page-break-marker"></div>
+  <p>分页符后的内容</p>
   <p>图片导出测试</p>
   <img src="data:image/png;base64,${tinyPngBase64}" style="width:120px;max-width:100%;height:auto" alt="export image" />
 `;
@@ -44,6 +46,7 @@ assert.match(documentXml, /<w:tr>/);
 assert.match(documentXml, /<w:tc>/);
 assert.match(documentXml, /表头 A/);
 assert.match(documentXml, /单元格 1/);
+assert.match(documentXml, /<w:br w:type="page"\/>/);
 
 // 中文注解：图片必须进入 DOCX 媒体目录并建立 image relationship，避免导出文件只剩占位文本。
 assert.match(documentXml, /<w:drawing>/);

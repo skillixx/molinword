@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import express from "express";
-import { AlignmentType, Document, HeadingLevel, ImageRun, Packer, Paragraph, Table, TableCell, TableRow, TextRun, WidthType } from "docx";
+import { AlignmentType, Document, HeadingLevel, ImageRun, Packer, PageBreak as DocxPageBreak, Paragraph, Table, TableCell, TableRow, TextRun, WidthType } from "docx";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
 import mammoth from "mammoth";
@@ -155,7 +155,7 @@ function importedTextToHtml(value = "") {
 function sanitizeImportedHtml(value = "") {
   // 中文注解：导入内容只放行编辑器可承载的安全样式，避免脚本、外链和存储细节进入前端。
   return sanitizeHtml(String(value), {
-    allowedTags: ["h1", "h2", "h3", "p", "span", "strong", "b", "em", "i", "u", "s", "ul", "ol", "li", "blockquote", "br", "table", "tbody", "thead", "tr", "th", "td", "img"],
+    allowedTags: ["h1", "h2", "h3", "p", "span", "strong", "b", "em", "i", "u", "s", "ul", "ol", "li", "blockquote", "br", "table", "tbody", "thead", "tr", "th", "td", "img", "div"],
     allowedAttributes: {
       h1: ["style", "data-indent"],
       h2: ["style", "data-indent"],
@@ -165,7 +165,8 @@ function sanitizeImportedHtml(value = "") {
       span: ["style"],
       th: ["colspan", "rowspan"],
       td: ["colspan", "rowspan"],
-      img: ["src", "alt", "style"]
+      img: ["src", "alt", "style"],
+      div: ["data-page-break", "class"]
     },
     allowedSchemes: ["data"],
     allowedStyles: {
@@ -300,9 +301,20 @@ function docxTextFromRun(runNode) {
     .map((child) => {
       if (child.type === "tag" && child.name === "w:t") return child.children?.map((textNode) => textNode.data || "").join("") || "";
       if (child.type === "tag" && child.name === "w:tab") return "\t";
-      if (child.type === "tag" && child.name === "w:br") return "\n";
+      if (child.type === "tag" && child.name === "w:br" && firstValue(child.attribs, ["w:type", "type"]) !== "page") return "\n";
       return "";
     })
+    .join("");
+}
+
+function pageBreakHtml() {
+  return '<div data-page-break="true" class="page-break-marker"></div>';
+}
+
+function docxPageBreaksFromRun(runNode) {
+  return xmlChildren(runNode, "w:br")
+    .filter((breakNode) => firstValue(breakNode.attribs, ["w:type", "type"]) === "page")
+    .map(() => pageBreakHtml())
     .join("");
 }
 
@@ -357,7 +369,8 @@ function docxParagraphTag(style = {}) {
 async function docxRunToHtml(runNode, inheritedRunStyles = {}, zip = null, relationships = new Map()) {
   const text = docxTextFromRun(runNode);
   const imageHtml = zip ? (await docxImagesFromRun(runNode, zip, relationships)).join("") : "";
-  if (!text && !imageHtml) return "";
+  const pageBreaks = docxPageBreaksFromRun(runNode);
+  if (!text && !imageHtml && !pageBreaks) return "";
   const runStyles = { ...inheritedRunStyles, ...parseRunProperties(xmlChild(runNode, "w:rPr")) };
   let html = escapeHtml(text).replace(/\n/g, "<br>");
   if (xmlChild(xmlChild(runNode, "w:rPr"), "w:u")) html = `<u>${html}</u>`;
@@ -365,7 +378,7 @@ async function docxRunToHtml(runNode, inheritedRunStyles = {}, zip = null, relat
   if (xmlChild(xmlChild(runNode, "w:rPr"), "w:b") || runStyles["font-weight"] === "bold") html = `<strong>${html}</strong>`;
   const style = cssText(runStyles);
   const textHtml = style && html ? `<span style="${escapeHtml(style)}">${html}</span>` : html;
-  return `${textHtml}${imageHtml}`;
+  return `${textHtml}${imageHtml}${pageBreaks}`;
 }
 
 async function parseStyledDocxParagraph(paragraphNode, styleMap, zip = null, relationships = new Map()) {
@@ -382,6 +395,18 @@ async function parseStyledDocxParagraph(paragraphNode, styleMap, zip = null, rel
   const styleText = cssText(paragraphStyles);
   if (styleText) attrs.push(`style="${escapeHtml(styleText)}"`);
   if (indentLevel) attrs.push(`data-indent="${indentLevel}"`);
+  if (body.includes(pageBreakHtml())) {
+    // 中文注解：分页符是块级语义，导入时拆出段落外层，避免保存为非法的 p > div 结构。
+    const chunks = body.split(pageBreakHtml());
+    const html = chunks
+      .flatMap((chunk, index) => [
+        chunk ? `<${tag}${attrs.length ? ` ${attrs.join(" ")}` : ""}>${chunk}</${tag}>` : "",
+        index < chunks.length - 1 ? pageBreakHtml() : ""
+      ])
+      .filter(Boolean)
+      .join("");
+    return { html: html || pageBreakHtml(), listItem: "", ordered: false };
+  }
   return { html: `<${tag}${attrs.length ? ` ${attrs.join(" ")}` : ""}>${body}</${tag}>`, listItem: isList ? body : "", ordered: /number|编号/i.test(`${style.name || ""} ${styleId || ""}`) };
 }
 
@@ -797,11 +822,25 @@ function imageParagraphFromNode(node) {
   });
 }
 
+function isPageBreakNode(node) {
+  return node?.name === "div" && node.attribs?.["data-page-break"] === "true";
+}
+
+function pageBreakParagraph() {
+  // 中文注解：在线分页符导出为 Word 原生分页符，保证用户手动控制的换页位置不会漂移。
+  return new Paragraph({ children: [new TextRun({ children: [new DocxPageBreak()] })] });
+}
+
 function extractDocxBlocksFromHtml(html = "") {
   const parsed = parseDocument(html, { decodeEntities: true });
   const blocks = [];
 
   function walk(node) {
+    if (isPageBreakNode(node)) {
+      blocks.push(pageBreakParagraph());
+      return;
+    }
+
     if (node.name === "table") {
       const table = tableFromNode(node);
       if (table) blocks.push(table);

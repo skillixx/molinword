@@ -820,6 +820,11 @@ textarea {
   max-width: 100%;
 }
 
+.paged-preview .page-break-marker,
+.pagination-measurer .page-break-marker {
+  display: none;
+}
+
 .page-body .export-title,
 .pagination-measurer .export-title {
   margin: 0 0 17.33px;
@@ -912,6 +917,28 @@ textarea {
   max-width: 100%;
   height: auto;
   margin: 8px auto 12px;
+}
+
+.word-editor .page-break-marker {
+  position: relative;
+  display: block;
+  height: 24px;
+  margin: 18px 0;
+  border-top: 1px dashed #b8c2cc;
+  color: #6b7785;
+  font-size: 12px;
+  letter-spacing: 0;
+  user-select: none;
+}
+
+.word-editor .page-break-marker::before {
+  content: "分页符";
+  position: absolute;
+  left: 50%;
+  top: -9px;
+  transform: translateX(-50%);
+  background: #ffffff;
+  padding: 0 8px;
 }
 
 .word-editor td p,
