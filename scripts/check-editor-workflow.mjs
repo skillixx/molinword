@@ -20,7 +20,7 @@ const fixtureDocument = {
   tone: "正式",
   templateId: 3,
   outline: ["超长结构分页"],
-  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table>`,
+  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table><tbody><tr><th>审批阶段</th><th>状态</th></tr><tr><td>商务评审</td><td>通过</td></tr><tr><td>归档确认</td><td>完成</td></tr></tbody></table>`,
   // 中文注解：模拟升级前数据库里的旧页面设置，确保真实历史文档开启高级页眉时不会崩溃。
   pageLayout: { headerText: "", footerText: "", pageNumberEnabled: false },
   status: "draft",
@@ -194,6 +194,28 @@ try {
   await page.getByRole("button", { name: "重做", exact: true }).click();
   assert.match(await editor.innerHTML(), /<s>/);
 
+  const sourceTables = editor.locator("table");
+  assert.equal(await sourceTables.count(), 2);
+  const firstTable = sourceTables.first();
+  const headerCells = firstTable.locator("th");
+  assert.equal(await headerCells.count(), 2);
+  await headerCells.first().click();
+  await headerCells.last().click({ modifiers: ["Shift"] });
+  await page.getByRole("button", { name: "合并", exact: true }).click();
+  assert.match(await editor.innerHTML(), /<th[^>]+colspan="2"/);
+  await firstTable.locator("th").click();
+  await page.getByRole("button", { name: "拆分", exact: true }).click();
+  assert.equal(await firstTable.locator("th").count(), 2);
+  await headerCells.first().click();
+  await headerCells.last().click({ modifiers: ["Shift"] });
+  await page.getByRole("button", { name: "合并", exact: true }).click();
+  const approvalCells = sourceTables.last().locator("td");
+  assert.equal(await approvalCells.count(), 4);
+  await approvalCells.nth(0).click();
+  await approvalCells.nth(2).click({ modifiers: ["Shift"] });
+  await page.getByRole("button", { name: "合并", exact: true }).click();
+  assert.match(await editor.innerHTML(), /<td[^>]+rowspan="2"[^>]*>.*商务评审.*归档确认/s);
+
   await page.evaluate(() => {
     const paragraph = document.querySelector(".word-editor p");
     if (!paragraph) throw new Error("未找到段落样式测试节点");
@@ -270,6 +292,7 @@ try {
   assert.match(storedDocument.content, /font-family:\s*SimSun/);
   assert.match(storedDocument.content, /font-size:\s*12pt/);
   assert.match(storedDocument.content, /data-section-break="nextPage"/);
+  assert.match(storedDocument.content, /rowspan="2"/);
   assert.match(storedDocument.content, /第二节横向内容/);
   assert.match(storedDocument.content, /第二节横向页眉/);
   const storedSectionLayoutText = storedDocument.content.match(/data-section-layout="([^"]+)"/)?.[1]
@@ -355,6 +378,9 @@ try {
   assert.match(documentXml, /<w:pgNumType[^>]+w:start="3"[^>]*w:fmt="upperRoman"/);
   assert.match(documentXml, /<w:titlePg\/>/);
   assert.match(settingsXml, /<w:evenAndOddHeaders\/>/);
+  assert.match(documentXml, /<w:gridSpan w:val="2"\/>/);
+  assert.match(documentXml, /<w:vMerge w:val="restart"\/>/);
+  assert.match(documentXml, /<w:vMerge w:val="continue"\/>/);
   assert.ok(headerXmlParts.some((xml) => xml.includes("首页项目封面")));
   assert.ok(headerXmlParts.some((xml) => xml.includes("奇数页项目页眉")));
   assert.ok(headerXmlParts.some((xml) => xml.includes("奇数页项目页眉") && /<w:jc w:val="left"\/>/.test(xml) && /<w:rFonts[^>]+SimSun/.test(xml) && /<w:sz w:val="24"\/>/.test(xml) && /<w:color w:val="C00000"\/>/.test(xml) && /<w:b\/>/.test(xml)));
@@ -395,7 +421,9 @@ try {
     const previewListItems = Array.from(document.querySelectorAll(".page-body ol > li"));
     const sourceRows = Array.from(document.querySelectorAll(".word-editor table tr"));
     const sourceCells = sourceRows[1] ? Array.from(sourceRows[1].querySelectorAll("td, th")).map((cell) => cell.textContent || "") : [];
-    const previewLongRows = Array.from(document.querySelectorAll(".page-body table tr")).filter((row) => {
+    const previewLongRows = Array.from(document.querySelectorAll(".page-body table"))
+      .filter((table) => table.textContent?.includes("左侧单元格包含大量业务说明"))
+      .flatMap((table) => Array.from(table.querySelectorAll("tr"))).filter((row) => {
       const text = row.textContent || "";
       return !text.includes("说明标准") && !text.includes("下一行保持结构");
     });
@@ -421,6 +449,7 @@ try {
       tableContinuationCount: document.querySelectorAll(".pagination-table-continuation").length,
       sourceTableImageCount: document.querySelectorAll(".word-editor table img").length,
       previewTableImageCount: document.querySelectorAll(".page-body table img").length,
+      previewRowSpanCount: document.querySelectorAll('.page-body td[rowspan="2"]').length,
       templateLabelVisible: document.body.textContent?.includes("模板样式：商业计划书") || false,
       fontVariable: getComputedStyle(document.querySelector(".editor-scroll")).getPropertyValue("--document-font-family").trim(),
       lineVariable: getComputedStyle(document.querySelector(".editor-scroll")).getPropertyValue("--document-line-height").trim(),
@@ -456,6 +485,7 @@ try {
   assert.ok(result.tableContinuationCount > 0);
   assert.equal(result.sourceTableImageCount, 1);
   assert.equal(result.previewTableImageCount, 1);
+  assert.ok(result.previewRowSpanCount > 0, "分页预览应保留纵向合并单元格");
   assert.equal(result.templateLabelVisible, true);
   assert.equal(result.fontVariable, '"SimSun"');
   assert.equal(result.lineVariable, "1.5833");

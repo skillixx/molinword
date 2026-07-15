@@ -316,4 +316,15 @@ assert.ok(pageImageFooters.some((xml) => /<w:drawing>/.test(xml) && /<wp:extent 
 assert.ok(pageImageRelationships.some((xml) => /relationships\/image/.test(xml)));
 assert.ok(pageImageZip.file(/^word\/media\/.+\.png$/).length >= 1);
 
+const mergedTableBuffer = await createDocxBuffer({
+  title: "Merged table cells",
+  content: `<table><tbody><tr><th colspan="2">审批事项</th><th>状态</th></tr><tr><td rowspan="2" colspan="2">跨行结论</td><td>已批准</td></tr><tr><td>已归档</td></tr></tbody></table>`
+});
+const mergedTableZip = await JSZip.loadAsync(mergedTableBuffer);
+const mergedTableXml = await mergedTableZip.file("word/document.xml")?.async("string") || "";
+assert.ok((mergedTableXml.match(/<w:gridSpan w:val="2"\/>/g) || []).length >= 3);
+assert.match(mergedTableXml, /<w:vMerge w:val="restart"\/>/);
+assert.match(mergedTableXml, /<w:vMerge w:val="continue"\/>/);
+assert.match(mergedTableXml, /跨行结论/);
+
 console.log("DOCX export format check passed");

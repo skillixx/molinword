@@ -20,6 +20,7 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  Combine,
   Download,
   Eraser,
   FileText,
@@ -35,12 +36,14 @@ import {
   ListOrdered,
   ListTree,
   PenLine,
+  PanelTop,
   Plus,
   RefreshCw,
   Rows3,
   Save,
   Search,
   Sparkles,
+  Split,
   Strikethrough,
   Table as TableIcon,
   Trash2,
@@ -2612,6 +2615,9 @@ function Editor(props: {
             <button onClick={() => editor?.chain().focus().deleteRow().run()} disabled={!editor?.isActive("table")} title="删除当前行">删行</button>
             <button onClick={() => editor?.chain().focus().deleteColumn().run()} disabled={!editor?.isActive("table")} title="删除当前列">删列</button>
             <button onClick={() => editor?.chain().focus().deleteTable().run()} disabled={!editor?.isActive("table")} title="删除表格">删表</button>
+            <button onClick={() => editor?.chain().focus().mergeCells().run()} disabled={!editor?.can().mergeCells()} title="合并选中的单元格"><Combine size={16} />合并</button>
+            <button onClick={() => editor?.chain().focus().splitCell().run()} disabled={!editor?.can().splitCell()} title="拆分当前合并单元格"><Split size={16} />拆分</button>
+            <button onClick={() => editor?.chain().focus().toggleHeaderCell().run()} disabled={!editor?.isActive("table")} title="切换当前单元格为表头"><PanelTop size={16} />表头</button>
             <button onClick={() => imageInputRef.current?.click()} title="插入图片"><ImageIcon size={16} />图片</button>
             <input ref={imageInputRef} className="hidden-file-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={(event) => { insertImageFile(event.target.files?.[0] || null); event.currentTarget.value = ""; }} />
             <span className="format-divider" />

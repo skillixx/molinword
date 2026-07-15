@@ -134,6 +134,14 @@ async function buildFormattedDocxFixture() {
         </w:tc>
         <w:tc><w:p><w:r><w:t>Import Cell 2</w:t></w:r></w:p></w:tc>
       </w:tr>
+      <w:tr>
+        <w:tc><w:tcPr><w:gridSpan w:val="2"/><w:vMerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>Merged approval</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>Approved</w:t></w:r></w:p></w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc><w:tcPr><w:gridSpan w:val="2"/><w:vMerge/></w:tcPr><w:p/></w:tc>
+        <w:tc><w:p><w:r><w:t>Archived</w:t></w:r></w:p></w:tc>
+      </w:tr>
     </w:tbl>
     <w:p>
       <w:r><w:t>分页符前</w:t></w:r>
@@ -378,6 +386,7 @@ assert.match(imported.content, /<ol><li>Ordered item 1<ol><li>Nested ordered ite
 assert.match(imported.content, /<ul><li>Bullet item<\/li><\/ul>/);
 assert.match(imported.content, /<ol><li>Override ordered item<\/li><\/ol><ol><li>Restart ordered item<\/li><\/ol>/);
 assert.match(imported.content, /<td><p[^>]*>Import Cell 1<\/p><ol><li>Table ordered item<\/li><\/ol><\/td>/);
+assert.match(imported.content, /<td colspan="2" rowspan="2"><p[^>]*>Merged approval<\/p><\/td><td><p[^>]*>Approved<\/p><\/td>/);
 assert.deepEqual(imported.pageLayout, {
   headerText: "导入页眉",
   headerStyle: { alignment: "right", fontFamily: "Microsoft YaHei", fontSizePt: 12, color: "#1F4E79", bold: true, italic: true },
@@ -419,6 +428,9 @@ const decoratedRoundTripXml = (roundTripXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w
 assert.match(decoratedRoundTripXml, /<w:i\/>/);
 assert.match(decoratedRoundTripXml, /<w:u(?:\s+w:val="single")?\/>/);
 assert.match(decoratedRoundTripXml, /<w:strike\/>/);
+assert.match(roundTripXml, /<w:gridSpan w:val="2"\/>/);
+assert.match(roundTripXml, /<w:vMerge w:val="restart"\/>/);
+assert.match(roundTripXml, /<w:vMerge w:val="continue"\/>/);
 const roundTripImported = await parseImportedDocument({
   originalname: "round-trip-format.docx",
   buffer: roundTripBuffer,

@@ -959,24 +959,58 @@ async function parseStyledDocxParagraph(paragraphNode, context) {
 async function parseStyledDocxTableCell(cellNode, context, tagName) {
   const tcPr = xmlChild(cellNode, "w:tcPr");
   const gridSpan = xmlVal(xmlChild(tcPr, "w:gridSpan"));
-  const attrs = [];
-  if (Number(gridSpan) > 1) attrs.push(`colspan="${Number(gridSpan)}"`);
+  const verticalMergeNode = xmlChild(tcPr, "w:vMerge");
+  const verticalMerge = verticalMergeNode ? (xmlVal(verticalMergeNode) || "continue") : "";
+  const columnSpan = Number(gridSpan) > 1 ? Math.min(Math.round(Number(gridSpan)), 50) : 1;
 
   const parsedParagraphs = await Promise.all(xmlChildren(cellNode, "w:p")
     .map((paragraph) => parseStyledDocxParagraph(paragraph, context)));
   // 中文注解：单元格内同样可能包含连续编号段落，必须在表格结构内恢复 ol/ul，不能退化为普通 p。
   const paragraphs = renderDocxParagraphs(parsedParagraphs) || "<p><br></p>";
-  return `<${tagName}${attrs.length ? ` ${attrs.join(" ")}` : ""}>${paragraphs}</${tagName}>`;
+  return { tagName, paragraphs, columnSpan, rowSpan: 1, verticalMerge };
 }
 
 async function parseStyledDocxTable(tableNode, context) {
-  const rows = await Promise.all(xmlChildren(tableNode, "w:tr").map(async (rowNode, rowIndex) => {
+  const rows = [];
+  let activeVerticalMerges = new Map();
+  for (const [rowIndex, rowNode] of xmlChildren(tableNode, "w:tr").entries()) {
     const cellTag = rowIndex === 0 ? "th" : "td";
-    const cells = (await Promise.all(xmlChildren(rowNode, "w:tc").map((cellNode) => parseStyledDocxTableCell(cellNode, context, cellTag)))).join("");
-    return cells ? `<tr>${cells}</tr>` : "";
-  }));
-  const filteredRows = rows.filter(Boolean);
-  return filteredRows.length ? `<table><tbody>${filteredRows.join("")}</tbody></table>` : "";
+    const parsedCells = await Promise.all(xmlChildren(rowNode, "w:tc").map((cellNode) => parseStyledDocxTableCell(cellNode, context, cellTag)));
+    const visibleCells = [];
+    const nextVerticalMerges = new Map();
+    let columnIndex = 0;
+    for (const cell of parsedCells) {
+      if (cell.verticalMerge === "continue") {
+        const origin = activeVerticalMerges.get(columnIndex);
+        if (origin) {
+          origin.rowSpan += 1;
+          for (let offset = 0; offset < cell.columnSpan; offset += 1) nextVerticalMerges.set(columnIndex + offset, origin);
+        } else {
+          // 中文注解：损坏或裁剪过的 DOCX 可能只有 continue 没有 restart，此时保留为普通单元格，避免内容消失。
+          visibleCells.push({ ...cell, verticalMerge: "" });
+        }
+      } else {
+        visibleCells.push(cell);
+        if (cell.verticalMerge === "restart") {
+          for (let offset = 0; offset < cell.columnSpan; offset += 1) nextVerticalMerges.set(columnIndex + offset, cell);
+        }
+      }
+      columnIndex += cell.columnSpan;
+    }
+    rows.push(visibleCells);
+    activeVerticalMerges = nextVerticalMerges;
+  }
+  const renderedRows = rows.map((cells) => {
+    const html = cells.map((cell) => {
+      const attrs = [];
+      if (cell.columnSpan > 1) attrs.push(`colspan="${cell.columnSpan}"`);
+      if (cell.rowSpan > 1) attrs.push(`rowspan="${cell.rowSpan}"`);
+      return `<${cell.tagName}${attrs.length ? ` ${attrs.join(" ")}` : ""}>${cell.paragraphs}</${cell.tagName}>`;
+    }).join("");
+    return html ? `<tr>${html}</tr>` : "";
+  }).filter(Boolean);
+  // 中文注解：Word 的 vMerge continuation 单元格不在 HTML 中重复渲染，而是累加到起始单元格的 rowspan。
+  return renderedRows.length ? `<table><tbody>${renderedRows.join("")}</tbody></table>` : "";
 }
 
 function renderDocxListItems(items) {
@@ -1762,15 +1796,21 @@ function tableFromNode(tableNode, listState) {
     const cellNodes = (rowNode.children || []).filter((child) => ["td", "th"].includes(child.name));
     if (!cellNodes.length) return null;
     return new TableRow({
-      children: cellNodes.map((cellNode) => new TableCell({
-        children: tableCellChildrenFromNode(cellNode, listState),
-        shading: cellNode.name === "th" ? { fill: "F3F6F8" } : undefined
-      }))
+      children: cellNodes.map((cellNode) => {
+        const columnSpan = Math.max(1, Math.min(Math.round(Number(cellNode.attribs?.colspan) || 1), 50));
+        const rowSpan = Math.max(1, Math.min(Math.round(Number(cellNode.attribs?.rowspan) || 1), 100));
+        return new TableCell({
+          children: tableCellChildrenFromNode(cellNode, listState),
+          columnSpan: columnSpan > 1 ? columnSpan : undefined,
+          rowSpan: rowSpan > 1 ? rowSpan : undefined,
+          shading: cellNode.name === "th" ? { fill: "F3F6F8" } : undefined
+        });
+      })
     });
   }).filter(Boolean);
   if (!rows.length) return null;
 
-  // 中文注解：表格按页面内容宽度铺满，保留在线编辑里的行列结构，避免导出后变成散段落。
+  // 中文注解：colspan/rowspan 直接映射 Word 的 gridSpan/vMerge，表格按页面内容宽度铺满。
   return new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
     rows
