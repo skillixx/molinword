@@ -1221,6 +1221,21 @@ textarea {
   box-shadow: 0 12px 30px rgba(23, 33, 43, 0.18);
 }
 
+.page-sheet::after {
+  content: "";
+  position: absolute;
+  top: var(--page-border-inset-top, 0);
+  right: var(--page-border-inset-right, 0);
+  bottom: var(--page-border-inset-bottom, 0);
+  left: var(--page-border-inset-left, 0);
+  z-index: var(--page-border-z-index, 4);
+  border-top: var(--page-border-top, none);
+  border-right: var(--page-border-right, none);
+  border-bottom: var(--page-border-bottom, none);
+  border-left: var(--page-border-left, none);
+  pointer-events: none;
+}
+
 .page-body,
 .pagination-measurer {
   width: var(--page-content-width, 602px);
@@ -1231,13 +1246,24 @@ textarea {
 }
 
 .page-body {
+  position: relative;
+  z-index: 1;
   height: var(--page-content-height, 931px);
+  box-sizing: border-box;
+  padding-top: var(--page-content-padding-top, 0);
   margin: var(--page-margin-top, 96px) var(--page-margin-right, 96px) var(--page-margin-bottom, 96px) var(--page-margin-left, 96px);
   column-count: var(--page-column-count, 1);
   column-gap: var(--page-column-gap, 48px);
   column-rule: var(--page-column-rule, none);
   column-fill: auto;
   overflow: hidden;
+}
+
+.page-body.page-vertical-both {
+  /* 中文注解：Word 的页面两端对齐会把单栏页面中的内容块分布到正文区两端。 */
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
 }
 
 .page-body > .page-block {
@@ -1247,6 +1273,7 @@ textarea {
 .page-header,
 .page-footer {
   position: absolute;
+  z-index: 1;
   left: var(--page-margin-left, 96px);
   right: var(--page-margin-right, 96px);
   color: #87929d;

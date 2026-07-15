@@ -455,6 +455,12 @@ try {
   await page.getByLabel("当前节分栏数", { exact: true }).selectOption("2");
   await page.getByLabel("当前节栏间距", { exact: true }).fill("0.8");
   await page.getByLabel("当前节分栏分隔线", { exact: true }).check();
+  await page.getByLabel("当前节页面垂直对齐", { exact: true }).selectOption("center");
+  await page.getByLabel("当前节页面边框样式", { exact: true }).selectOption("double");
+  await page.getByLabel("当前节页面边框粗细", { exact: true }).selectOption("12");
+  await page.getByLabel("当前节页面边框颜色", { exact: true }).fill("#1f4e79");
+  await page.getByLabel("当前节页面边框距离", { exact: true }).fill("0.85");
+  await page.getByLabel("当前节页面边框显示范围", { exact: true }).selectOption("firstPage");
   await page.getByLabel("当前节页码格式", { exact: true }).selectOption("upperRoman");
   await page.getByLabel("当前节起始页码", { exact: true }).fill("3");
   const secondSectionHeaderInput = page.getByLabel("默认页眉文字", { exact: true });
@@ -513,6 +519,16 @@ try {
   assert.equal(storedSectionLayout.pageNumberFormat, "upperRoman");
   assert.equal(storedSectionLayout.pageNumberStart, 3);
   assert.deepEqual(storedSectionLayout.columns, { count: 2, space: 454, separate: true });
+  assert.equal(storedSectionLayout.verticalAlign, "center");
+  assert.deepEqual(storedSectionLayout.pageBorders, {
+    display: "firstPage",
+    offsetFrom: "page",
+    zOrder: "front",
+    top: { style: "double", size: 12, color: "#1F4E79", space: 24 },
+    right: { style: "double", size: 12, color: "#1F4E79", space: 24 },
+    bottom: { style: "double", size: 12, color: "#1F4E79", space: 24 },
+    left: { style: "double", size: 12, color: "#1F4E79", space: 24 }
+  });
   assert.deepEqual(storedSectionLayout.margins, { top: 720, right: 1440, bottom: 720, left: 1440 });
   assert.deepEqual(storedDocument.pageLayout, {
     headerText: "奇数页项目页眉",
@@ -537,6 +553,8 @@ try {
     headerDistance: 708,
     footerDistance: 708,
     columns: { count: 1, space: 720, separate: false },
+    verticalAlign: "top",
+    pageBorders: null,
     margins: { top: 1440, right: 1440, bottom: 1440, left: 1440 }
   });
 
@@ -593,6 +611,9 @@ try {
   assert.match(documentXml, /<w:pgNumType[^>]+w:start="3"[^>]*w:fmt="upperRoman"/);
   const exportedLandscapeSection = (documentXml.match(/<w:sectPr>[\s\S]*?<\/w:sectPr>/g) || []).find((section) => /w:orient="landscape"/.test(section)) || "";
   assert.match(exportedLandscapeSection, /<w:cols[^>]+w:space="454"[^>]+w:num="2"[^>]+w:sep="true"[^>]+w:equalWidth="true"/);
+  assert.match(exportedLandscapeSection, /<w:pgBorders[^>]+w:display="firstPage"[^>]+w:offsetFrom="page"[^>]+w:zOrder="front"/);
+  assert.match(exportedLandscapeSection, /<w:top w:val="double" w:color="1F4E79" w:sz="12" w:space="24"\/>/);
+  assert.match(exportedLandscapeSection, /<w:vAlign w:val="center"\/>/);
   assert.match(documentXml, /<w:titlePg\/>/);
   assert.match(settingsXml, /<w:evenAndOddHeaders\/>/);
   assert.match(documentXml, /<w:gridSpan w:val="2"\/>/);
@@ -715,6 +736,19 @@ try {
         const body = page?.querySelector(".page-body");
         const style = body ? getComputedStyle(body) : null;
         return style ? { count: style.columnCount, gap: Number.parseFloat(style.columnGap), ruleStyle: style.columnRuleStyle } : null;
+      })(),
+      secondSectionPageFrame: (() => {
+        const page = pages.find((item) => item.getAttribute("data-section-index") === "1");
+        const body = page?.querySelector(".page-body");
+        const frame = page ? getComputedStyle(page, "::after") : null;
+        const bodyStyle = body ? getComputedStyle(body) : null;
+        return frame && bodyStyle ? {
+          borderStyle: frame.borderTopStyle,
+          borderWidth: frame.borderTopWidth,
+          borderColor: frame.borderTopColor,
+          insetTop: frame.top,
+          contentPaddingTop: Number.parseFloat(bodyStyle.paddingTop)
+        } : null;
       })(),
       firstPageHasList: Boolean(pages[0]?.querySelector("ol")),
       firstPageText: pages[0]?.textContent || "",
@@ -847,6 +881,13 @@ try {
   assert.equal(result.secondSectionColumns?.count, "2");
   assert.ok(Math.abs((result.secondSectionColumns?.gap || 0) - 30.27) < 0.1);
   assert.equal(result.secondSectionColumns?.ruleStyle, "solid");
+  assert.deepEqual({
+    borderStyle: result.secondSectionPageFrame?.borderStyle,
+    borderWidth: result.secondSectionPageFrame?.borderWidth,
+    borderColor: result.secondSectionPageFrame?.borderColor,
+    insetTop: result.secondSectionPageFrame?.insetTop
+  }, { borderStyle: "double", borderWidth: "2px", borderColor: "rgb(31, 78, 121)", insetTop: "32px" });
+  assert.ok((result.secondSectionPageFrame?.contentPaddingTop || 0) > 100, "垂直居中的短节内容应在分页预览中下移");
   assert.equal(result.headerTexts.length, result.pageCount);
   assert.ok(result.headerImageCount > 0, "分页预览应显示在线设置的页眉图片");
   assert.equal(result.headerTexts[0], "首页项目封面");

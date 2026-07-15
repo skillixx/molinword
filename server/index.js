@@ -52,6 +52,8 @@ const defaultPageLayout = Object.freeze({
   headerDistance: 708,
   footerDistance: 708,
   columns: Object.freeze({ count: 1, space: 720, separate: false }),
+  verticalAlign: "top",
+  pageBorders: null,
   margins: defaultPageMargins
 });
 
@@ -176,6 +178,28 @@ function normalizePageColumns(value, fallback = defaultPageLayout.columns) {
   return { count, space, separate: source.separate === undefined ? Boolean(base.separate) : Boolean(source.separate) };
 }
 
+function normalizePageBorders(value, fallback = defaultPageLayout.pageBorders) {
+  const source = value && typeof value === "object" ? value : null;
+  if (!source) return fallback && typeof fallback === "object" ? normalizePageBorders(fallback, null) : null;
+  const styles = new Set(["single", "dashed", "dashSmallGap", "dotted", "dotDash", "dotDotDash", "double", "thick", "none", "nil"]);
+  const result = {
+    display: ["allPages", "firstPage", "notFirstPage"].includes(source.display) ? source.display : "allPages",
+    offsetFrom: source.offsetFrom === "text" ? "text" : "page",
+    zOrder: source.zOrder === "back" ? "back" : "front"
+  };
+  let hasBorder = false;
+  for (const side of ["top", "right", "bottom", "left"]) {
+    const border = source[side];
+    if (!border || !styles.has(String(border.style))) continue;
+    const size = Math.max(0, Math.min(96, Math.round(Number(border.size) || 0)));
+    const color = /^#[0-9a-f]{6}$/i.test(String(border.color || "")) ? String(border.color).toUpperCase() : "#000000";
+    const space = Math.max(0, Math.min(31, Math.round(Number(border.space) || 0)));
+    result[side] = { style: String(border.style), size, color, space };
+    hasBorder = true;
+  }
+  return hasBorder ? result : null;
+}
+
 function normalizePageLayout(value, fallback = defaultPageLayout) {
   const source = value && typeof value === "object" ? value : {};
   const base = fallback && typeof fallback === "object" ? fallback : defaultPageLayout;
@@ -202,6 +226,8 @@ function normalizePageLayout(value, fallback = defaultPageLayout) {
     headerDistance: normalizePageMargin(source.headerDistance, normalizePageMargin(base.headerDistance, 708)),
     footerDistance: normalizePageMargin(source.footerDistance, normalizePageMargin(base.footerDistance, 708)),
     columns,
+    verticalAlign: ["top", "center", "bottom", "both"].includes(source.verticalAlign) ? source.verticalAlign : (["top", "center", "bottom", "both"].includes(base.verticalAlign) ? base.verticalAlign : "top"),
+    pageBorders: normalizePageBorders(source.pageBorders, base.pageBorders),
     margins
   };
 }
@@ -1773,7 +1799,7 @@ function parseDocxPageVariantParts(headerPart, footerPart, fallback = defaultPag
   }, fallback);
 }
 
-function parseDocxPageGeometry(section, fallback = defaultPageLayout) {
+function parseDocxPageGeometry(section, fallback = defaultPageLayout, themeColors = {}) {
   const pageSize = xmlChild(section, "w:pgSz");
   const pageMargin = xmlChild(section, "w:pgMar");
   const width = Number(firstValue(pageSize?.attribs, ["w:w", "w", "width"]));
@@ -1786,6 +1812,9 @@ function parseDocxPageGeometry(section, fallback = defaultPageLayout) {
   const customColumns = xmlChildren(columnsNode, "w:col");
   const columnCountValue = firstValue(columnsNode?.attribs, ["w:num", "num"]);
   const columnSpaceValue = firstValue(columnsNode?.attribs, ["w:space", "space"]);
+  const pageBordersNode = xmlChild(section, "w:pgBorders");
+  const parsedPageBorders = parseDocxBorders(pageBordersNode, themeColors, false);
+  const verticalAlign = xmlVal(xmlChild(section, "w:vAlign"));
   const orientation = explicitOrientation === "landscape" || (!explicitOrientation && width > height)
     ? "landscape"
     : (pageSize ? "portrait" : fallback.orientation);
@@ -1806,6 +1835,13 @@ function parseDocxPageGeometry(section, fallback = defaultPageLayout) {
         ? wordOnOffEnabled(firstValue(columnsNode.attribs, ["w:sep", "sep"]) !== "" ? { attribs: { "w:val": firstValue(columnsNode.attribs, ["w:sep", "sep"]) } } : null)
         : fallback.columns?.separate
     }, fallback.columns),
+    verticalAlign: ["top", "center", "bottom", "both"].includes(verticalAlign) ? verticalAlign : fallback.verticalAlign,
+    pageBorders: normalizePageBorders(pageBordersNode ? {
+      display: firstValue(pageBordersNode.attribs, ["w:display", "display"]),
+      offsetFrom: firstValue(pageBordersNode.attribs, ["w:offsetFrom", "offsetFrom"]),
+      zOrder: firstValue(pageBordersNode.attribs, ["w:zOrder", "zOrder"]),
+      ...parsedPageBorders
+    } : null, fallback.pageBorders),
     margins: normalizePageMargins({
       top: marginValue("top"),
       right: marginValue("right"),
@@ -1860,7 +1896,7 @@ async function parseDocxPageLayout(buffer) {
       defaultHeader, defaultFooter, firstHeader, firstFooter, evenHeader, evenFooter
     ].map(async (part) => { part.images = await parseDocxPartImages(zip, part); }));
     pageParts.push(defaultHeader.xml, defaultFooter.xml, firstHeader.xml, firstFooter.xml, evenHeader.xml, evenFooter.xml);
-    const geometry = section ? parseDocxPageGeometry(section, fallback) : { orientation: fallback.orientation, pageNumberFormat: fallback.pageNumberFormat, pageNumberStart: fallback.pageNumberStart, headerDistance: fallback.headerDistance, footerDistance: fallback.footerDistance, margins: fallback.margins };
+    const geometry = section ? parseDocxPageGeometry(section, fallback, styleContext.themeColors || {}) : { orientation: fallback.orientation, pageNumberFormat: fallback.pageNumberFormat, pageNumberStart: fallback.pageNumberStart, headerDistance: fallback.headerDistance, footerDistance: fallback.footerDistance, columns: fallback.columns, verticalAlign: fallback.verticalAlign, pageBorders: fallback.pageBorders, margins: fallback.margins };
     sectionLayouts.push(normalizePageLayout({
       ...parseDocxPageVariantParts(defaultHeader, defaultFooter, fallback, styleContext),
       firstPageDifferent: section ? wordOnOffEnabled(xmlChild(section, "w:titlePg")) : fallback.firstPageDifferent,
@@ -2767,10 +2803,29 @@ function createDocxSectionProperties(pageLayout, isFirstSection, breakType = "ne
     oddPage: SectionType.ODD_PAGE,
     evenPage: SectionType.EVEN_PAGE
   };
+  const pageBorderStyleMap = {
+    single: BorderStyle.SINGLE, dashed: BorderStyle.DASHED, dashSmallGap: BorderStyle.DASH_SMALL_GAP,
+    dotted: BorderStyle.DOTTED, dotDash: BorderStyle.DOT_DASH, dotDotDash: BorderStyle.DOT_DOT_DASH,
+    double: BorderStyle.DOUBLE, thick: BorderStyle.THICK, none: BorderStyle.NONE, nil: BorderStyle.NIL
+  };
+  const pageBorders = layout.pageBorders ? {
+    pageBorders: { display: layout.pageBorders.display, offsetFrom: layout.pageBorders.offsetFrom, zOrder: layout.pageBorders.zOrder },
+    ...Object.fromEntries(["top", "right", "bottom", "left"].flatMap((side) => {
+      const border = layout.pageBorders[side];
+      if (!border || !pageBorderStyleMap[border.style]) return [];
+      return [[`pageBorder${side[0].toUpperCase()}${side.slice(1)}`, {
+        style: pageBorderStyleMap[border.style],
+        size: border.size,
+        color: border.color.slice(1),
+        space: border.space
+      }]];
+    }))
+  } : undefined;
   return {
     ...(!isFirstSection ? { type: sectionTypes[normalizeSectionBreakType(breakType)] } : {}),
     titlePage: layout.firstPageDifferent,
     column: { count: layout.columns.count, space: layout.columns.space, separate: layout.columns.separate, equalWidth: true },
+    verticalAlign: layout.verticalAlign,
     page: {
       size: {
         width: docxPage.widthTwip,
@@ -2781,7 +2836,8 @@ function createDocxSectionProperties(pageLayout, isFirstSection, breakType = "ne
       pageNumbers: {
         ...(layout.pageNumberStart !== null ? { start: layout.pageNumberStart } : {}),
         formatType: layout.pageNumberFormat
-      }
+      },
+      borders: pageBorders
     }
   };
 }

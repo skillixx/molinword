@@ -199,6 +199,16 @@ type DocumentPageVariant = {
 };
 type DocumentPageMargins = { top: number; right: number; bottom: number; left: number };
 type DocumentPageColumns = { count: number; space: number; separate: boolean };
+type DocumentPageBorderSide = { style: string; size: number; color: string; space: number };
+type DocumentPageBorders = {
+  display: "allPages" | "firstPage" | "notFirstPage";
+  offsetFrom: "page" | "text";
+  zOrder: "front" | "back";
+  top?: DocumentPageBorderSide;
+  right?: DocumentPageBorderSide;
+  bottom?: DocumentPageBorderSide;
+  left?: DocumentPageBorderSide;
+};
 type SectionBreakType = "nextPage" | "oddPage" | "evenPage";
 type DocumentPageLayout = DocumentPageVariant & {
   firstPageDifferent: boolean;
@@ -211,6 +221,8 @@ type DocumentPageLayout = DocumentPageVariant & {
   headerDistance: number;
   footerDistance: number;
   columns: DocumentPageColumns;
+  verticalAlign: "top" | "center" | "bottom" | "both";
+  pageBorders: DocumentPageBorders | null;
   margins: DocumentPageMargins;
 };
 const defaultDocumentPageTextStyle: DocumentPageTextStyle = { alignment: "center", fontFamily: "Microsoft YaHei", fontSizePt: 9, color: "#6B7280", bold: false, italic: false };
@@ -243,8 +255,34 @@ const defaultDocumentPageLayout: DocumentPageLayout = {
   headerDistance: 708,
   footerDistance: 708,
   columns: { count: 1, space: 720, separate: false },
+  verticalAlign: "top",
+  pageBorders: null,
   margins: { ...defaultDocumentPageMargins }
 };
+
+function normalizeDocumentPageBorders(value: unknown): DocumentPageBorders | null {
+  const source = value && typeof value === "object" ? value as Record<string, unknown> : null;
+  if (!source) return null;
+  const result: DocumentPageBorders = {
+    display: ["allPages", "firstPage", "notFirstPage"].includes(String(source.display)) ? source.display as DocumentPageBorders["display"] : "allPages",
+    offsetFrom: source.offsetFrom === "text" ? "text" : "page",
+    zOrder: source.zOrder === "back" ? "back" : "front"
+  };
+  const styles = new Set(["single", "dashed", "dashSmallGap", "dotted", "dotDash", "dotDotDash", "double", "thick", "none", "nil"]);
+  let hasBorder = false;
+  for (const side of ["top", "right", "bottom", "left"] as const) {
+    const border = source[side] && typeof source[side] === "object" ? source[side] as Record<string, unknown> : null;
+    if (!border || !styles.has(String(border.style))) continue;
+    result[side] = {
+      style: String(border.style),
+      size: Math.max(0, Math.min(96, Math.round(Number(border.size) || 0))),
+      color: /^#[0-9a-f]{6}$/i.test(String(border.color || "")) ? String(border.color).toUpperCase() : "#000000",
+      space: Math.max(0, Math.min(31, Math.round(Number(border.space) || 0)))
+    };
+    hasBorder = true;
+  }
+  return hasBorder ? result : null;
+}
 
 function normalizeDocumentPageTextStyle(value: Partial<DocumentPageTextStyle> | null | undefined, fallback = defaultDocumentPageTextStyle): DocumentPageTextStyle {
   const fontSizePt = Number(value?.fontSizePt ?? fallback.fontSizePt);
@@ -342,6 +380,7 @@ function normalizeDocumentPageLayout(value: Partial<DocumentPageLayout> | null |
   const availableWidth = Math.max(720, pageWidth - margins.left - margins.right);
   const maximumColumnSpace = columnCount > 1 ? Math.max(0, Math.floor((availableWidth - columnCount * 720) / (columnCount - 1))) : columnSpace;
   const columns = { count: columnCount, space: Math.min(columnSpace, maximumColumnSpace), separate: columnCount > 1 && Boolean(value?.columns?.separate) };
+  const verticalAlignValues: DocumentPageLayout["verticalAlign"][] = ["top", "center", "bottom", "both"];
   return {
     ...normalizeDocumentPageVariant(value),
     firstPageDifferent: Boolean(value?.firstPageDifferent),
@@ -354,6 +393,8 @@ function normalizeDocumentPageLayout(value: Partial<DocumentPageLayout> | null |
     headerDistance: Number.isFinite(Number(value?.headerDistance)) ? Math.max(0, Math.min(Math.round(Number(value?.headerDistance)), 7200)) : 708,
     footerDistance: Number.isFinite(Number(value?.footerDistance)) ? Math.max(0, Math.min(Math.round(Number(value?.footerDistance)), 7200)) : 708,
     columns,
+    verticalAlign: verticalAlignValues.includes(value?.verticalAlign as DocumentPageLayout["verticalAlign"]) ? value!.verticalAlign! : "top",
+    pageBorders: normalizeDocumentPageBorders(value?.pageBorders),
     margins
   };
 }
@@ -517,7 +558,7 @@ const docxPagePreview = {
   heightPx: 1123,
   twipToPx: 96 / 1440
 };
-type PreviewPage = { blocks: string[]; sectionIndex: number; sectionPageIndex: number; layout: DocumentPageLayout };
+type PreviewPage = { blocks: string[]; sectionIndex: number; sectionPageIndex: number; layout: DocumentPageLayout; usedHeight: number };
 
 function pageGeometry(layout: DocumentPageLayout) {
   const landscape = layout.orientation === "landscape";
@@ -544,8 +585,24 @@ function pageGeometry(layout: DocumentPageLayout) {
   };
 }
 
-function pageGeometryStyle(layout: DocumentPageLayout): React.CSSProperties {
+function pageBorderCss(border: DocumentPageBorderSide | undefined) {
+  if (!border || ["none", "nil"].includes(border.style) || border.size <= 0) return "none";
+  const style = border.style === "double" ? "double" : border.style === "dotted" ? "dotted" : border.style.includes("dash") || border.style.startsWith("dot") ? "dashed" : "solid";
+  return `${Math.round(border.size / 6 * 100) / 100}px ${style} ${border.color}`;
+}
+
+function pageGeometryStyle(layout: DocumentPageLayout, sectionPageIndex = 0, usedHeight = 0): React.CSSProperties {
   const geometry = pageGeometry(layout);
+  const pageBorders = layout.pageBorders;
+  const showPageBorder = Boolean(pageBorders) && (pageBorders?.display === "allPages" || (pageBorders?.display === "firstPage" && sectionPageIndex === 0) || (pageBorders?.display === "notFirstPage" && sectionPageIndex > 0));
+  const borderInset = (side: keyof DocumentPageMargins) => {
+    const border = pageBorders?.[side];
+    const spacePx = (border?.space || 0) * 96 / 72;
+    return pageBorders?.offsetFrom === "text" ? Math.max(0, geometry.margins[side] - spacePx) : spacePx;
+  };
+  const occupiedHeight = Math.min(geometry.contentHeightPx, Math.max(0, usedHeight));
+  const remainingHeight = Math.max(0, geometry.contentHeightPx - occupiedHeight);
+  const verticalOffset = layout.verticalAlign === "center" ? remainingHeight / 2 : layout.verticalAlign === "bottom" ? remainingHeight : 0;
   return {
     "--page-width": `${geometry.widthPx}px`,
     "--page-height": `${geometry.heightPx}px`,
@@ -559,7 +616,17 @@ function pageGeometryStyle(layout: DocumentPageLayout): React.CSSProperties {
     "--page-content-height": `${geometry.contentHeightPx}px`,
     "--page-column-count": String(geometry.columnCount),
     "--page-column-gap": `${geometry.columnGapPx}px`,
-    "--page-column-rule": layout.columns.separate && geometry.columnCount > 1 ? "1px solid #87929d" : "none"
+    "--page-column-rule": layout.columns.separate && geometry.columnCount > 1 ? "1px solid #87929d" : "none",
+    "--page-content-padding-top": `${Math.round(verticalOffset * 100) / 100}px`,
+    "--page-border-top": showPageBorder ? pageBorderCss(pageBorders?.top) : "none",
+    "--page-border-right": showPageBorder ? pageBorderCss(pageBorders?.right) : "none",
+    "--page-border-bottom": showPageBorder ? pageBorderCss(pageBorders?.bottom) : "none",
+    "--page-border-left": showPageBorder ? pageBorderCss(pageBorders?.left) : "none",
+    "--page-border-inset-top": `${borderInset("top")}px`,
+    "--page-border-inset-right": `${borderInset("right")}px`,
+    "--page-border-inset-bottom": `${borderInset("bottom")}px`,
+    "--page-border-inset-left": `${borderInset("left")}px`,
+    "--page-border-z-index": pageBorders?.zOrder === "back" ? "0" : "4"
   } as React.CSSProperties;
 }
 
@@ -647,6 +714,35 @@ const paragraphBorderOptions = [
   { label: "虚线边框", value: "dashed" },
   { label: "下边框", value: "bottom" }
 ];
+const pageBorderStyleOptions = [
+  { label: "无边框", value: "none" },
+  { label: "细实线", value: "single" },
+  { label: "粗实线", value: "thick" },
+  { label: "双实线", value: "double" },
+  { label: "虚线", value: "dashed" },
+  { label: "点线", value: "dotted" }
+];
+
+function updateUniformPageBorders(current: DocumentPageBorders | null, patch: Partial<DocumentPageBorderSide> & Partial<Pick<DocumentPageBorders, "display" | "offsetFrom" | "zOrder">> & { remove?: boolean }) {
+  if (patch.remove) return null;
+  const normalized = normalizeDocumentPageBorders(current);
+  const sample = normalized?.top || normalized?.right || normalized?.bottom || normalized?.left || { style: "single", size: 8, color: "#245F55", space: 24 };
+  const border = {
+    style: patch.style || sample.style,
+    size: patch.size === undefined ? sample.size : patch.size,
+    color: patch.color || sample.color,
+    space: patch.space === undefined ? sample.space : patch.space
+  };
+  return normalizeDocumentPageBorders({
+    display: patch.display || normalized?.display || "allPages",
+    offsetFrom: patch.offsetFrom || normalized?.offsetFrom || "page",
+    zOrder: patch.zOrder || normalized?.zOrder || "front",
+    top: border,
+    right: border,
+    bottom: border,
+    left: border
+  });
+}
 const tableRowHeightOptions = [
   { label: "自动行高", value: "0" },
   { label: "0.8 cm", value: "454" },
@@ -2707,7 +2803,7 @@ function Editor(props: {
   const [hasSelection, setHasSelection] = React.useState(false);
   const [manualSavePending, setManualSavePending] = React.useState(false);
   const [viewMode, setViewMode] = React.useState<EditorViewMode>("edit");
-  const [previewPages, setPreviewPages] = React.useState<PreviewPage[]>([{ blocks: [buildExportPreviewHtml(props.currentTitle, props.content)], sectionIndex: 0, sectionPageIndex: 0, layout: normalizeDocumentPageLayout(props.pageLayout) }]);
+  const [previewPages, setPreviewPages] = React.useState<PreviewPage[]>([{ blocks: [buildExportPreviewHtml(props.currentTitle, props.content)], sectionIndex: 0, sectionPageIndex: 0, layout: normalizeDocumentPageLayout(props.pageLayout), usedHeight: 0 }]);
   const [activeSectionIndex, setActiveSectionIndex] = React.useState(0);
   const [activeSectionLayout, setActiveSectionLayout] = React.useState<DocumentPageLayout>(() => normalizeDocumentPageLayout(props.pageLayout));
   const [sectionCount, setSectionCount] = React.useState(1);
@@ -2825,13 +2921,13 @@ function Editor(props: {
     let pageContentHeight = currentGeometry.contentHeightPx * currentGeometry.columnCount;
     let currentSectionIndex = 0;
     let currentSectionPageIndex = 0;
-    const nextPages: PreviewPage[] = [{ blocks: [], sectionIndex: 0, sectionPageIndex: 0, layout: currentLayout }];
+    const nextPages: PreviewPage[] = [{ blocks: [], sectionIndex: 0, sectionPageIndex: 0, layout: currentLayout, usedHeight: 0 }];
     let currentHeight = 0;
 
     const openNextPage = (preserveBlankPage = false) => {
       if (preserveBlankPage || nextPages[nextPages.length - 1].blocks.length) {
         currentSectionPageIndex += 1;
-        nextPages.push({ blocks: [], sectionIndex: currentSectionIndex, sectionPageIndex: currentSectionPageIndex, layout: currentLayout });
+        nextPages.push({ blocks: [], sectionIndex: currentSectionIndex, sectionPageIndex: currentSectionPageIndex, layout: currentLayout, usedHeight: 0 });
       }
       currentHeight = 0;
     };
@@ -2847,7 +2943,7 @@ function Editor(props: {
       pageContentHeight = currentGeometry.contentHeightPx * currentGeometry.columnCount;
       currentSectionIndex += 1;
       currentSectionPageIndex = 0;
-      nextPages.push({ blocks: [], sectionIndex: currentSectionIndex, sectionPageIndex: 0, layout: currentLayout });
+      nextPages.push({ blocks: [], sectionIndex: currentSectionIndex, sectionPageIndex: 0, layout: currentLayout, usedHeight: 0 });
       currentHeight = 0;
     };
     const measureHtml = (html: string) => {
@@ -2874,6 +2970,7 @@ function Editor(props: {
     const appendHtml = (html: string, height = measureHtml(html)) => {
       nextPages[nextPages.length - 1].blocks.push(html);
       currentHeight += height;
+      nextPages[nextPages.length - 1].usedHeight = currentHeight;
     };
     const appendOversizedListItem = (list: HTMLElement, itemIndex: number) => {
       const item = Array.from(list.children).filter((child) => child.matches("li"))[itemIndex];
@@ -3502,6 +3599,11 @@ function Editor(props: {
   const isSaving = manualSavePending || props.saveStatus === "保存中";
   const selectedImageAttributes = editor?.isActive("image") ? editor.getAttributes("image") : null;
   const selectedImagePresentation = clientFloatingImagePresentation(selectedImageAttributes?.docxFloating);
+  const activePageBorder = activeSectionLayout.pageBorders;
+  const activePageBorderSample = activePageBorder?.top || activePageBorder?.right || activePageBorder?.bottom || activePageBorder?.left || null;
+  const updateActivePageBorders = (patch: Parameters<typeof updateUniformPageBorders>[1]) => {
+    updateCurrentSectionLayout((current) => ({ ...current, pageBorders: updateUniformPageBorders(current.pageBorders, patch) }));
+  };
   let currentDisplayPageNumber = 0;
   let previousDisplaySection = -1;
   const previewDisplayPageNumbers = previewPages.map((page) => {
@@ -3551,6 +3653,22 @@ function Editor(props: {
                     <label>栏间距（厘米）<input type="number" aria-label="当前节栏间距" min="0" max="12.7" step="0.1" value={twipToCentimeter(activeSectionLayout.columns.space)} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, columns: { ...current.columns, space: centimeterToTwip(event.target.value, current.columns.space) } }))} /></label>
                   </div>
                   <label className="page-number-toggle"><input type="checkbox" aria-label="当前节分栏分隔线" checked={activeSectionLayout.columns.separate} disabled={activeSectionLayout.columns.count <= 1} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, columns: { ...current.columns, separate: event.target.checked } }))} />分隔线</label>
+                  <div className="page-margin-grid">
+                    <label>页面垂直对齐<select aria-label="当前节页面垂直对齐" value={activeSectionLayout.verticalAlign} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, verticalAlign: event.target.value as DocumentPageLayout["verticalAlign"] }))}><option value="top">顶端</option><option value="center">居中</option><option value="bottom">底端</option><option value="both" disabled={activeSectionLayout.columns.count > 1}>两端对齐</option></select></label>
+                    <label>页面边框<select aria-label="当前节页面边框样式" value={activePageBorderSample?.style || "none"} onChange={(event) => updateActivePageBorders(event.target.value === "none" ? { remove: true } : { style: event.target.value })}>{pageBorderStyleOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+                  </div>
+                  <div className="page-margin-grid">
+                    <label>边框粗细<select aria-label="当前节页面边框粗细" disabled={!activePageBorderSample} value={activePageBorderSample?.size || 8} onChange={(event) => updateActivePageBorders({ size: Number(event.target.value) })}><option value="4">0.5 磅</option><option value="8">1 磅</option><option value="12">1.5 磅</option><option value="18">2.25 磅</option></select></label>
+                    <label>边框颜色<input type="color" aria-label="当前节页面边框颜色" disabled={!activePageBorderSample} value={activePageBorderSample?.color || "#245F55"} onChange={(event) => updateActivePageBorders({ color: event.target.value })} /></label>
+                  </div>
+                  <div className="page-margin-grid">
+                    <label>距参考线（厘米）<input type="number" aria-label="当前节页面边框距离" disabled={!activePageBorderSample} min="0" max="1.1" step="0.05" value={Math.round((activePageBorderSample?.space || 0) * 2.54 / 72 * 100) / 100} onChange={(event) => updateActivePageBorders({ space: Math.max(0, Math.min(31, Math.round(Number(event.target.value) / 2.54 * 72))) })} /></label>
+                    <label>距离基准<select aria-label="当前节页面边框距离基准" disabled={!activePageBorderSample} value={activePageBorder?.offsetFrom || "page"} onChange={(event) => updateActivePageBorders({ offsetFrom: event.target.value as DocumentPageBorders["offsetFrom"] })}><option value="page">纸张边缘</option><option value="text">正文区域</option></select></label>
+                  </div>
+                  <div className="page-margin-grid">
+                    <label>显示范围<select aria-label="当前节页面边框显示范围" disabled={!activePageBorderSample} value={activePageBorder?.display || "allPages"} onChange={(event) => updateActivePageBorders({ display: event.target.value as DocumentPageBorders["display"] })}><option value="allPages">本节所有页</option><option value="firstPage">仅本节首页</option><option value="notFirstPage">除本节首页</option></select></label>
+                    <label>边框层级<select aria-label="当前节页面边框层级" disabled={!activePageBorderSample} value={activePageBorder?.zOrder || "front"} onChange={(event) => updateActivePageBorders({ zOrder: event.target.value as DocumentPageBorders["zOrder"] })}><option value="front">文字前方</option><option value="back">文字后方</option></select></label>
+                  </div>
                   <div className="page-margin-grid">
                     <label>页码格式<select aria-label="当前节页码格式" value={activeSectionLayout.pageNumberFormat} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, pageNumberFormat: event.target.value as DocumentPageLayout["pageNumberFormat"] }))}><option value="decimal">1, 2, 3</option><option value="upperRoman">I, II, III</option><option value="lowerRoman">i, ii, iii</option><option value="upperLetter">A, B, C</option><option value="lowerLetter">a, b, c</option></select></label>
                     <label>起始页码<input type="number" aria-label="当前节起始页码" min="0" max="999999" placeholder="续前节" value={activeSectionLayout.pageNumberStart ?? ""} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, pageNumberStart: event.target.value === "" ? null : Math.max(0, Math.min(Math.round(Number(event.target.value)), 999999)) }))} /></label>
@@ -3682,11 +3800,11 @@ function Editor(props: {
               <div className="paged-preview" aria-label="分页预览">
                 {previewPages.map((page, index) => {
                   const pageVariant = pageVariantForPage(page.layout, index, page.sectionPageIndex);
-                  return <article className="page-sheet" data-section-index={page.sectionIndex} style={pageGeometryStyle(page.layout)} key={index}>
+                  return <article className="page-sheet" data-section-index={page.sectionIndex} data-section-page-index={page.sectionPageIndex} style={pageGeometryStyle(page.layout, page.sectionPageIndex, page.usedHeight)} key={index}>
                     {pageVariant.headerText || pageVariant.headerImages.length || pageVariant.headerPageNumberTemplate ? <div className="page-header multiline" style={pageTextCssStyle(pageVariant.headerStyle)}>
                       <PagePartContent text={pageVariant.headerText} images={pageVariant.headerImages} pageNumberTemplate={pageVariant.headerPageNumberTemplate} pageNumberSeparate={pageVariant.headerPageNumberSeparate} pageNumber={previewDisplayPageNumbers[index]} pageCount={previewPages.length} pageNumberFormat={page.layout.pageNumberFormat} />
                     </div> : null}
-                    <div className="page-body">
+                    <div className={`page-body${page.layout.verticalAlign === "both" && page.layout.columns.count === 1 ? " page-vertical-both" : ""}`}>
                       {page.blocks.map((html, blockIndex) => <div className="page-block" key={`${index}-${blockIndex}`} dangerouslySetInnerHTML={{ __html: html }} />)}
                     </div>
                     {pageVariant.footerText || pageVariant.footerImages.length || pageVariant.footerPageNumberTemplate ? <div className="page-footer multiline" style={pageTextCssStyle(pageVariant.footerStyle)}>

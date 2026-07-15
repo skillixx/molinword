@@ -60,7 +60,17 @@ const buffer = await createDocxBuffer({
     evenPage: { headerText: "偶数页眉", footerText: "偶数页脚", pageNumberEnabled: true },
     headerDistance: 480,
     footerDistance: 840,
-    columns: { count: 2, space: 720, separate: true }
+    columns: { count: 2, space: 720, separate: true },
+    verticalAlign: "bottom",
+    pageBorders: {
+      display: "notFirstPage",
+      offsetFrom: "text",
+      zOrder: "back",
+      top: { style: "dashed", size: 8, color: "#C00000", space: 12 },
+      right: { style: "dashed", size: 8, color: "#C00000", space: 12 },
+      bottom: { style: "dashed", size: 8, color: "#C00000", space: 12 },
+      left: { style: "dashed", size: 8, color: "#C00000", space: 12 }
+    }
   }
 });
 const zip = await JSZip.loadAsync(buffer);
@@ -170,6 +180,9 @@ assert.match(documentXml, /<w:pgSz[^>]+w:w="11906"[^>]+w:h="16838"/);
 assert.match(documentXml, /<w:pgMar[^>]+w:top="1440"[^>]+w:right="1440"[^>]+w:bottom="1440"[^>]+w:left="1440"/);
 assert.match(documentXml, /<w:pgMar[^>]+w:header="480"[^>]+w:footer="840"/);
 assert.match(documentXml, /<w:cols[^>]+w:space="720"[^>]+w:num="2"[^>]+w:sep="true"[^>]+w:equalWidth="true"/);
+assert.match(documentXml, /<w:pgBorders[^>]+w:display="notFirstPage"[^>]+w:offsetFrom="text"[^>]+w:zOrder="back"/);
+assert.match(documentXml, /<w:top w:val="dashed" w:color="C00000" w:sz="8" w:space="12"\/>/);
+assert.match(documentXml, /<w:vAlign w:val="bottom"\/>/);
 assert.match(documentXml, /<w:headerReference w:type="first"/);
 assert.match(documentXml, /<w:headerReference w:type="even"/);
 assert.match(documentXml, /<w:titlePg\/>/);
