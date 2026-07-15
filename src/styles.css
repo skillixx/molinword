@@ -1235,6 +1235,24 @@ textarea {
   max-width: 100%;
 }
 
+.docx-tab {
+  display: inline-block;
+  width: 48px;
+  min-width: 2px;
+  height: 1em;
+  box-sizing: border-box;
+  vertical-align: baseline;
+}
+
+.docx-tab[data-tab-alignment="bar"] {
+  border-right: 1px solid currentColor;
+}
+
+.word-editor .docx-tab.ProseMirror-selectednode {
+  outline: 1px solid #2f7d68;
+  outline-offset: 1px;
+}
+
 .paged-preview .page-break-marker,
 .pagination-measurer .page-break-marker,
 .paged-preview .section-break-marker,

@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import express from "express";
-import { AlignmentType, Document, Footer, Header, HeadingLevel, ImageRun, LevelFormat, LineRuleType, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, Table, TableCell, TableRow, TextRun, WidthType } from "docx";
+import { AlignmentType, Document, Footer, Header, HeadingLevel, ImageRun, LevelFormat, LineRuleType, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, Tab, Table, TableCell, TableRow, TextRun, WidthType } from "docx";
 import { imageSize } from "image-size";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
@@ -340,12 +340,12 @@ function sanitizeImportedHtml(value = "") {
   return sanitizeHtml(String(value), {
     allowedTags: ["h1", "h2", "h3", "p", "span", "strong", "b", "em", "i", "u", "s", "mark", "sup", "sub", "ul", "ol", "li", "blockquote", "br", "table", "tbody", "thead", "tr", "th", "td", "img", "div"],
     allowedAttributes: {
-      h1: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control"],
-      h2: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control"],
-      h3: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control"],
-      p: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control"],
-      li: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control"],
-      span: ["style"],
+      h1: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops"],
+      h2: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops"],
+      h3: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops"],
+      p: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops"],
+      li: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops"],
+      span: ["style", "class", "data-docx-tab", "data-tab-position", "data-tab-alignment"],
       mark: ["data-highlight", "style"],
       th: ["colspan", "rowspan"],
       td: ["colspan", "rowspan"],
@@ -667,6 +667,11 @@ function parseParagraphProperties(pPr) {
     const element = xmlChild(pPr, elementName);
     if (element) styles[styleName] = wordToggleEnabled(element) ? "1" : "0";
   }
+  const tabStops = xmlChildren(xmlChild(pPr, "w:tabs"), "w:tab").map((tab) => ({
+    alignment: firstValue(tab.attribs, ["w:val", "val"]),
+    position: Math.round(Number(firstValue(tab.attribs, ["w:pos", "pos"])))
+  })).filter((tab) => ["left", "center", "right", "decimal", "bar"].includes(tab.alignment) && Number.isFinite(tab.position) && tab.position >= 0 && tab.position <= 31680);
+  if (tabStops.length) styles.$tabStops = JSON.stringify(tabStops);
   // 中文注解：段落间距及行距规则都进入安全样式，后续编辑和再次导出才能保持同一分页语义。
   return styles;
 }
@@ -933,7 +938,26 @@ function docxParagraphTag(style = {}) {
   return "p";
 }
 
-async function docxRunToHtml(runNode, inheritedRunStyles = {}, context = {}) {
+function normalizeDocxTabStops(value) {
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((tab) => ({
+      alignment: ["left", "center", "right", "decimal", "bar"].includes(tab?.alignment) ? tab.alignment : "left",
+      position: Math.max(0, Math.min(Math.round(Number(tab?.position) || 0), 31680))
+    })).filter((tab) => tab.position > 0).slice(0, 50);
+  } catch {
+    return [];
+  }
+}
+
+function docxTabHtml(tabState) {
+  const index = tabState.index++;
+  const stop = tabState.stops[index] || { alignment: "left", position: (index + 1) * 720 };
+  return `<span class="docx-tab" data-docx-tab="true" data-tab-position="${stop.position}" data-tab-alignment="${stop.alignment}"></span>`;
+}
+
+async function docxRunToHtml(runNode, inheritedRunStyles = {}, context = {}, tabState = { stops: [], index: 0 }) {
   const { zip = null, relationships = new Map(), styleMap = new Map(), themeFonts = {}, themeColors = {} } = context;
   const text = docxTextFromRun(runNode);
   const imageHtml = zip ? (await docxImagesFromRun(runNode, zip, relationships)).join("") : "";
@@ -943,7 +967,7 @@ async function docxRunToHtml(runNode, inheritedRunStyles = {}, context = {}) {
   const characterStyleId = xmlVal(xmlChild(runProperties, "w:rStyle"));
   const characterStyle = styleMap.get(characterStyleId) || { run: {} };
   const baseRunStyles = { ...inheritedRunStyles, ...(characterStyle.run || {}), ...parseRunProperties(runProperties, themeFonts, themeColors) };
-  const textHtml = splitWordTextByScript(text, baseRunStyles).map((segment) => {
+  const renderText = (value) => splitWordTextByScript(value, baseRunStyles).map((segment) => {
     const runStyles = applyWordScriptFont({ ...baseRunStyles }, segment.text, segment.script);
     // 中文注解：同一个 Word run 可同时定义西文和东亚字体，按脚本拆成相邻 span 后在线显示和再次导出才能保留混排。
     if (runStyles.$bold === "0") delete runStyles["font-weight"];
@@ -963,6 +987,8 @@ async function docxRunToHtml(runNode, inheritedRunStyles = {}, context = {}) {
     const style = cssText(runStyles);
     return style && html ? `<span style="${escapeHtml(style)}">${html}</span>` : html;
   }).join("");
+  const textParts = text.split("\t");
+  const textHtml = textParts.map((part, index) => `${renderText(part)}${index < textParts.length - 1 ? docxTabHtml(tabState) : ""}`).join("");
   return `${textHtml}${imageHtml}${pageBreaks}`;
 }
 
@@ -974,7 +1000,11 @@ async function parseStyledDocxParagraph(paragraphNode, context) {
   const style = { id: effectiveStyleId, ...(styleMap.get(effectiveStyleId) || defaultParagraphStyle) };
   const paragraphStyles = { ...(style.paragraph || {}), ...parseParagraphProperties(pPr) };
   const inheritedRunStyles = style.run || {};
-  const body = (await Promise.all(xmlChildren(paragraphNode, "w:r").map((run) => docxRunToHtml(run, inheritedRunStyles, context)))).join("") || "<br>";
+  const tabState = { stops: normalizeDocxTabStops(paragraphStyles.$tabStops), index: 0 };
+  const bodyParts = [];
+  // 中文注解：制表位按段落中的出现顺序消费，不能并行解析 run，否则多个 Tab 会绑定到错误位置。
+  for (const run of xmlChildren(paragraphNode, "w:r")) bodyParts.push(await docxRunToHtml(run, inheritedRunStyles, context, tabState));
+  const body = bodyParts.join("") || "<br>";
   const tag = docxParagraphTag(style);
   const list = docxListInfo(pPr, style, numbering);
   const indentLevel = wordTwipToIndentLevel(firstValue(xmlChild(pPr, "w:ind")?.attribs, ["w:firstLine", "firstLine"]));
@@ -986,6 +1016,7 @@ async function parseStyledDocxParagraph(paragraphNode, context) {
   if (paragraphStyles.$keepLines === "1") attrs.push('data-keep-lines="true"');
   if (paragraphStyles.$pageBreakBefore === "1") attrs.push('data-page-break-before="true"');
   if (paragraphStyles.$widowControl) attrs.push(`data-widow-control="${paragraphStyles.$widowControl === "1" ? "true" : "false"}"`);
+  if (tabState.stops.length) attrs.push(`data-tab-stops="${escapeHtml(JSON.stringify(tabState.stops))}"`);
   if (body.includes(pageBreakHtml())) {
     // 中文注解：分页符是块级语义，导入时拆出段落外层，避免保存为非法的 p > div 结构。
     const chunks = body.split(pageBreakHtml());
@@ -1688,12 +1719,27 @@ function paragraphStyleFromNode(node) {
   if (node?.attribs?.["data-keep-lines"] === "true") paragraphStyle.keepLines = true;
   if (node?.attribs?.["data-page-break-before"] === "true") paragraphStyle.pageBreakBefore = true;
   if (["true", "false"].includes(node?.attribs?.["data-widow-control"])) paragraphStyle.widowControl = node.attribs["data-widow-control"] === "true";
+  const attributeTabStops = normalizeDocxTabStops(node?.attribs?.["data-tab-stops"]);
+  const inlineTabStops = [];
+  const collectInlineTabs = (current) => {
+    if (current?.attribs?.["data-docx-tab"] === "true") {
+      inlineTabStops.push({ alignment: current.attribs["data-tab-alignment"], position: Number(current.attribs["data-tab-position"]) });
+    }
+    for (const child of current?.children || []) collectInlineTabs(child);
+  };
+  collectInlineTabs(node);
+  const tabStops = attributeTabStops.length ? attributeTabStops : normalizeDocxTabStops(inlineTabStops);
+  if (tabStops.length) paragraphStyle.tabStops = tabStops.map((tab) => ({ type: tab.alignment, position: tab.position }));
   // 中文注解：分页控制写入 Word 原生段落属性，不能用额外空段落或手动分页符模拟。
   return paragraphStyle;
 }
 
 function textRunsFromNode(node, marks = {}) {
   if (!node) return [];
+  if (node?.attribs?.["data-docx-tab"] === "true") {
+    // 中文注解：在线制表位导出为真正的 w:tab，不能降级为空格，否则后续文字无法按段落制表位对齐。
+    return [new TextRun({ children: [new Tab()] })];
+  }
   if (node.type === "text") {
     const text = (node.data || "").replace(/\s+/g, " ");
     return text ? [new TextRun({

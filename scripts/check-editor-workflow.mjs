@@ -21,7 +21,7 @@ const fixtureDocument = {
   tone: "正式",
   templateId: 3,
   outline: ["超长结构分页"],
-  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table><tbody><tr><th>审批阶段</th><th>状态</th></tr><tr><td>商务评审</td><td>通过</td></tr><tr><td>归档确认</td><td>完成</td></tr></tbody></table><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p><p>${widowText}</p>`,
+  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table><tbody><tr><th>审批阶段</th><th>状态</th></tr><tr><td>商务评审</td><td>通过</td></tr><tr><td>归档确认</td><td>完成</td></tr></tbody></table><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p><p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab workflow<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p><p>Tab keyboard</p><p>${widowText}</p>`,
   // 中文注解：模拟升级前数据库里的旧页面设置，确保真实历史文档开启高级页眉时不会崩溃。
   pageLayout: { headerText: "", footerText: "", pageNumberEnabled: false },
   status: "draft",
@@ -225,6 +225,26 @@ try {
   assert.match(advancedFormatHtml, /<mark[^>]+data-highlight="yellow"[^>]*>突出显示工具<\/mark>/);
   assert.match(advancedFormatHtml, /<sup>上标工具<\/sup>/);
   assert.match(advancedFormatHtml, /<sub>下标工具<\/sub>/);
+  const tabKeyboardParagraph = editor.locator("p").filter({ hasText: "Tab keyboard" });
+  await tabKeyboardParagraph.evaluate((paragraph) => {
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    range.collapse(false);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    (paragraph.closest(".word-editor"))?.focus();
+    // 中文注解：显式通知 ProseMirror 同步浏览器光标，避免工具栏操作沿用上一段的文字选区。
+    document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+  });
+  await page.waitForTimeout(50);
+  await page.keyboard.press("Tab");
+  await page.keyboard.type("Keyboard aligned");
+  await page.locator('button[title="插入制表符"]').click();
+  await page.keyboard.type("Toolbar aligned");
+  assert.equal(await editor.locator('.docx-tab[data-docx-tab="true"]').count(), 4);
+  const editorTabWidths = await editor.locator(".docx-tab").evaluateAll((tabs) => tabs.map((tab) => tab.getBoundingClientRect().width));
+  assert.ok(editorTabWidths.every((width) => width >= 2), "编辑器中的制表位应获得稳定可见宽度");
   const paginationParagraphLocator = editor.locator("p").filter({ hasText: "分页控制段落" }).filter({ hasNotText: "前置" });
   await paginationParagraphLocator.click();
   await page.getByRole("button", { name: "与下段同页", exact: true }).click();
@@ -394,6 +414,7 @@ try {
   assert.match(reopenedHtml, /<s>/);
   assert.match(reopenedHtml, /data-section-break="nextPage"/);
   assert.match(reopenedHtml, /第二节横向内容/);
+  assert.equal((reopenedHtml.match(/data-docx-tab="true"/g) || []).length, 4);
 
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "导出 Word", exact: true }).click();
@@ -426,6 +447,9 @@ try {
   assert.match(documentXml, /<w:highlight w:val="yellow"\/>/);
   assert.match(documentXml, /<w:vertAlign w:val="superscript"\/>/);
   assert.match(documentXml, /<w:vertAlign w:val="subscript"\/>/);
+  const tabWorkflowParagraph = (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Tab workflow")) || "";
+  assert.match(tabWorkflowParagraph, /<w:tabs><w:tab w:val="left" w:pos="1440"\/><w:tab w:val="right" w:pos="5760"\/><\/w:tabs>/);
+  assert.equal((tabWorkflowParagraph.match(/<w:tab\/>/g) || []).length, 2);
   const paginationParagraph = (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("分页控制段落")) || "";
   assert.match(paginationParagraph, /<w:keepNext\/>/);
   assert.match(paginationParagraph, /<w:keepLines\/>/);
@@ -500,6 +524,9 @@ try {
       sourceTableImageCount: document.querySelectorAll(".word-editor table img").length,
       previewTableImageCount: document.querySelectorAll(".page-body table img").length,
       previewRowSpanCount: document.querySelectorAll('.page-body td[rowspan="2"]').length,
+      sourceTabCount: document.querySelectorAll(".word-editor .docx-tab").length,
+      previewTabCount: document.querySelectorAll(".page-body .docx-tab").length,
+      previewTabWidths: Array.from(document.querySelectorAll(".page-body .docx-tab")).map((tab) => tab.getBoundingClientRect().width),
       paginationControlStartsPage: Array.from(document.querySelectorAll(".page-sheet")).some((page) => {
         const blocks = Array.from(page.querySelectorAll(":scope > .page-body > .page-block"));
         return blocks[0]?.textContent?.includes("分页控制段落") && !page.textContent?.includes("分页控制前置段落");
@@ -551,6 +578,8 @@ try {
   assert.equal(result.sourceTableImageCount, 1);
   assert.equal(result.previewTableImageCount, 1);
   assert.ok(result.previewRowSpanCount > 0, "分页预览应保留纵向合并单元格");
+  assert.equal(result.previewTabCount, result.sourceTabCount, "分页预览应完整保留在线编辑器中的制表位");
+  assert.ok(result.previewTabWidths.every((width) => width >= 2), "分页预览中的制表位应按 Word 位置完成布局");
   assert.equal(result.paginationControlStartsPage, true, "段前分页段落应成为新页首段");
   assert.equal(result.paginationControlKeepsNext, true, "与下段同页应保留后续段落在同一页");
   assert.ok(result.widowFragmentLineCounts.length > 1, "孤行控制夹具应跨越多个页面");

@@ -700,6 +700,20 @@ function mergeStyleText(styleText: string | null, nextStyles: Record<string, str
   return Array.from(styles.entries()).map(([name, value]) => `${name}: ${value}`).join("; ");
 }
 
+function normalizeParagraphTabStops(value: unknown) {
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    if (!Array.isArray(parsed)) return null;
+    const stops = parsed.map((tab) => ({
+      alignment: ["left", "center", "right", "decimal", "bar"].includes(String(tab?.alignment)) ? String(tab.alignment) : "left",
+      position: Math.max(0, Math.min(Math.round(Number(tab?.position) || 0), 31680))
+    })).filter((tab) => tab.position > 0).slice(0, 50);
+    return stops.length ? JSON.stringify(stops) : null;
+  } catch {
+    return null;
+  }
+}
+
 const ImportedTextStyle = Mark.create({
   name: "importedTextStyle",
   addAttributes() {
@@ -778,6 +792,43 @@ const SubscriptText = Mark.create({
   renderHTML: () => ["sub", 0]
 });
 
+const DocxTab = TiptapNode.create({
+  name: "docxTab",
+  group: "inline",
+  inline: true,
+  atom: true,
+  selectable: true,
+  addAttributes() {
+    return {
+      positionTwip: {
+        default: 720,
+        parseHTML: (element) => Math.max(1, Math.min(Math.round(Number(element.getAttribute("data-tab-position")) || 720), 31680)),
+        renderHTML: (attributes) => ({ "data-tab-position": Math.max(1, Math.min(Math.round(Number(attributes.positionTwip) || 720), 31680)) })
+      },
+      alignment: {
+        default: "left",
+        parseHTML: (element) => ["left", "center", "right", "decimal", "bar"].includes(element.getAttribute("data-tab-alignment") || "") ? element.getAttribute("data-tab-alignment") : "left",
+        renderHTML: (attributes) => ({ "data-tab-alignment": ["left", "center", "right", "decimal", "bar"].includes(attributes.alignment) ? attributes.alignment : "left" })
+      }
+    };
+  },
+  parseHTML() {
+    return [{ tag: 'span[data-docx-tab="true"]' }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ["span", { ...HTMLAttributes, "data-docx-tab": "true", class: "docx-tab" }];
+  },
+  addKeyboardShortcuts() {
+    return {
+      Tab: () => {
+        // 中文注解：表格内的 Tab 继续交给表格扩展切换单元格，正文中才插入 Word 制表符。
+        if (this.editor.isActive("table")) return false;
+        return this.editor.commands.insertContent({ type: this.name, attrs: { positionTwip: 720, alignment: "left" } });
+      }
+    };
+  }
+});
+
 const ParagraphIndent = Extension.create({
   name: "paragraphIndent",
   addGlobalAttributes() {
@@ -829,6 +880,14 @@ const ParagraphIndent = Extension.create({
             parseHTML: (element) => element.getAttribute("data-widow-control") !== "false",
             // 中文注解：显式保存 true/false，导入文件关闭孤行控制时重新打开后不能被默认值覆盖。
             renderHTML: (attributes) => ({ "data-widow-control": attributes.widowControl === false ? "false" : "true" })
+          },
+          tabStops: {
+            default: null,
+            parseHTML: (element) => normalizeParagraphTabStops(element.getAttribute("data-tab-stops")),
+            renderHTML: (attributes) => {
+              const tabStops = normalizeParagraphTabStops(attributes.tabStops);
+              return tabStops ? { "data-tab-stops": tabStops } : {};
+            }
           }
         }
       }
@@ -1035,6 +1094,56 @@ function measuredBlockHeight(element: Element | null) {
   return element.getBoundingClientRect().height
     + Number.parseFloat(styles.marginTop || "0")
     + Number.parseFloat(styles.marginBottom || "0");
+}
+
+function measureTabFollowingContent(tab: HTMLElement, paragraph: HTMLElement, nextTab?: HTMLElement) {
+  const range = document.createRange();
+  range.setStartAfter(tab);
+  if (nextTab) range.setEndBefore(nextTab);
+  else range.setEnd(paragraph, paragraph.childNodes.length);
+  const probe = document.createElement("span");
+  const style = window.getComputedStyle(tab);
+  probe.style.position = "fixed";
+  probe.style.left = "-10000px";
+  probe.style.top = "0";
+  probe.style.visibility = "hidden";
+  probe.style.whiteSpace = "nowrap";
+  probe.style.font = style.font;
+  probe.style.letterSpacing = style.letterSpacing;
+  probe.append(range.cloneContents());
+  document.body.append(probe);
+  const width = probe.getBoundingClientRect().width;
+  const decimalText = (probe.textContent || "").split(/[.,]/)[0];
+  probe.replaceChildren(document.createTextNode(decimalText));
+  const decimalWidth = probe.getBoundingClientRect().width;
+  probe.remove();
+  return { width, decimalWidth };
+}
+
+function layoutDocxTabs(root: ParentNode) {
+  const paragraphs = Array.from(root.querySelectorAll<HTMLElement>("p, h1, h2, h3, li")).filter((paragraph) => paragraph.querySelector(".docx-tab"));
+  for (const paragraph of paragraphs) {
+    const tabs = Array.from(paragraph.querySelectorAll<HTMLElement>(".docx-tab"));
+    tabs.forEach((tab) => { tab.style.width = "0px"; });
+    for (const [index, tab] of tabs.entries()) {
+      const paragraphRect = paragraph.getBoundingClientRect();
+      const tabRect = tab.getBoundingClientRect();
+      const currentX = Math.max(0, tabRect.left - paragraphRect.left);
+      const interval = 720 * 96 / 1440;
+      let target = Math.max(interval, Number(tab.dataset.tabPosition || 720) * 96 / 1440);
+      while (target <= currentX + 1) target += interval;
+      const alignment = tab.dataset.tabAlignment || "left";
+      // 中文注解：下一制表位必须按文档顺序确定；坐标比较在换行或两个零宽节点重叠时会选错目标。
+      const following = measureTabFollowingContent(tab, paragraph, tabs[index + 1]);
+      const alignmentOffset = alignment === "right" ? following.width
+        : alignment === "center" ? following.width / 2
+          : alignment === "decimal" ? following.decimalWidth
+            : 0;
+      let width = target - alignmentOffset - currentX;
+      if (width < 2) width = target + interval - alignmentOffset - currentX;
+      tab.style.width = `${Math.max(2, Math.round(width * 100) / 100)}px`;
+    }
+  }
 }
 
 function textBoundary(root: Element, targetOffset: number) {
@@ -2096,7 +2205,7 @@ function Editor(props: {
   }, [props.pageLayout]);
 
   const editor = useEditor({
-    extensions: [StarterKit, ImageExtension.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, ParagraphIndent, PageBreak, SectionBreak, Table.configure({ resizable: true }), TableRow, TableHeader, TableCell],
+    extensions: [StarterKit, ImageExtension.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DocxTab, ParagraphIndent, PageBreak, SectionBreak, Table.configure({ resizable: true }), TableRow, TableHeader, TableCell],
     content: props.content,
     editorProps: { attributes: { class: "word-editor" } },
     onCreate({ editor }) { updateOutlineFromEditor(editor); syncActiveSectionFromEditor(editor); },
@@ -2115,6 +2224,12 @@ function Editor(props: {
     updateOutlineFromEditor(editor);
   }, [editor, props.content, updateOutlineFromEditor]);
 
+  React.useLayoutEffect(() => {
+    if (!editor) return;
+    const frame = window.requestAnimationFrame(() => layoutDocxTabs(editor.view.dom));
+    return () => window.cancelAnimationFrame(frame);
+  }, [editor, props.content, viewMode]);
+
   React.useEffect(() => {
     if (activeSectionIndex !== 0) return;
     const nextLayout = normalizeDocumentPageLayout(props.pageLayout);
@@ -2131,6 +2246,7 @@ function Editor(props: {
     let currentGeometry = pageGeometry(currentLayout);
     measureElement.style.width = `${currentGeometry.contentWidthPx}px`;
     measureElement.innerHTML = sourceHtml;
+    layoutDocxTabs(measureElement);
     const pendingImages = Array.from(measureElement.querySelectorAll("img")).filter((image) => !image.complete);
     if (pendingImages.length) {
       let requested = false;
@@ -2181,11 +2297,13 @@ function Editor(props: {
     const measureHtml = (html: string) => {
       measureElement.style.width = `${currentGeometry.contentWidthPx}px`;
       measureElement.innerHTML = html;
+      layoutDocxTabs(measureElement);
       return measuredBlockHeight(measureElement.firstElementChild);
     };
     const measureTextLineCount = (html: string) => {
       measureElement.style.width = `${currentGeometry.contentWidthPx}px`;
       measureElement.innerHTML = html;
+      layoutDocxTabs(measureElement);
       const element = measureElement.firstElementChild;
       if (!element) return 0;
       const range = document.createRange();
@@ -2778,6 +2896,7 @@ function Editor(props: {
             </label>
             <button className={editor?.isActive("bulletList") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleBulletList().run()} title="项目符号列表"><List size={16} />列表</button>
             <button className={editor?.isActive("orderedList") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleOrderedList().run()} title="编号列表"><ListOrdered size={16} />编号</button>
+            <button onClick={() => editor?.chain().focus().insertContent({ type: "docxTab", attrs: { positionTwip: 720, alignment: "left" } }).run()} title="插入制表符">制表位</button>
             <span className="format-divider" />
             <button onClick={() => editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()} title="插入 3x3 表格"><TableIcon size={16} />表格</button>
             <button onClick={() => editor?.chain().focus().addRowAfter().run()} disabled={!editor?.isActive("table")} title="下方插入行">加行</button>

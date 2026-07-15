@@ -127,6 +127,10 @@ async function buildFormattedDocxFixture() {
     <w:p><w:pPr><w:spacing w:line="360" w:lineRule="atLeast"/></w:pPr><w:r><w:t>At least spacing</w:t></w:r></w:p>
     <w:p><w:pPr><w:keepNext/><w:keepLines/><w:pageBreakBefore/><w:widowControl/></w:pPr><w:r><w:t>Pagination controlled paragraph</w:t></w:r></w:p>
     <w:p><w:pPr><w:widowControl w:val="false"/></w:pPr><w:r><w:t>Widow control disabled paragraph</w:t></w:r></w:p>
+    <w:p>
+      <w:pPr><w:tabs><w:tab w:val="left" w:pos="1440"/><w:tab w:val="right" w:pos="5760"/></w:tabs></w:pPr>
+      <w:r><w:t>Tab project</w:t><w:tab/><w:t>Tab amount</w:t><w:tab/><w:t>100.00</w:t></w:r>
+    </w:p>
     <w:tbl>
       <w:tr>
         <w:tc><w:p><w:r><w:t>Header A</w:t></w:r></w:p></w:tc>
@@ -383,6 +387,12 @@ assert.match(imported.content, /<sup>Superscript text<\/sup>/);
 assert.match(imported.content, /<sub>Subscript text<\/sub>/);
 assert.match(imported.content, /<p[^>]+data-keep-next="true"[^>]+data-keep-lines="true"[^>]+data-page-break-before="true"[^>]+data-widow-control="true"[^>]*>Pagination controlled paragraph<\/p>/);
 assert.match(imported.content, /<p[^>]+data-widow-control="false"[^>]*>Widow control disabled paragraph<\/p>/);
+const importedTabParagraph = (imported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || [])
+  .find((paragraph) => paragraph.includes("Tab project") && paragraph.includes("100.00")) || "";
+assert.match(importedTabParagraph, /data-tab-stops="[^\"]*1440[^\"]*5760[^\"]*"/);
+assert.equal((importedTabParagraph.match(/data-docx-tab="true"/g) || []).length, 2);
+assert.match(importedTabParagraph, /data-tab-position="1440"[^>]+data-tab-alignment="left"/);
+assert.match(importedTabParagraph, /data-tab-position="5760"[^>]+data-tab-alignment="right"/);
 assert.match(imported.content, /<table>/);
 assert.match(imported.content, /<th>/);
 assert.match(imported.content, /<td>/);
@@ -452,6 +462,9 @@ assert.match(paginationControlledRoundTripXml, /<w:pageBreakBefore\/>/);
 assert.match(paginationControlledRoundTripXml, /<w:widowControl\/>/);
 const widowDisabledRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Widow control disabled paragraph")) || "";
 assert.match(widowDisabledRoundTripXml, /<w:widowControl w:val="false"\/>/);
+const tabRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Tab project")) || "";
+assert.match(tabRoundTripXml, /<w:tabs><w:tab w:val="left" w:pos="1440"\/><w:tab w:val="right" w:pos="5760"\/><\/w:tabs>/);
+assert.equal((tabRoundTripXml.match(/<w:tab\/>/g) || []).length, 2);
 const roundTripImported = await parseImportedDocument({
   originalname: "round-trip-format.docx",
   buffer: roundTripBuffer,
@@ -465,6 +478,11 @@ assert.match(roundTripImported.content, /<sup>Superscript text<\/sup>/);
 assert.match(roundTripImported.content, /<sub>Subscript text<\/sub>/);
 assert.match(roundTripImported.content, /<p[^>]+data-keep-next="true"[^>]+data-keep-lines="true"[^>]+data-page-break-before="true"[^>]+data-widow-control="true"[^>]*>[\s\S]*?Pagination controlled paragraph[\s\S]*?<\/p>/);
 assert.match(roundTripImported.content, /<p[^>]+data-widow-control="false"[^>]*>[\s\S]*?Widow control disabled paragraph[\s\S]*?<\/p>/);
+const roundTripImportedTabParagraph = (roundTripImported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || [])
+  .find((paragraph) => paragraph.includes("Tab project") && paragraph.includes("100.00")) || "";
+assert.equal((roundTripImportedTabParagraph.match(/data-docx-tab="true"/g) || []).length, 2);
+assert.match(roundTripImportedTabParagraph, /data-tab-position="1440"[^>]+data-tab-alignment="left"/);
+assert.match(roundTripImportedTabParagraph, /data-tab-position="5760"[^>]+data-tab-alignment="right"/);
 assert.deepEqual(roundTripImported.pageLayout, imported.pageLayout);
 const atLeastRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || [])
   .find((paragraph) => paragraph.includes(">At least spacing</w:t>")) || "";
