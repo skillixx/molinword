@@ -141,6 +141,7 @@ async function buildFormattedDocxFixture() {
       <w:r><w:rPr><w:u w:val="double" w:color="00AA00"/></w:rPr><w:t>Double green underline</w:t></w:r>
       <w:r><w:rPr><w:caps/></w:rPr><w:t>All caps source</w:t></w:r>
       <w:r><w:rPr><w:smallCaps/></w:rPr><w:t>Small caps source</w:t></w:r>
+      <w:r><w:rPr><w:dstrike/></w:rPr><w:t>Double strike source</w:t></w:r>
       <w:r><w:rPr><w:bdr w:val="double" w:sz="12" w:space="2" w:color="C00000"/></w:rPr><w:t>Run border source</w:t></w:r>
     </w:p>
     <w:p><w:r><w:t>链接前 </w:t></w:r><w:hyperlink r:id="rIdHyperlink1"><w:r><w:rPr><w:u w:val="single"/><w:color w:val="0563C1"/></w:rPr><w:t>OpenAI documentation</w:t></w:r></w:hyperlink><w:r><w:t> 链接后</w:t></w:r></w:p>
@@ -465,6 +466,7 @@ assert.match(imported.content, /<span[^>]+style="[^"]*letter-spacing:\s*2pt[^"]*
 assert.match(imported.content, /<span[^>]+style="[^"]*text-decoration-line:\s*underline[^"]*text-decoration-style:\s*double[^"]*--word-underline-type:\s*double[^"]*text-decoration-color:\s*#00AA00[^"]*"[^>]*>Double green underline<\/span>/i);
 assert.match(imported.content, /<span[^>]+style="[^"]*text-transform:\s*uppercase[^"]*"[^>]*>All caps source<\/span>/);
 assert.match(imported.content, /<span[^>]+style="[^"]*font-variant-caps:\s*small-caps[^"]*"[^>]*>Small caps source<\/span>/);
+assert.match(imported.content, /<span[^>]+data-double-strike="true"[^>]+style="[^"]*text-decoration-line:\s*line-through[^"]*text-decoration-style:\s*double[^"]*"[^>]*>Double strike source<\/span>/);
 assert.match(imported.content, /<span[^>]+style="[^"]*--word-text-border:\s*double,12,C00000,2[^"]*border-top:\s*2px double #C00000[^"]*padding-top:\s*2\.67px[^"]*"[^>]*>Run border source<\/span>/i);
 assert.match(imported.content, /data-paragraph-shading="[^\"]*(?:&quot;fill&quot;|fill)[^\"]*FFF2CC[^\"]*"/);
 assert.match(imported.content, /data-paragraph-borders="[^\"]*(?:&quot;top&quot;|top)[^\"]*FF0000[^\"]*"/);
@@ -669,6 +671,9 @@ const allCapsRoundTripXml = (roundTripXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r
 const smallCapsRoundTripXml = (roundTripXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("Small caps source")) || "";
 assert.match(allCapsRoundTripXml, /<w:caps\/>/);
 assert.match(smallCapsRoundTripXml, /<w:smallCaps\/>/);
+const doubleStrikeRoundTripXml = (roundTripXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("Double strike source")) || "";
+assert.match(doubleStrikeRoundTripXml, /<w:dstrike\/>/);
+assert.doesNotMatch(doubleStrikeRoundTripXml, /<w:strike(?:\s|\/|>)/);
 const runBorderRoundTripXml = (roundTripXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("Run border source")) || "";
 assert.match(runBorderRoundTripXml, /<w:bdr[^>]+w:val="double"[^>]+w:color="C00000"[^>]+w:sz="12"[^>]+w:space="2"\/>/);
 const paginationControlledRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Pagination controlled paragraph")) || "";
@@ -752,6 +757,7 @@ assert.match(roundTripRtlParagraph, /data-bidirectional="true"/);
 assert.match(roundTripRtlParagraph, /direction:\s*rtl/);
 const roundTripSpecialHyphenParagraph = (roundTripImported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || []).find((paragraph) => paragraph.includes("inter") && paragraph.includes("2026")) || "";
 assert.equal(roundTripSpecialHyphenParagraph.replace(/<[^>]+>/g, ""), "inter\u00ADnational code\u20112026");
+assert.match(roundTripImported.content, /<span[^>]+data-double-strike="true"[^>]+style="[^"]*text-decoration-line:\s*line-through[^"]*text-decoration-style:\s*double[^"]*"[^>]*>Double strike source<\/span>/);
 const roundTripManualLineBreakParagraph = (roundTripImported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || []).find((paragraph) => paragraph.includes("Manual line one") && paragraph.includes("Manual line two")) || "";
 assert.match(roundTripManualLineBreakParagraph, /Manual line one[\s\S]*?<br\s*\/?\s*>[\s\S]*?Manual line two/);
 assert.match(roundTripImported.content, /<h4[^>]+data-outline-level="3"[^>]*>[\s\S]*?Custom outline level 4/);

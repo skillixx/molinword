@@ -459,7 +459,7 @@ function sanitizeImportedHtml(value = "") {
       h6: ["style", "data-outline-level", "data-indent", "data-bidirectional", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
       p: ["style", "data-outline-level", "data-indent", "data-bidirectional", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
       li: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
-      span: ["style", "class", "data-docx-tab", "data-tab-position", "data-tab-alignment"],
+      span: ["style", "class", "data-docx-tab", "data-tab-position", "data-tab-alignment", "data-double-strike"],
       mark: ["data-highlight", "style"],
       a: ["href", "target", "rel"],
       ol: ["style", "data-list-format", "start"],
@@ -483,7 +483,7 @@ function sanitizeImportedHtml(value = "") {
         "list-style-type": [/^(?:decimal|upper-roman|lower-roman|upper-alpha|lower-alpha)$/],
         "letter-spacing": [/^normal$/, /^-?\d+(?:\.\d+)?pt$/],
         "vertical-align": [/^baseline$/, /^-?\d+(?:\.\d+)?pt$/],
-        "text-decoration-line": [/^underline$/],
+        "text-decoration-line": [/^(?:underline|line-through)$/],
         "text-decoration-style": [/^(?:solid|double|dotted|dashed|wavy)$/],
         "text-decoration-color": [/^#[0-9a-f]{6}$/i],
         "--word-underline-type": [/^(?:single|words|double|thick|dotted|dottedHeavy|dash|dashedHeavy|dashLong|dashLongHeavy|dotDash|dashDotHeavy|dotDotDash|dashDotDotHeavy|wave|wavyHeavy|wavyDouble)$/],
@@ -770,7 +770,8 @@ function parseRunProperties(rPr, themeFonts = {}, themeColors = {}) {
   const allCaps = xmlChild(rPr, "w:caps");
   const smallCaps = xmlChild(rPr, "w:smallCaps");
   const underline = xmlChild(rPr, "w:u");
-  const strike = xmlChild(rPr, "w:strike") || xmlChild(rPr, "w:dstrike");
+  const strike = xmlChild(rPr, "w:strike");
+  const doubleStrike = xmlChild(rPr, "w:dstrike");
   const highlight = normalizeDocxHighlight(xmlVal(xmlChild(rPr, "w:highlight")));
   const verticalAlign = xmlVal(xmlChild(rPr, "w:vertAlign"));
   const characterSpacingNode = xmlChild(rPr, "w:spacing");
@@ -844,6 +845,14 @@ function parseRunProperties(rPr, themeFonts = {}, themeColors = {}) {
     }
   }
   if (strike) styles.$strike = wordToggleEnabled(strike) ? "1" : "0";
+  if (doubleStrike) {
+    styles.$doubleStrike = wordToggleEnabled(doubleStrike) ? "1" : "0";
+    if (styles.$doubleStrike === "1") {
+      // 中文注解：双删除线不能降级成 s 标签；受控 data 属性保存 Word 语义，CSS 提供编辑与分页视觉。
+      styles["text-decoration-line"] = "line-through";
+      styles["text-decoration-style"] = "double";
+    }
+  }
   if (highlight) styles.$highlight = highlight;
   if (["superscript", "subscript"].includes(verticalAlign)) styles.$verticalAlign = verticalAlign;
   return styles;
@@ -1383,7 +1392,7 @@ async function docxRunToHtml(runNode, inheritedRunStyles = {}, context = {}, tab
     if (runStyles.$underline === "1") html = `<u>${html}</u>`;
     if (runStyles.$italic === "1" || runStyles["font-style"] === "italic") html = `<em>${html}</em>`;
     if (runStyles.$bold === "1" || runStyles["font-weight"] === "bold") html = `<strong>${html}</strong>`;
-    if (runStyles.$strike === "1") html = `<s>${html}</s>`;
+    if (runStyles.$strike === "1" && runStyles.$doubleStrike !== "1") html = `<s>${html}</s>`;
     if (runStyles.$verticalAlign === "superscript") html = `<sup>${html}</sup>`;
     if (runStyles.$verticalAlign === "subscript") html = `<sub>${html}</sub>`;
     if (runStyles.$highlight) {
@@ -1392,7 +1401,8 @@ async function docxRunToHtml(runNode, inheritedRunStyles = {}, context = {}, tab
       html = `<mark data-highlight="${runStyles.$highlight}" style="background-color: ${highlightColor}">${html}</mark>`;
     }
     const style = cssText(runStyles);
-    return style && html ? `<span style="${escapeHtml(style)}">${html}</span>` : html;
+    const doubleStrikeAttribute = runStyles.$doubleStrike === "1" ? ' data-double-strike="true"' : "";
+    return style && html ? `<span${doubleStrikeAttribute} style="${escapeHtml(style)}">${html}</span>` : html;
   }).join("");
   // 中文注解：按 run 内真实子节点顺序输出文字、制表位与断点，避免同一 run 的分页符或分栏符被错误移动到文字末尾。
   const contentHtml = (runNode.children || []).map((child) => {
@@ -2394,6 +2404,7 @@ function textRunStyleFromNode(node) {
     const underlineColor = normalizeDocxColor(styles["text-decoration-color"]);
     runStyle.underline = { type: nativeUnderlineType, ...(underlineColor ? { color: underlineColor } : {}) };
   }
+  if (node?.attribs?.["data-double-strike"] === "true") runStyle.doubleStrike = true;
   const textBorder = docxRunBorderFromStyles(styles);
   if (textBorder) runStyle.border = textBorder;
   const highlight = normalizeDocxHighlight(node?.attribs?.["data-highlight"]);
@@ -2506,7 +2517,8 @@ function textRunsFromNode(node, marks = {}) {
       allCaps: marks.allCaps,
       underline: marks.underline === true ? {} : marks.underline,
       border: marks.border,
-      strike: marks.strike,
+      strike: marks.doubleStrike ? undefined : marks.strike,
+      doubleStrike: marks.doubleStrike,
       color: marks.color,
       size: marks.size,
       font: marks.font,
@@ -2533,13 +2545,15 @@ function textRunsFromNode(node, marks = {}) {
   }
 
   const nodeRunStyle = textRunStyleFromNode(node);
+  const nodeDoubleStrike = node?.attribs?.["data-double-strike"] === "true" || nodeRunStyle.doubleStrike === true;
   const nextMarks = {
     ...marks,
     ...nodeRunStyle,
     bold: marks.bold || nodeRunStyle.bold || ["strong", "b"].includes(node.name),
     italics: marks.italics || nodeRunStyle.italics || ["em", "i"].includes(node.name),
     underline: nodeRunStyle.underline ?? (node.name === "u" ? true : marks.underline),
-    strike: marks.strike || ["s", "strike", "del"].includes(node.name),
+    strike: nodeDoubleStrike ? false : (marks.strike || ["s", "strike", "del"].includes(node.name)),
+    doubleStrike: nodeDoubleStrike || marks.doubleStrike,
     superScript: node.name === "sup" ? true : (node.name === "sub" ? false : marks.superScript),
     subScript: node.name === "sub" ? true : (node.name === "sup" ? false : marks.subScript)
   };

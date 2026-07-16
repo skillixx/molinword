@@ -32,7 +32,7 @@ const fixtureDocument = {
   tone: "正式",
   templateId: 3,
   outline: ["超长结构分页"],
-  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具 字符间距工具 下划线样式工具 字符边框工具 all Caps Format small Caps Format <mark data-highlight="yellow" style="background-color:#FFFF00">清除高亮工具</mark></p><p>悬挂缩进工具内容用于验证后续各行向右缩进并保持首行位置。</p><p>段落左右缩进工具内容用于验证正文可用行宽和分页位置。</p><p>RTL段落工具内容</p><p>特殊连字符工具</p><p>手动换行工具</p><p>大纲级别工具</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table data-table-width-type="dxa" data-table-width-value="7200" data-table-grid-width="7200" data-table-layout="fixed" style="width:480px;table-layout:fixed"><tbody><tr><th colwidth="120">审批阶段</th><th colwidth="360">状态</th></tr><tr><td colwidth="120">商务评审</td><td colwidth="360">通过</td></tr><tr><td colwidth="120">归档确认</td><td colwidth="360">完成</td></tr></tbody></table><p>段落外观工具</p><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p><p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab workflow<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p><p>Tab keyboard</p><p>${widowText}</p>`,
+  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具 字符间距工具 下划线样式工具 双删除线工具 字符边框工具 all Caps Format small Caps Format <mark data-highlight="yellow" style="background-color:#FFFF00">清除高亮工具</mark></p><p>悬挂缩进工具内容用于验证后续各行向右缩进并保持首行位置。</p><p>段落左右缩进工具内容用于验证正文可用行宽和分页位置。</p><p>RTL段落工具内容</p><p>特殊连字符工具</p><p>手动换行工具</p><p>大纲级别工具</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table data-table-width-type="dxa" data-table-width-value="7200" data-table-grid-width="7200" data-table-layout="fixed" style="width:480px;table-layout:fixed"><tbody><tr><th colwidth="120">审批阶段</th><th colwidth="360">状态</th></tr><tr><td colwidth="120">商务评审</td><td colwidth="360">通过</td></tr><tr><td colwidth="120">归档确认</td><td colwidth="360">完成</td></tr></tbody></table><p>段落外观工具</p><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p><p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab workflow<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p><p>Tab keyboard</p><p>${widowText}</p>`,
   // 中文注解：模拟升级前数据库里的旧页面设置，确保真实历史文档开启高级页眉时不会崩溃。
   pageLayout: { headerText: "", footerText: "", pageNumberEnabled: false },
   status: "draft",
@@ -262,6 +262,8 @@ try {
   await page.getByLabel("文字位置", { exact: true }).selectOption("3pt");
   await selectEditorText("下划线样式工具");
   await page.getByLabel("下划线样式", { exact: true }).selectOption("double");
+  await selectEditorText("双删除线工具");
+  await page.getByLabel("删除线样式", { exact: true }).selectOption("double");
   await selectEditorText("字符边框工具");
   await page.getByLabel("字符边框", { exact: true }).selectOption("dashed");
   await selectEditorText("悬挂缩进工具");
@@ -286,6 +288,7 @@ try {
   assert.match(advancedFormatHtml, /<sub>下标工具<\/sub>/);
   assert.match(advancedFormatHtml, /<span[^>]+style="[^"]*letter-spacing:\s*2pt[^"]*vertical-align:\s*3pt[^"]*"[^>]*>字符间距工具<\/span>/);
   assert.match(advancedFormatHtml, /<span[^>]+style="[^"]*text-decoration-line:\s*underline[^"]*text-decoration-style:\s*double[^"]*--word-underline-type:\s*double[^"]*"[^>]*>下划线样式工具<\/span>/);
+  assert.match(advancedFormatHtml, /<span[^>]+data-double-strike="true"[^>]+style="[^"]*text-decoration-line:\s*line-through[^"]*text-decoration-style:\s*double[^"]*"[^>]*>[\s\S]*?双删除线工具[\s\S]*?<\/span>/);
   // 中文注解：浏览器会把四边样式规范化为 border-width/style/color 简写，因此只校验语义和值，不依赖序列化形式。
   const textBorderHtml = advancedFormatHtml.match(/<span[^>]+style="([^"]*--word-text-border:\s*dashed,8,1F4E79,1[^"]*)"[^>]*>字符边框工具<\/span>/i)?.[1] || "";
   assert.match(textBorderHtml, /border-(?:top|width):\s*1\.33px/i);
@@ -633,6 +636,7 @@ try {
   assert.match(storedDocument.content, /text-transform:\s*uppercase/);
   assert.match(storedDocument.content, /font-variant-caps:\s*small-caps/);
   assert.match(storedDocument.content, /data-highlight="darkCyan"/);
+  assert.match(storedDocument.content, /data-double-strike="true"[^>]*>[\s\S]*?双删除线工具/);
   assert.ok(storedDocument.content.includes("特殊连字符工具") && storedDocument.content.includes("\u00AD") && storedDocument.content.includes("\u2011"));
   assert.match(storedDocument.content, /手动换行工具 第一行[\s\S]*?<br[^>]*>[\s\S]*?第二行/);
   assert.match(storedDocument.content, /<p[^>]+data-bidirectional="true"[^>]+style="[^"]*direction:\s*rtl[^"]*"[^>]*>[\s\S]*?RTL段落工具内容[\s\S]*?<\/p>/);
@@ -723,6 +727,7 @@ try {
   assert.match(reopenedHtml, /font-size:\s*18pt/);
   assert.match(reopenedHtml, /<em>/);
   assert.match(reopenedHtml, /<s>/);
+  assert.match(reopenedHtml, /data-double-strike="true"[^>]*>[\s\S]*?双删除线工具/);
   assert.match(reopenedHtml, /<img[^>]+alt="浮动审批标识"[^>]+data-docx-floating=/);
   const reopenedFloatingImage = editor.locator('img[alt="浮动审批标识"]');
   assert.equal(await reopenedFloatingImage.getAttribute("width"), "56");
@@ -842,6 +847,9 @@ try {
   const smallCapsRun = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("small Caps Format")) || "";
   assert.match(allCapsRun, /<w:caps\/>/);
   assert.match(smallCapsRun, /<w:smallCaps\/>/);
+  const doubleStrikeRun = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("双删除线工具")) || "";
+  assert.match(doubleStrikeRun, /<w:dstrike\/>/);
+  assert.doesNotMatch(doubleStrikeRun, /<w:strike(?:\s|\/|>)/);
   const floatingBodyDrawing = (documentXml.match(/<w:drawing>[\s\S]*?<\/w:drawing>/g) || []).find((drawing) => drawing.includes("浮动审批标识")) || "";
   assert.match(floatingBodyDrawing, /<wp:anchor/);
   assert.match(floatingBodyDrawing, /<wp:positionH relativeFrom="column"><wp:align>left<\/wp:align><\/wp:positionH>/);
@@ -978,6 +986,10 @@ try {
   await previewSmallCaps.waitFor();
   assert.match(await previewAllCaps.getAttribute("style") || "", /text-transform:\s*uppercase/i);
   assert.match(await previewSmallCaps.getAttribute("style") || "", /font-variant-caps:\s*small-caps/i);
+  const previewDoubleStrike = page.locator('.page-body span[data-double-strike="true"]').filter({ hasText: "双删除线工具" }).first();
+  await previewDoubleStrike.waitFor();
+  assert.equal(await previewDoubleStrike.evaluate((span) => getComputedStyle(span).textDecorationLine), "line-through");
+  assert.equal(await previewDoubleStrike.evaluate((span) => getComputedStyle(span).textDecorationStyle), "double");
   const previewDarkCyanHighlight = page.locator('.page-body mark[data-highlight="darkCyan"]').filter({ hasText: "突出显示工具" }).first();
   await previewDarkCyanHighlight.waitFor();
   // 中文注解：分页器可能在等待期间替换片段节点，从当前已连接节点中取样，避免读取到脱离文档后的空计算样式。

@@ -810,6 +810,11 @@ const outlineLevelOptions = [
   ...Array.from({ length: 9 }, (_, index) => ({ label: `大纲 ${index + 1} 级`, value: String(index + 1) }))
 ];
 const importedInlineStyleNames = ["font-family", "font-size", "color", "font-weight", "font-style", "font-variant-caps", "text-transform", "letter-spacing", "vertical-align", "text-decoration-line", "text-decoration-style", "text-decoration-color", "--word-underline-type", "border-width", "border-style", "border-color", "border-top", "border-right", "border-bottom", "border-left", "padding", "padding-top", "padding-right", "padding-bottom", "padding-left", "--word-text-border"];
+const strikeStyleOptions = [
+  { label: "无删除线", value: "none" },
+  { label: "单删除线", value: "single" },
+  { label: "双删除线", value: "double" }
+];
 const importedBlockStyleNames = ["text-align", "text-indent", "margin-left", "margin-right", "line-height", "margin-top", "margin-bottom", "--word-line-rule"];
 const lineSpacingOptions = [
   { label: "单倍", value: "1" },
@@ -1398,7 +1403,8 @@ const ImportedTextStyle = Mark.create({
     };
   },
   parseHTML() {
-    return [{ tag: "span[style]" }];
+    // 中文注解：双删除线节点由专用 mark 解析，避免通用样式 mark 吞掉 data 语义后保存成普通 CSS。
+    return [{ tag: 'span[style]:not([data-double-strike="true"])' }];
   },
   renderHTML({ HTMLAttributes }) {
     return ["span", HTMLAttributes, 0];
@@ -1477,6 +1483,26 @@ const SubscriptText = Mark.create({
   excludes: "superscriptText",
   parseHTML: () => [{ tag: "sub" }],
   renderHTML: () => ["sub", 0]
+});
+
+const DoubleStrikeText = Mark.create({
+  name: "doubleStrikeText",
+  priority: 1000,
+  excludes: "strike",
+  addAttributes() {
+    return {
+      style: {
+        default: null,
+        parseHTML: (element) => pickImportedStyles(element.getAttribute("style"), importedInlineStyleNames) || null
+      }
+    };
+  },
+  parseHTML: () => [{ tag: 'span[data-double-strike="true"]' }],
+  // 中文注解：独立标记让双删除线可与字体、颜色和下划线叠加，同时保留 DOCX 的 dstrike 语义。
+  renderHTML: ({ HTMLAttributes }) => ["span", {
+    "data-double-strike": "true",
+    style: mergeStyleText(String(HTMLAttributes.style || ""), { "text-decoration-line": "line-through", "text-decoration-style": "double" }, importedInlineStyleNames)
+  }, 0]
 });
 
 const DocxTab = TiptapNode.create({
@@ -3206,7 +3232,7 @@ function Editor(props: {
   }, [props.pageLayout]);
 
   const editor = useEditor({
-    extensions: [StarterKit.configure({ link: { openOnClick: false, autolink: false, linkOnPaste: true, HTMLAttributes: { target: "_blank", rel: "noopener noreferrer" } } }), DocumentImage.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DocxTab, ListFormatAttributes, OutlineLevelAttributes, ParagraphIndent, PageBreak, ColumnBreak, SectionBreak, DocumentTable, DocumentTableRow, DocumentTableHeader, DocumentTableCell],
+    extensions: [StarterKit.configure({ link: { openOnClick: false, autolink: false, linkOnPaste: true, HTMLAttributes: { target: "_blank", rel: "noopener noreferrer" } } }), DocumentImage.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DoubleStrikeText, DocxTab, ListFormatAttributes, OutlineLevelAttributes, ParagraphIndent, PageBreak, ColumnBreak, SectionBreak, DocumentTable, DocumentTableRow, DocumentTableHeader, DocumentTableCell],
     content: props.content,
     editorProps: { attributes: { class: "word-editor" } },
     onCreate({ editor }) {
@@ -3666,6 +3692,18 @@ function Editor(props: {
       ? chain.focus().unsetMark("textHighlight").run()
       : chain.focus().setMark("textHighlight", { color }).run();
     setSelectionHint(applied ? `已${color === "none" ? "清除" : "设置"}${label}。` : "请先选中文本，或把光标放到要继续输入的位置。");
+  };
+
+  const applyStrikeStyle = (value: string, label: string) => {
+    if (!editor) return;
+    const lastSelection = lastEditorSelectionRef.current;
+    const chain = editor.chain();
+    if (editor.state.selection.empty && lastSelection && lastSelection.from !== lastSelection.to) chain.setTextSelection(lastSelection);
+    chain.focus().unsetMark("strike").unsetMark("doubleStrikeText");
+    if (value === "single") chain.setMark("strike");
+    if (value === "double") chain.setMark("doubleStrikeText");
+    const applied = chain.run();
+    setSelectionHint(applied ? `已应用${label}。` : "请先选中文本，或把光标放到要继续输入的位置。");
   };
 
   const applyDocumentTextStyle = (style: string) => {
@@ -4262,7 +4300,8 @@ function Editor(props: {
               <button aria-label="确认超链接" onClick={applyHyperlink} title="确认超链接"><Check size={16} /></button>
               <button aria-label="关闭超链接编辑" onClick={() => setLinkEditorOpen(false)} title="关闭"><X size={16} /></button>
             </div> : null}
-            <button className={editor?.isActive("strike") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleStrike().run()} title="删除线"><Strikethrough size={16} /></button>
+            <button className={editor?.isActive("strike") ? "active-format" : ""} onClick={() => applyStrikeStyle(editor?.isActive("strike") ? "none" : "single", editor?.isActive("strike") ? "无删除线" : "单删除线")} title="删除线"><Strikethrough size={16} /></button>
+            <FormatSelect title="设置或清除选中文字的删除线样式" placeholder="删除线样式" options={strikeStyleOptions} icon={<Strikethrough size={16} />} onSelect={applyStrikeStyle} />
             <button aria-label="黄色突出显示" className={editor?.isActive("textHighlight", { color: "yellow" }) ? "active-format" : ""} onClick={() => applyTextHighlight("yellow", "黄色突出显示")} title="黄色突出显示"><Highlighter size={16} /></button>
             <FormatSelect title="设置或清除选中文字的 Word 突出显示颜色" placeholder="突出显示" options={highlightColorOptions} onSelect={(value, label) => applyTextHighlight(value, label)} />
             <button aria-label="上标" className={editor?.isActive("superscriptText") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleMark("superscriptText").run()} title="上标"><Superscript size={16} /></button>
