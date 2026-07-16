@@ -451,13 +451,13 @@ function sanitizeImportedHtml(value = "") {
   return sanitizeHtml(String(value), {
     allowedTags: ["h1", "h2", "h3", "h4", "h5", "h6", "p", "span", "strong", "b", "em", "i", "u", "s", "mark", "sup", "sub", "a", "ul", "ol", "li", "blockquote", "br", "table", "tbody", "thead", "tr", "th", "td", "img", "div"],
     allowedAttributes: {
-      h1: ["style", "data-outline-level", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
-      h2: ["style", "data-outline-level", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
-      h3: ["style", "data-outline-level", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
-      h4: ["style", "data-outline-level", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
-      h5: ["style", "data-outline-level", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
-      h6: ["style", "data-outline-level", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
-      p: ["style", "data-outline-level", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
+      h1: ["style", "data-outline-level", "data-indent", "data-bidirectional", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
+      h2: ["style", "data-outline-level", "data-indent", "data-bidirectional", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
+      h3: ["style", "data-outline-level", "data-indent", "data-bidirectional", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
+      h4: ["style", "data-outline-level", "data-indent", "data-bidirectional", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
+      h5: ["style", "data-outline-level", "data-indent", "data-bidirectional", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
+      h6: ["style", "data-outline-level", "data-indent", "data-bidirectional", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
+      p: ["style", "data-outline-level", "data-indent", "data-bidirectional", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
       li: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
       span: ["style", "class", "data-docx-tab", "data-tab-position", "data-tab-alignment"],
       mark: ["data-highlight", "style"],
@@ -490,6 +490,7 @@ function sanitizeImportedHtml(value = "") {
         "--word-text-border": [/^(?:single|dashed|dashSmallGap|dotted|dotDash|dotDotDash|double|thick|none|nil),(?:0|[1-9]\d?),[0-9a-f]{6},(?:[0-9]|[12]\d|3[01])$/i],
         "background-color": [/^#[0-9a-f]{6}$/i],
         "text-align": [/^(?:left|center|right|justify)$/],
+        direction: [/^(?:ltr|rtl)$/],
         "text-indent": [/^-?\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
         "line-height": [/^\d+(?:\.\d+)?(?:px|pt|em|rem|%)?$/],
         "--word-line-rule": [/^(?:auto|exact|atLeast)$/],
@@ -921,6 +922,13 @@ function parseParagraphProperties(pPr, themeColors = {}) {
   for (const [elementName, styleName] of paginationProperties) {
     const element = xmlChild(pPr, elementName);
     if (element) styles[styleName] = wordToggleEnabled(element) ? "1" : "0";
+  }
+  const bidirectional = xmlChild(pPr, "w:bidi");
+  if (bidirectional) {
+    const enabled = wordToggleEnabled(bidirectional);
+    // 中文注解：同时保留 Word 的 bidi 语义和浏览器方向，确保导入后编辑、分页预览与再次导出一致。
+    styles.$bidirectional = enabled ? "1" : "0";
+    styles.direction = enabled ? "rtl" : "ltr";
   }
   const tabStops = xmlChildren(xmlChild(pPr, "w:tabs"), "w:tab").map((tab) => ({
     alignment: firstValue(tab.attribs, ["w:val", "val"]),
@@ -1426,6 +1434,7 @@ async function parseStyledDocxParagraph(paragraphNode, context) {
   const styleText = [cssText(paragraphStyles), appearanceStyle].filter(Boolean).join("; ");
   if (styleText) attrs.push(`style="${escapeHtml(styleText)}"`);
   if (indentLevel) attrs.push(`data-indent="${indentLevel}"`);
+  if (paragraphStyles.$bidirectional === "1") attrs.push('data-bidirectional="true"');
   if (paragraphStyles.$keepNext === "1") attrs.push('data-keep-next="true"');
   if (paragraphStyles.$keepLines === "1") attrs.push('data-keep-lines="true"');
   if (paragraphStyles.$pageBreakBefore === "1") attrs.push('data-page-break-before="true"');
@@ -2448,6 +2457,7 @@ function paragraphStyleFromNode(node) {
   if (node?.attribs?.["data-keep-next"] === "true") paragraphStyle.keepNext = true;
   if (node?.attribs?.["data-keep-lines"] === "true") paragraphStyle.keepLines = true;
   if (node?.attribs?.["data-page-break-before"] === "true") paragraphStyle.pageBreakBefore = true;
+  if (node?.attribs?.["data-bidirectional"] === "true") paragraphStyle.bidirectional = true;
   if (["true", "false"].includes(node?.attribs?.["data-widow-control"])) paragraphStyle.widowControl = node.attribs["data-widow-control"] === "true";
   const attributeTabStops = normalizeDocxTabStops(node?.attribs?.["data-tab-stops"]);
   const inlineTabStops = [];

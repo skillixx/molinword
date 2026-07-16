@@ -71,7 +71,7 @@ type TextCaseMode = "upper" | "lower" | "title";
 type EditorViewMode = "edit" | "page";
 type ParagraphSpacingProperty = "line-height" | "margin-top" | "margin-bottom" | "margin-left" | "margin-right" | "text-indent" | "--word-line-rule";
 type ParagraphSpacingStyles = Partial<Record<ParagraphSpacingProperty, string>>;
-type ParagraphPaginationAttribute = "keepNext" | "keepLines" | "pageBreakBefore" | "widowControl";
+type ParagraphPaginationAttribute = "keepNext" | "keepLines" | "pageBreakBefore" | "widowControl" | "bidirectional";
 type ParagraphAppearancePatch = { shading?: string | null; borders?: string | null };
 
 function imagePixelAttribute(element: HTMLElement, property: "width" | "height") {
@@ -1773,6 +1773,12 @@ const ParagraphIndent = Extension.create({
             default: false,
             parseHTML: (element) => element.getAttribute("data-keep-next") === "true",
             renderHTML: (attributes) => attributes.keepNext ? { "data-keep-next": "true" } : {}
+          },
+          bidirectional: {
+            default: false,
+            parseHTML: (element) => element.getAttribute("data-bidirectional") === "true",
+            // 中文注解：Word 的 bidi 是段落语义；data 属性供导出，direction 供编辑器与分页预览共用。
+            renderHTML: (attributes) => attributes.bidirectional ? { "data-bidirectional": "true", style: "direction: rtl;" } : {}
           },
           keepLines: {
             default: false,
@@ -4308,6 +4314,7 @@ function Editor(props: {
             <button className={editor?.getAttributes("paragraph").keepLines || editor?.getAttributes("heading").keepLines ? "active-format" : ""} onClick={() => toggleParagraphPagination("keepLines", "段中不分页")} title="避免当前段落被拆到两页">段中不分页</button>
             <button className={editor?.getAttributes("paragraph").pageBreakBefore || editor?.getAttributes("heading").pageBreakBefore ? "active-format" : ""} onClick={() => toggleParagraphPagination("pageBreakBefore", "段前分页")} title="让当前段落从新页开始">段前分页</button>
             <button className={(editor?.getAttributes("paragraph").widowControl ?? editor?.getAttributes("heading").widowControl) !== false ? "active-format" : ""} onClick={() => toggleParagraphPagination("widowControl", "孤行控制")} title="避免段落首行或末行单独出现在一页">孤行控制</button>
+            <button className={editor?.getAttributes("paragraph").bidirectional || editor?.getAttributes("heading").bidirectional ? "active-format" : ""} onClick={() => toggleParagraphPagination("bidirectional", "从右到左排版")} title="切换当前段落或选区为从右到左排版">从右到左</button>
             <span className="format-divider" />
             <button onClick={() => editor?.chain().focus().decreaseIndent().run()} title="减少首行缩进"><IndentDecrease size={16} />减少首行</button>
             <button onClick={() => editor?.chain().focus().increaseIndent().run()} title="增加首行缩进"><IndentIncrease size={16} />首行缩进</button>

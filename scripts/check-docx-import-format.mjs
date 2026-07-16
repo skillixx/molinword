@@ -152,6 +152,7 @@ async function buildFormattedDocxFixture() {
     <w:p><w:pPr><w:spacing w:line="360" w:lineRule="atLeast"/></w:pPr><w:r><w:t>At least spacing</w:t></w:r></w:p>
     <w:p><w:pPr><w:keepNext/><w:keepLines/><w:pageBreakBefore/><w:widowControl/></w:pPr><w:r><w:t>Pagination controlled paragraph</w:t></w:r></w:p>
     <w:p><w:pPr><w:widowControl w:val="false"/></w:pPr><w:r><w:t>Widow control disabled paragraph</w:t></w:r></w:p>
+    <w:p><w:pPr><w:bidi/></w:pPr><w:r><w:t>RTL paragraph source</w:t></w:r></w:p>
     <w:p><w:pPr><w:shd w:val="clear" w:color="000000" w:fill="FFF2CC"/><w:pBdr><w:top w:val="single" w:sz="8" w:space="4" w:color="FF0000"/><w:right w:val="dashed" w:sz="6" w:space="3" w:color="00AA00"/><w:bottom w:val="double" w:sz="12" w:space="2" w:color="0000FF"/><w:left w:val="nil" w:sz="0" w:space="0" w:color="000000"/><w:between w:val="dotted" w:sz="4" w:space="1" w:color="888888"/></w:pBdr></w:pPr><w:r><w:t>Paragraph appearance</w:t></w:r></w:p>
     <w:p>
       <w:pPr><w:tabs><w:tab w:val="left" w:pos="1440"/><w:tab w:val="right" w:pos="5760"/></w:tabs></w:pPr>
@@ -498,6 +499,9 @@ assert.match(hyperlinkReimported.content, /图片前文字[\s\S]*<img[^>]+alt="�
 assert.match(hyperlinkReimported.content, /<img[^>]+data-docx-wrap="square"[^>]+data-docx-float-align="right"/);
 assert.match(imported.content, /<p[^>]+data-keep-next="true"[^>]+data-keep-lines="true"[^>]+data-page-break-before="true"[^>]+data-widow-control="true"[^>]*>Pagination controlled paragraph<\/p>/);
 assert.match(imported.content, /<p[^>]+data-widow-control="false"[^>]*>Widow control disabled paragraph<\/p>/);
+const importedRtlParagraph = (imported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || []).find((paragraph) => paragraph.includes("RTL paragraph source")) || "";
+assert.match(importedRtlParagraph, /data-bidirectional="true"/);
+assert.match(importedRtlParagraph, /direction:\s*rtl/);
 const importedTabParagraph = (imported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || [])
   .find((paragraph) => paragraph.includes("Tab project") && paragraph.includes("100.00")) || "";
 assert.match(importedTabParagraph, /data-tab-stops="[^\"]*1440[^\"]*5760[^\"]*"/);
@@ -663,6 +667,8 @@ assert.match(paginationControlledRoundTripXml, /<w:pageBreakBefore\/>/);
 assert.match(paginationControlledRoundTripXml, /<w:widowControl\/>/);
 const widowDisabledRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Widow control disabled paragraph")) || "";
 assert.match(widowDisabledRoundTripXml, /<w:widowControl w:val="false"\/>/);
+const rtlRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("RTL paragraph source")) || "";
+assert.match(rtlRoundTripXml, /<w:bidi\/>/);
 const customOutlineRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Custom outline level 4")) || "";
 const directOutlineRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Direct outline level 8")) || "";
 assert.match(customOutlineRoundTripXml, /<w:outlineLvl w:val="3"\/>/);
@@ -725,6 +731,9 @@ assert.match(roundTripImported.content, /<ol data-list-format="decimal"[^>]*>[\s
 assert.match(roundTripImported.content, /<ol start="7" data-list-format="upperRoman"[^>]*>[\s\S]*?Started Roman item 1/);
 assert.match(roundTripImported.content, /<p[^>]+data-keep-next="true"[^>]+data-keep-lines="true"[^>]+data-page-break-before="true"[^>]+data-widow-control="true"[^>]*>[\s\S]*?Pagination controlled paragraph[\s\S]*?<\/p>/);
 assert.match(roundTripImported.content, /<p[^>]+data-widow-control="false"[^>]*>[\s\S]*?Widow control disabled paragraph[\s\S]*?<\/p>/);
+const roundTripRtlParagraph = (roundTripImported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || []).find((paragraph) => paragraph.includes("RTL paragraph source")) || "";
+assert.match(roundTripRtlParagraph, /data-bidirectional="true"/);
+assert.match(roundTripRtlParagraph, /direction:\s*rtl/);
 assert.match(roundTripImported.content, /<h4[^>]+data-outline-level="3"[^>]*>[\s\S]*?Custom outline level 4/);
 assert.match(roundTripImported.content, /<p[^>]+data-outline-level="7"[^>]*>[\s\S]*?Direct outline level 8/);
 const roundTripImportedTabParagraph = (roundTripImported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || [])

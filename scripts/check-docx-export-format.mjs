@@ -42,6 +42,7 @@ const content = `
   <p style="margin-top:0pt;margin-bottom:0pt">Zero spacing paragraph</p>
   <p data-keep-next="true" data-keep-lines="true" data-page-break-before="true" data-widow-control="true">Pagination controlled paragraph</p>
   <p data-widow-control="false">Widow control disabled paragraph</p>
+  <p data-bidirectional="true" style="direction:rtl">RTL paragraph export</p>
   <p data-paragraph-shading='{"fill":"#DDEBF7","color":"#000000","type":"clear"}' data-paragraph-borders='{"top":{"style":"single","size":8,"color":"#FF0000","space":4},"right":{"style":"dashed","size":6,"color":"#00AA00","space":3},"bottom":{"style":"double","size":12,"color":"#0000FF","space":2},"left":{"style":"nil","size":0,"color":"#000000","space":0},"between":{"style":"dotted","size":4,"color":"#888888","space":1}}' style="background-color:#DDEBF7;border-top:1.33px solid #FF0000;padding-top:5.33px">Paragraph appearance export</p>
   <p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab project<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Tab amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p>
   <p>查看 <a href="https://example.com/report?from=editor" target="_blank" rel="noopener noreferrer">Linked report</a></p>
@@ -268,6 +269,8 @@ assert.match(paginationControlledParagraphXml, /<w:pageBreakBefore\/>/);
 assert.match(paginationControlledParagraphXml, /<w:widowControl\/>/);
 const widowDisabledParagraphXml = paragraphXmlForText("Widow control disabled paragraph");
 assert.match(widowDisabledParagraphXml, /<w:widowControl w:val="false"\/>/);
+const rtlParagraphXml = paragraphXmlForText("RTL paragraph export");
+assert.match(rtlParagraphXml, /<w:bidi\/>/);
 const appearanceParagraphXml = paragraphXmlForText("Paragraph appearance export");
 assert.match(appearanceParagraphXml, /<w:shd[^>]+w:fill="DDEBF7"/);
 assert.match(appearanceParagraphXml, /<w:pBdr>[\s\S]*<w:top[^>]+w:val="single"[^>]+w:color="FF0000"[^>]+w:sz="8"[^>]+w:space="4"/);

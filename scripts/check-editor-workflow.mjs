@@ -32,7 +32,7 @@ const fixtureDocument = {
   tone: "正式",
   templateId: 3,
   outline: ["超长结构分页"],
-  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具 字符间距工具 下划线样式工具 字符边框工具 all Caps Format small Caps Format <mark data-highlight="yellow" style="background-color:#FFFF00">清除高亮工具</mark></p><p>悬挂缩进工具内容用于验证后续各行向右缩进并保持首行位置。</p><p>段落左右缩进工具内容用于验证正文可用行宽和分页位置。</p><p>大纲级别工具</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table data-table-width-type="dxa" data-table-width-value="7200" data-table-grid-width="7200" data-table-layout="fixed" style="width:480px;table-layout:fixed"><tbody><tr><th colwidth="120">审批阶段</th><th colwidth="360">状态</th></tr><tr><td colwidth="120">商务评审</td><td colwidth="360">通过</td></tr><tr><td colwidth="120">归档确认</td><td colwidth="360">完成</td></tr></tbody></table><p>段落外观工具</p><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p><p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab workflow<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p><p>Tab keyboard</p><p>${widowText}</p>`,
+  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具 字符间距工具 下划线样式工具 字符边框工具 all Caps Format small Caps Format <mark data-highlight="yellow" style="background-color:#FFFF00">清除高亮工具</mark></p><p>悬挂缩进工具内容用于验证后续各行向右缩进并保持首行位置。</p><p>段落左右缩进工具内容用于验证正文可用行宽和分页位置。</p><p>RTL段落工具内容</p><p>大纲级别工具</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table data-table-width-type="dxa" data-table-width-value="7200" data-table-grid-width="7200" data-table-layout="fixed" style="width:480px;table-layout:fixed"><tbody><tr><th colwidth="120">审批阶段</th><th colwidth="360">状态</th></tr><tr><td colwidth="120">商务评审</td><td colwidth="360">通过</td></tr><tr><td colwidth="120">归档确认</td><td colwidth="360">完成</td></tr></tbody></table><p>段落外观工具</p><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p><p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab workflow<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p><p>Tab keyboard</p><p>${widowText}</p>`,
   // 中文注解：模拟升级前数据库里的旧页面设置，确保真实历史文档开启高级页眉时不会崩溃。
   pageLayout: { headerText: "", footerText: "", pageNumberEnabled: false },
   status: "draft",
@@ -336,6 +336,11 @@ try {
   await page.getByRole("button", { name: "孤行控制", exact: true }).click();
   const paginationControlHtml = await editor.innerHTML();
   assert.match(paginationControlHtml, /<p[^>]+data-keep-next="true"[^>]+data-keep-lines="true"[^>]+data-page-break-before="true"[^>]+data-widow-control="true"[^>]*>[\s\S]*?分页控制段落[\s\S]*?<\/p>/);
+  const rtlParagraph = editor.locator("p").filter({ hasText: "RTL段落工具内容" });
+  await rtlParagraph.click();
+  await page.getByRole("button", { name: "从右到左", exact: true }).click();
+  assert.equal(await rtlParagraph.getAttribute("data-bidirectional"), "true");
+  assert.equal(await rtlParagraph.evaluate((paragraph) => getComputedStyle(paragraph).direction), "rtl");
 
   const paragraphAppearance = editor.locator("p").filter({ hasText: "段落外观工具" });
   await paragraphAppearance.click();
@@ -602,6 +607,7 @@ try {
   assert.match(storedDocument.content, /text-transform:\s*uppercase/);
   assert.match(storedDocument.content, /font-variant-caps:\s*small-caps/);
   assert.match(storedDocument.content, /data-highlight="darkCyan"/);
+  assert.match(storedDocument.content, /<p[^>]+data-bidirectional="true"[^>]+style="[^"]*direction:\s*rtl[^"]*"[^>]*>[\s\S]*?RTL段落工具内容[\s\S]*?<\/p>/);
   assert.doesNotMatch(storedDocument.content, /<mark[^>]*>清除高亮工具<\/mark>/);
   assert.match(storedDocument.content, /<p[^>]+data-paragraph-shading="[^\"]*DDEBF7[^\"]*"[^>]+data-paragraph-borders="[^\"]*dashed[^\"]*"[^>]*>[\s\S]*?段落外观工具[\s\S]*?<\/p>/);
   assert.match(storedDocument.content, /data-section-break="nextPage"/);
@@ -693,6 +699,7 @@ try {
   assert.equal(await reopenedFloatingImage.getAttribute("data-docx-float-align"), "left");
   assert.match(reopenedHtml, /<a[^>]+href="https:\/\/example\.com\/office"[^>]*>[\s\S]*链接工具[\s\S]*<\/a>/);
   assert.match(reopenedHtml, /<p[^>]+data-paragraph-shading="[^\"]*DDEBF7[^\"]*"[^>]+data-paragraph-borders="[^\"]*dashed[^\"]*"[^>]*>[\s\S]*?段落外观工具[\s\S]*?<\/p>/);
+  assert.match(reopenedHtml, /<p[^>]+data-bidirectional="true"[^>]+style="[^"]*direction:\s*rtl[^"]*"[^>]*>[\s\S]*?RTL段落工具内容[\s\S]*?<\/p>/);
   assert.match(reopenedHtml, /data-section-break="nextPage"/);
   assert.match(reopenedHtml, /第二节横向内容/);
   assert.equal((reopenedHtml.match(/data-docx-tab="true"/g) || []).length, 4);
@@ -815,6 +822,8 @@ try {
   assert.match(paginationParagraph, /<w:keepLines\/>/);
   assert.match(paginationParagraph, /<w:pageBreakBefore\/>/);
   assert.match(paginationParagraph, /<w:widowControl\/>/);
+  const rtlExportParagraph = (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("RTL段落工具内容")) || "";
+  assert.match(rtlExportParagraph, /<w:bidi\/>/);
   const appearanceParagraph = (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("段落外观工具")) || "";
   assert.match(appearanceParagraph, /<w:shd[^>]+w:fill="DDEBF7"/);
   for (const side of ["top", "right", "bottom", "left"]) {
@@ -874,6 +883,8 @@ try {
     const style = paragraph ? getComputedStyle(paragraph) : null;
     return { backgroundColor: style?.backgroundColor || "", borderTopStyle: style?.borderTopStyle || "", borderTopWidth: style?.borderTopWidth || "", paddingTop: style?.paddingTop || "" };
   }), { backgroundColor: "rgb(221, 235, 247)", borderTopStyle: "dashed", borderTopWidth: "1px", paddingTop: "4px" });
+  await page.waitForFunction(() => Array.from(document.querySelectorAll(".page-body p")).some((paragraph) => paragraph.textContent?.includes("RTL段落工具内容") && getComputedStyle(paragraph).direction === "rtl"));
+  assert.equal(await page.evaluate(() => Array.from(document.querySelectorAll(".page-body p")).map((paragraph) => paragraph.textContent?.includes("RTL段落工具内容") ? getComputedStyle(paragraph).direction : "").find((direction) => direction === "rtl") || ""), "rtl");
   // 中文注解：分页预览重排期间可能短暂保留旧克隆，按格式属性定位最终稳定的字符节点。
   const previewAdvancedCharacter = page.locator('.page-body span[style*="letter-spacing"][style*="vertical-align"]').filter({ hasText: "字符间距工具" }).first();
   await previewAdvancedCharacter.waitFor();
