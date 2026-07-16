@@ -17,7 +17,7 @@ const pdf = require("pdf-parse");
 const WordExtractor = require("word-extractor");
 const wordExtractor = new WordExtractor();
 const docxPage = {
-  // 中文注解：纸张固定为 A4，方向和四边页距由每个节独立决定。
+  // 中文注解：A4 是默认纸张；非 A4 节会在 pageSize 中保存自己的纵向基准宽高。
   widthTwip: 11906,
   heightTwip: 16838
 };
@@ -47,6 +47,7 @@ const defaultPageLayout = Object.freeze({
   oddEvenDifferent: false,
   evenPage: defaultPageVariant,
   orientation: "portrait",
+  paperSize: Object.freeze({ width: docxPage.widthTwip, height: docxPage.heightTwip }),
   pageNumberFormat: "decimal",
   pageNumberStart: null,
   headerDistance: 708,
@@ -147,7 +148,16 @@ function normalizePageMargin(value, fallback) {
   return Number.isFinite(number) ? Math.max(0, Math.min(Math.round(number), 7200)) : fallback;
 }
 
-function normalizePageMargins(value, fallback = defaultPageMargins, orientation = "portrait") {
+function normalizePaperSize(value, fallback = docxPage) {
+  const source = value && typeof value === "object" ? value : {};
+  const base = fallback && typeof fallback === "object" ? fallback : docxPage;
+  const width = Math.max(1440, Math.min(50000, Math.round(Number(source.width ?? source.widthTwip ?? base.width ?? base.widthTwip) || docxPage.widthTwip)));
+  const height = Math.max(1440, Math.min(50000, Math.round(Number(source.height ?? source.heightTwip ?? base.height ?? base.heightTwip) || docxPage.heightTwip)));
+  // 中文注解：模型始终保存纵向基准尺寸，横向只在布局和导出时交换宽高。
+  return { width: Math.min(width, height), height: Math.max(width, height) };
+}
+
+function normalizePageMargins(value, fallback = defaultPageMargins, orientation = "portrait", paperSize = docxPage) {
   const source = value && typeof value === "object" ? value : {};
   const base = fallback && typeof fallback === "object" ? fallback : defaultPageMargins;
   const margins = {
@@ -156,15 +166,16 @@ function normalizePageMargins(value, fallback = defaultPageMargins, orientation 
     bottom: normalizePageMargin(source.bottom, base.bottom),
     left: normalizePageMargin(source.left, base.left)
   };
-  const pageWidth = orientation === "landscape" ? docxPage.heightTwip : docxPage.widthTwip;
-  const pageHeight = orientation === "landscape" ? docxPage.widthTwip : docxPage.heightTwip;
+  const normalizedPaperSize = normalizePaperSize(paperSize);
+  const pageWidth = orientation === "landscape" ? normalizedPaperSize.height : normalizedPaperSize.width;
+  const pageHeight = orientation === "landscape" ? normalizedPaperSize.width : normalizedPaperSize.height;
   const fitPair = (first, second, maximum) => {
     const total = first + second;
     if (total <= maximum || total <= 0) return [first, second];
     const ratio = maximum / total;
     return [Math.round(first * ratio), Math.round(second * ratio)];
   };
-  // 中文注解：四边页距必须联合校验，始终为 A4 正文保留至少 0.5 英寸，避免预览和 Word 采用不同的冲突修正。
+  // 中文注解：四边页距必须联合校验，始终为当前纸张正文保留至少 0.5 英寸。
   [margins.left, margins.right] = fitPair(margins.left, margins.right, pageWidth - 720);
   [margins.top, margins.bottom] = fitPair(margins.top, margins.bottom, pageHeight - 720);
   return margins;
@@ -219,9 +230,10 @@ function normalizePageLayout(value, fallback = defaultPageLayout) {
   const pageNumberFormats = ["decimal", "upperRoman", "lowerRoman", "upperLetter", "lowerLetter"];
   const rawPageNumberStart = source.pageNumberStart === undefined ? base.pageNumberStart : source.pageNumberStart;
   const pageNumberStartValue = Number(rawPageNumberStart);
-  const margins = normalizePageMargins(source.margins, base.margins || defaultPageMargins, orientation);
+  const paperSize = normalizePaperSize(source.paperSize, normalizePaperSize(base.paperSize, docxPage));
+  const margins = normalizePageMargins(source.margins, base.margins || defaultPageMargins, orientation, paperSize);
   const columns = normalizePageColumns(source.columns, base.columns);
-  const pageWidth = orientation === "landscape" ? docxPage.heightTwip : docxPage.widthTwip;
+  const pageWidth = orientation === "landscape" ? paperSize.height : paperSize.width;
   const availableWidth = Math.max(720, pageWidth - margins.left - margins.right);
   if (columns.equalWidth === false && Array.isArray(columns.items)) {
     const gapTotal = columns.items.slice(0, -1).reduce((total, item) => total + item.space, 0);
@@ -249,6 +261,7 @@ function normalizePageLayout(value, fallback = defaultPageLayout) {
     oddEvenDifferent: source.oddEvenDifferent === undefined ? Boolean(base.oddEvenDifferent) : Boolean(source.oddEvenDifferent),
     evenPage: normalizePageVariant(source.evenPage, base.evenPage || defaultPageVariant),
     orientation,
+    paperSize,
     pageNumberFormat: pageNumberFormats.includes(source.pageNumberFormat) ? source.pageNumberFormat : (pageNumberFormats.includes(base.pageNumberFormat) ? base.pageNumberFormat : "decimal"),
     pageNumberStart: rawPageNumberStart === null || rawPageNumberStart === "" || !Number.isFinite(pageNumberStartValue) ? null : Math.max(0, Math.min(Math.round(pageNumberStartValue), 999999)),
     headerDistance: normalizePageMargin(source.headerDistance, normalizePageMargin(base.headerDistance, 708)),
@@ -1850,8 +1863,13 @@ function parseDocxPageGeometry(section, fallback = defaultPageLayout, themeColor
     const value = firstValue(pageMargin?.attribs, [`w:${name}`, name]);
     return value === undefined || value === null || value === "" ? fallback.margins[name] : value;
   };
+  const fallbackPaperSize = normalizePaperSize(fallback.paperSize, docxPage);
+  const parsedPaperSize = Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0
+    ? normalizePaperSize({ width, height }, fallbackPaperSize)
+    : fallbackPaperSize;
   return {
     orientation,
+    paperSize: parsedPaperSize,
     pageNumberFormat: ["decimal", "upperRoman", "lowerRoman", "upperLetter", "lowerLetter"].includes(pageNumberFormat) ? pageNumberFormat : fallback.pageNumberFormat,
     pageNumberStart: pageNumberStart === "" ? null : Number(pageNumberStart),
     headerDistance: normalizePageMargin(marginValue("header"), fallback.headerDistance ?? 708),
@@ -1881,7 +1899,7 @@ function parseDocxPageGeometry(section, fallback = defaultPageLayout, themeColor
       right: marginValue("right"),
       bottom: marginValue("bottom"),
       left: marginValue("left")
-    }, fallback.margins, orientation)
+    }, fallback.margins, orientation, parsedPaperSize)
   };
 }
 
@@ -1930,7 +1948,7 @@ async function parseDocxPageLayout(buffer) {
       defaultHeader, defaultFooter, firstHeader, firstFooter, evenHeader, evenFooter
     ].map(async (part) => { part.images = await parseDocxPartImages(zip, part); }));
     pageParts.push(defaultHeader.xml, defaultFooter.xml, firstHeader.xml, firstFooter.xml, evenHeader.xml, evenFooter.xml);
-    const geometry = section ? parseDocxPageGeometry(section, fallback, styleContext.themeColors || {}) : { orientation: fallback.orientation, pageNumberFormat: fallback.pageNumberFormat, pageNumberStart: fallback.pageNumberStart, headerDistance: fallback.headerDistance, footerDistance: fallback.footerDistance, columns: fallback.columns, verticalAlign: fallback.verticalAlign, pageBorders: fallback.pageBorders, margins: fallback.margins };
+    const geometry = section ? parseDocxPageGeometry(section, fallback, styleContext.themeColors || {}) : { orientation: fallback.orientation, paperSize: fallback.paperSize, pageNumberFormat: fallback.pageNumberFormat, pageNumberStart: fallback.pageNumberStart, headerDistance: fallback.headerDistance, footerDistance: fallback.footerDistance, columns: fallback.columns, verticalAlign: fallback.verticalAlign, pageBorders: fallback.pageBorders, margins: fallback.margins };
     sectionLayouts.push(normalizePageLayout({
       ...parseDocxPageVariantParts(defaultHeader, defaultFooter, fallback, styleContext),
       firstPageDifferent: section ? wordOnOffEnabled(xmlChild(section, "w:titlePg")) : fallback.firstPageDifferent,
@@ -2827,6 +2845,7 @@ function createDocxHeaderFooter(pageLayout, templateStyle = {}, forceDefault = f
 
 function createDocxSectionProperties(pageLayout, isFirstSection, breakType = "nextPage") {
   const layout = normalizePageLayout(pageLayout);
+  const paperSize = normalizePaperSize(layout.paperSize, docxPage);
   const sectionTypes = {
     nextPage: SectionType.NEXT_PAGE,
     oddPage: SectionType.ODD_PAGE,
@@ -2864,8 +2883,8 @@ function createDocxSectionProperties(pageLayout, isFirstSection, breakType = "ne
     verticalAlign: layout.verticalAlign,
     page: {
       size: {
-        width: docxPage.widthTwip,
-        height: docxPage.heightTwip,
+        width: paperSize.width,
+        height: paperSize.height,
         orientation: layout.orientation === "landscape" ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT
       },
       margin: { ...layout.margins, header: layout.headerDistance, footer: layout.footerDistance },

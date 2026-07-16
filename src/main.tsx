@@ -198,6 +198,7 @@ type DocumentPageVariant = {
   pageNumberPosition: "header" | "footer";
 };
 type DocumentPageMargins = { top: number; right: number; bottom: number; left: number };
+type DocumentPaperSize = { width: number; height: number };
 type DocumentPageColumn = { width: number; space: number };
 type DocumentPageColumns = { count: number; space: number; separate: boolean; equalWidth?: false; items?: DocumentPageColumn[] };
 type DocumentPageBorderSide = { style: string; size: number; color: string; space: number };
@@ -217,6 +218,7 @@ type DocumentPageLayout = DocumentPageVariant & {
   oddEvenDifferent: boolean;
   evenPage: DocumentPageVariant;
   orientation: "portrait" | "landscape";
+  paperSize: DocumentPaperSize;
   pageNumberFormat: "decimal" | "upperRoman" | "lowerRoman" | "upperLetter" | "lowerLetter";
   pageNumberStart: number | null;
   headerDistance: number;
@@ -244,6 +246,13 @@ const defaultDocumentPageVariant: DocumentPageVariant = {
 };
 const defaultDocumentPageMargins: DocumentPageMargins = { top: 1440, right: 1440, bottom: 1440, left: 1440 };
 const a4PageTwip = { width: 11906, height: 16838 };
+const documentPaperSizes = [
+  { value: "a4", label: "A4", width: 11906, height: 16838 },
+  { value: "a3", label: "A3", width: 16838, height: 23811 },
+  { value: "letter", label: "Letter", width: 12240, height: 15840 },
+  { value: "legal", label: "Legal", width: 12240, height: 20160 },
+  { value: "b5", label: "B5 (JIS)", width: 10318, height: 14570 }
+] as const;
 const defaultDocumentPageLayout: DocumentPageLayout = {
   ...defaultDocumentPageVariant,
   firstPageDifferent: false,
@@ -251,6 +260,7 @@ const defaultDocumentPageLayout: DocumentPageLayout = {
   oddEvenDifferent: false,
   evenPage: { ...defaultDocumentPageVariant },
   orientation: "portrait",
+  paperSize: { ...a4PageTwip },
   pageNumberFormat: "decimal",
   pageNumberStart: null,
   headerDistance: 708,
@@ -357,6 +367,11 @@ function normalizeDocumentPageVariant(value: Partial<DocumentPageVariant> | null
 
 function normalizeDocumentPageLayout(value: Partial<DocumentPageLayout> | null | undefined): DocumentPageLayout {
   const orientation = value?.orientation === "landscape" ? "landscape" : "portrait";
+  const rawPaperWidth = Number(value?.paperSize?.width ?? a4PageTwip.width);
+  const rawPaperHeight = Number(value?.paperSize?.height ?? a4PageTwip.height);
+  const paperWidth = Math.max(1440, Math.min(50000, Math.round(Number.isFinite(rawPaperWidth) ? rawPaperWidth : a4PageTwip.width)));
+  const paperHeight = Math.max(1440, Math.min(50000, Math.round(Number.isFinite(rawPaperHeight) ? rawPaperHeight : a4PageTwip.height)));
+  const paperSize = { width: Math.min(paperWidth, paperHeight), height: Math.max(paperWidth, paperHeight) };
   const normalizeMargin = (side: keyof DocumentPageMargins) => {
     const number = Number(value?.margins?.[side]);
     return Number.isFinite(number) ? Math.max(0, Math.min(Math.round(number), 7200)) : defaultDocumentPageMargins[side];
@@ -364,8 +379,8 @@ function normalizeDocumentPageLayout(value: Partial<DocumentPageLayout> | null |
   const margins = { top: normalizeMargin("top"), right: normalizeMargin("right"), bottom: normalizeMargin("bottom"), left: normalizeMargin("left") };
   const pageNumberFormats: DocumentPageLayout["pageNumberFormat"][] = ["decimal", "upperRoman", "lowerRoman", "upperLetter", "lowerLetter"];
   const pageNumberStartValue = Number(value?.pageNumberStart);
-  const pageWidth = orientation === "landscape" ? a4PageTwip.height : a4PageTwip.width;
-  const pageHeight = orientation === "landscape" ? a4PageTwip.width : a4PageTwip.height;
+  const pageWidth = orientation === "landscape" ? paperSize.height : paperSize.width;
+  const pageHeight = orientation === "landscape" ? paperSize.width : paperSize.height;
   const columnCount = Math.max(1, Math.min(8, Math.round(Number(value?.columns?.count) || 1)));
   const columnSpaceValue = Number(value?.columns?.space ?? 720);
   const columnSpace = Math.max(0, Math.min(7200, Math.round(Number.isFinite(columnSpaceValue) ? columnSpaceValue : 720)));
@@ -375,7 +390,7 @@ function normalizeDocumentPageLayout(value: Partial<DocumentPageLayout> | null |
     const ratio = maximum / total;
     return [Math.round(first * ratio), Math.round(second * ratio)];
   };
-  // 中文注解：前后端使用同一联合约束，为 A4 正文保留至少 0.5 英寸，避免浏览器与 Word 各自修正非法页距。
+  // 中文注解：前后端使用同一联合约束，为当前纸张正文保留至少 0.5 英寸。
   [margins.left, margins.right] = fitPair(margins.left, margins.right, pageWidth - 720);
   [margins.top, margins.bottom] = fitPair(margins.top, margins.bottom, pageHeight - 720);
   const availableWidth = Math.max(720, pageWidth - margins.left - margins.right);
@@ -412,6 +427,7 @@ function normalizeDocumentPageLayout(value: Partial<DocumentPageLayout> | null |
     oddEvenDifferent: Boolean(value?.oddEvenDifferent),
     evenPage: normalizeDocumentPageVariant(value?.evenPage),
     orientation,
+    paperSize,
     pageNumberFormat: pageNumberFormats.includes(value?.pageNumberFormat as DocumentPageLayout["pageNumberFormat"]) ? value!.pageNumberFormat! : "decimal",
     pageNumberStart: value?.pageNumberStart === null || value?.pageNumberStart === undefined || !Number.isFinite(pageNumberStartValue) ? null : Math.max(0, Math.min(Math.round(pageNumberStartValue), 999999)),
     headerDistance: Number.isFinite(Number(value?.headerDistance)) ? Math.max(0, Math.min(Math.round(Number(value?.headerDistance)), 7200)) : 708,
@@ -578,16 +594,15 @@ const defaultContent = `AI Word 文档助手是一款面向个人用户的智能
 
 const maxIndentLevel = 6;
 const docxPagePreview = {
-  widthPx: 794,
-  heightPx: 1123,
   twipToPx: 96 / 1440
 };
 type PreviewPage = { columns: string[][]; sectionIndex: number; sectionPageIndex: number; layout: DocumentPageLayout; usedHeight: number; usedHeights: number[] };
 
 function pageGeometry(layout: DocumentPageLayout) {
   const landscape = layout.orientation === "landscape";
-  const widthPx = landscape ? docxPagePreview.heightPx : docxPagePreview.widthPx;
-  const heightPx = landscape ? docxPagePreview.widthPx : docxPagePreview.heightPx;
+  const paperSize = layout.paperSize || a4PageTwip;
+  const widthPx = (landscape ? paperSize.height : paperSize.width) * docxPagePreview.twipToPx;
+  const heightPx = (landscape ? paperSize.width : paperSize.height) * docxPagePreview.twipToPx;
   const margins = {
     top: layout.margins.top * docxPagePreview.twipToPx,
     right: layout.margins.right * docxPagePreview.twipToPx,
@@ -678,7 +693,8 @@ function twipToCentimeter(value: number) {
 
 function createCustomPageColumns(layout: DocumentPageLayout, count = layout.columns.count): DocumentPageColumns {
   const normalizedCount = Math.max(2, Math.min(8, Math.round(count)));
-  const pageWidth = layout.orientation === "landscape" ? a4PageTwip.height : a4PageTwip.width;
+  const paperSize = layout.paperSize || a4PageTwip;
+  const pageWidth = layout.orientation === "landscape" ? paperSize.height : paperSize.width;
   const availableWidth = Math.max(720, pageWidth - layout.margins.left - layout.margins.right);
   const gap = Math.min(layout.columns.space, Math.max(0, Math.floor((availableWidth - normalizedCount * 360) / (normalizedCount - 1))));
   const width = Math.max(1, Math.floor((availableWidth - gap * (normalizedCount - 1)) / normalizedCount));
@@ -701,6 +717,16 @@ function columnWidthCentimeterToTwip(value: string, fallback: number) {
   const centimeters = Number(value);
   // 中文注解：横向 A4 的单栏可能超过 12.7 厘米，栏宽不能复用页边距的 7200 twip 上限。
   return Number.isFinite(centimeters) ? Math.max(1, Math.min(Math.round(centimeters / 2.54 * 1440), 20000)) : fallback;
+}
+
+function paperSizeCentimeterToTwip(value: string, fallback: number) {
+  const centimeters = Number(value);
+  return Number.isFinite(centimeters) ? Math.max(1440, Math.min(Math.round(centimeters / 2.54 * 1440), 50000)) : fallback;
+}
+
+function documentPaperSizeValue(layout: DocumentPageLayout) {
+  const paperSize = layout.paperSize || a4PageTwip;
+  return documentPaperSizes.find((item) => item.width === paperSize.width && item.height === paperSize.height)?.value || "custom";
 }
 const textColorOptions = [
   { label: "黑", value: "#17212B" },
@@ -2886,6 +2912,7 @@ function Editor(props: {
   const manualSavePromiseRef = React.useRef<Promise<ApiDocument | null> | null>(null);
   const activeSectionIndexRef = React.useRef(0);
   const activeSectionLayoutRef = React.useRef<DocumentPageLayout>(normalizeDocumentPageLayout(props.pageLayout));
+  const lastEditorSelectionRef = React.useRef<{ from: number; to: number } | null>(null);
 
   const updateOutlineFromEditor = React.useCallback((editor: TiptapEditor) => {
     const nextOutline: OutlineItem[] = [];
@@ -2921,9 +2948,14 @@ function Editor(props: {
     extensions: [StarterKit.configure({ link: { openOnClick: false, autolink: false, linkOnPaste: true, HTMLAttributes: { target: "_blank", rel: "noopener noreferrer" } } }), DocumentImage.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DocxTab, ParagraphIndent, PageBreak, SectionBreak, DocumentTable, DocumentTableRow, DocumentTableHeader, DocumentTableCell],
     content: props.content,
     editorProps: { attributes: { class: "word-editor" } },
-    onCreate({ editor }) { updateOutlineFromEditor(editor); syncActiveSectionFromEditor(editor); },
+    onCreate({ editor }) {
+      lastEditorSelectionRef.current = { from: editor.state.selection.from, to: editor.state.selection.to };
+      updateOutlineFromEditor(editor);
+      syncActiveSectionFromEditor(editor);
+    },
     onUpdate({ editor }) { props.setContent(editor.getHTML()); updateOutlineFromEditor(editor); syncActiveSectionFromEditor(editor); },
     onSelectionUpdate({ editor }) {
+      lastEditorSelectionRef.current = { from: editor.state.selection.from, to: editor.state.selection.to };
       const selectedText = getSelectedText(editor);
       setHasSelection(Boolean(selectedText));
       setSelectionHint(selectedText ? `已选中 ${selectedText.length} 个字符` : "请先选中文本，再使用局部 AI 操作。");
@@ -3377,7 +3409,11 @@ function Editor(props: {
 
   const applyParagraphAppearance = (patch: ParagraphAppearancePatch, label: string) => {
     if (!editor) return;
-    const applied = editor.chain().focus().setParagraphAppearance(patch).run();
+    const lastSelection = lastEditorSelectionRef.current;
+    // 中文注解：原生下拉框会夺走焦点，格式命令必须恢复用户最后停留的编辑器选区。
+    const chain = editor.chain();
+    if (lastSelection) chain.setTextSelection(lastSelection);
+    const applied = chain.focus().setParagraphAppearance(patch).run();
     setSelectionHint(applied ? `已设置${label}。` : "请把光标放到段落或标题中，再设置段落外观。");
   };
 
@@ -3684,6 +3720,9 @@ function Editor(props: {
   const selectedImagePresentation = clientFloatingImagePresentation(selectedImageAttributes?.docxFloating);
   const activePageBorder = activeSectionLayout.pageBorders;
   const activePageBorderSample = activePageBorder?.top || activePageBorder?.right || activePageBorder?.bottom || activePageBorder?.left || null;
+  const activePaperSize = activeSectionLayout.paperSize || a4PageTwip;
+  const activePaperWidth = activeSectionLayout.orientation === "landscape" ? activePaperSize.height : activePaperSize.width;
+  const activePaperHeight = activeSectionLayout.orientation === "landscape" ? activePaperSize.width : activePaperSize.height;
   const updateActivePageBorders = (patch: Parameters<typeof updateUniformPageBorders>[1]) => {
     updateCurrentSectionLayout((current) => ({ ...current, pageBorders: updateUniformPageBorders(current.pageBorders, patch) }));
   };
@@ -3720,7 +3759,26 @@ function Editor(props: {
                 </div>
                 <div className="page-layout-section">
                   <strong>纸张</strong>
-                  <label>方向<select aria-label="当前节纸张方向" value={activeSectionLayout.orientation} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, orientation: event.target.value === "landscape" ? "landscape" : "portrait" }))}><option value="portrait">纵向</option><option value="landscape">横向</option></select></label>
+                  <div className="page-margin-grid">
+                    <label>规格<select aria-label="当前节纸张规格" value={documentPaperSizeValue(activeSectionLayout)} onChange={(event) => updateCurrentSectionLayout((current) => {
+                      const preset = documentPaperSizes.find((item) => item.value === event.target.value);
+                      if (!preset) return current;
+                      return { ...current, paperSize: { width: preset.width, height: preset.height } };
+                    })}>{documentPaperSizes.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}<option value="custom">自定义</option></select></label>
+                    <label>方向<select aria-label="当前节纸张方向" value={activeSectionLayout.orientation} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, orientation: event.target.value === "landscape" ? "landscape" : "portrait" }))}><option value="portrait">纵向</option><option value="landscape">横向</option></select></label>
+                  </div>
+                  <div className="page-margin-grid">
+                    <label>纸张宽度（厘米）<input type="number" aria-label="当前节纸张宽度" min="2.54" max="88.2" step="0.1" value={twipToCentimeter(activePaperWidth)} onChange={(event) => updateCurrentSectionLayout((current) => {
+                      const paperSize = current.paperSize || a4PageTwip;
+                      const width = paperSizeCentimeterToTwip(event.target.value, current.orientation === "landscape" ? paperSize.height : paperSize.width);
+                      return { ...current, paperSize: current.orientation === "landscape" ? { width: paperSize.width, height: width } : { width, height: paperSize.height } };
+                    })} /></label>
+                    <label>纸张高度（厘米）<input type="number" aria-label="当前节纸张高度" min="2.54" max="88.2" step="0.1" value={twipToCentimeter(activePaperHeight)} onChange={(event) => updateCurrentSectionLayout((current) => {
+                      const paperSize = current.paperSize || a4PageTwip;
+                      const height = paperSizeCentimeterToTwip(event.target.value, current.orientation === "landscape" ? paperSize.width : paperSize.height);
+                      return { ...current, paperSize: current.orientation === "landscape" ? { width: height, height: paperSize.height } : { width: paperSize.width, height } };
+                    })} /></label>
+                  </div>
                   <div className="page-margin-grid">
                     {(["top", "bottom", "left", "right"] as const).map((side) => {
                       const labels = { top: "上", bottom: "下", left: "左", right: "右" };

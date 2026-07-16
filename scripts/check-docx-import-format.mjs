@@ -224,6 +224,17 @@ const unequalColumnsRoundTripXml = await unequalColumnsRoundTripZip.file("word/d
 assert.match(unequalColumnsRoundTripXml, /<w:cols[^>]+w:num="2"[^>]+w:sep="true"[^>]+w:equalWidth="false"/);
 assert.match(unequalColumnsRoundTripXml, /<w:col w:w="3000" w:space="720"\/><w:col w:w="5000"\/>/);
 
+const letterPaperZip = await JSZip.loadAsync(buffer);
+const letterPaperXml = await letterPaperZip.file("word/document.xml")?.async("string") || "";
+letterPaperZip.file("word/document.xml", letterPaperXml.replace("<w:pgMar", '<w:pgSz w:w="12240" w:h="15840"/><w:pgMar'));
+const letterPaperBuffer = await letterPaperZip.generateAsync({ type: "nodebuffer" });
+const letterPaperImported = await parseImportedDocument({ originalname: "letter-paper.docx", buffer: letterPaperBuffer, mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: letterPaperBuffer.length });
+assert.deepEqual(letterPaperImported.pageLayout.paperSize, { width: 12240, height: 15840 });
+const letterPaperRoundTrip = await createDocxBuffer({ title: "Letter paper", content: letterPaperImported.content, pageLayout: letterPaperImported.pageLayout });
+const letterPaperRoundTripZip = await JSZip.loadAsync(letterPaperRoundTrip);
+const letterPaperRoundTripXml = await letterPaperRoundTripZip.file("word/document.xml")?.async("string") || "";
+assert.match(letterPaperRoundTripXml, /<w:pgSz[^>]+w:w="12240"[^>]+w:h="15840"/);
+
 const inheritedStyleZip = await JSZip.loadAsync(buffer);
 const inheritedStylesXml = await inheritedStyleZip.file("word/styles.xml")?.async("string") || "";
 inheritedStyleZip.file("word/styles.xml", inheritedStylesXml.replace("</w:styles>", `
@@ -527,6 +538,7 @@ assert.deepEqual(imported.pageLayout, {
   oddEvenDifferent: false,
   evenPage: emptyPageVariant,
   orientation: "portrait",
+  paperSize: { width: 11906, height: 16838 },
   pageNumberFormat: "decimal",
   pageNumberStart: null,
   headerDistance: 360,
@@ -666,6 +678,7 @@ const variantPageLayout = {
   oddEvenDifferent: true,
   evenPage: { ...emptyPageVariant, headerText: "偶数页页眉", footerText: "偶数页页脚", footerPageNumberTemplate: "第 {PAGE} 页 / 共 {NUMPAGES} 页", pageNumberEnabled: true },
   orientation: "portrait",
+  paperSize: { width: 11906, height: 16838 },
   pageNumberFormat: "decimal",
   pageNumberStart: null,
   headerDistance: 708,

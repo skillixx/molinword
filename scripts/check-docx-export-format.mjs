@@ -60,6 +60,7 @@ const buffer = await createDocxBuffer({
     evenPage: { headerText: "偶数页眉", footerText: "偶数页脚", pageNumberEnabled: true },
     headerDistance: 480,
     footerDistance: 840,
+    paperSize: { width: 12240, height: 15840 },
     columns: {
       count: 2,
       space: 720,
@@ -181,8 +182,8 @@ assert.match(documentXml, /<w:tc>/);
 assert.match(documentXml, /表头 A/);
 assert.match(documentXml, /单元格 1/);
 assert.match(documentXml, /<w:br w:type="page"\/>/);
-// 中文注解：在线纸张固定使用 A4 和 1 英寸页边距，导出结构必须保持同一可用内容区域。
-assert.match(documentXml, /<w:pgSz[^>]+w:w="11906"[^>]+w:h="16838"/);
+// 中文注解：在线选择的 Letter 纸张必须原样写入分节属性，不能在导出时退回 A4。
+assert.match(documentXml, /<w:pgSz[^>]+w:w="12240"[^>]+w:h="15840"/);
 assert.match(documentXml, /<w:pgMar[^>]+w:top="1440"[^>]+w:right="1440"[^>]+w:bottom="1440"[^>]+w:left="1440"/);
 assert.match(documentXml, /<w:pgMar[^>]+w:header="480"[^>]+w:footer="840"/);
 assert.match(documentXml, /<w:cols[^>]+w:num="2"[^>]+w:sep="true"[^>]+w:equalWidth="false"/);

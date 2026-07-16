@@ -284,7 +284,9 @@ try {
   const paragraphAppearance = editor.locator("p").filter({ hasText: "段落外观工具" });
   await paragraphAppearance.click();
   await page.locator('label[title="设置当前段落或选区的底纹"] select').selectOption("#DDEBF7");
+  await page.waitForFunction(() => Array.from(document.querySelectorAll(".word-editor p")).find((paragraph) => paragraph.textContent?.includes("段落外观工具"))?.getAttribute("data-paragraph-shading")?.includes("DDEBF7"));
   await page.locator('label[title="设置当前段落或选区的边框"] select').selectOption("dashed");
+  await page.waitForFunction(() => Array.from(document.querySelectorAll(".word-editor p")).find((paragraph) => paragraph.textContent?.includes("段落外观工具"))?.getAttribute("data-paragraph-borders")?.includes("dashed"));
   const sourceParagraphAppearance = await paragraphAppearance.evaluate((paragraph) => {
     const style = getComputedStyle(paragraph);
     return {
@@ -448,6 +450,7 @@ try {
   await page.getByText("页面设置", { exact: true }).click();
   await page.getByText("第 2 节 / 共 2 节", { exact: true }).waitFor();
   await page.getByLabel("当前节纸张方向", { exact: true }).selectOption("landscape");
+  await page.getByLabel("当前节纸张规格", { exact: true }).selectOption("legal");
   await page.getByLabel("当前节上边距", { exact: true }).fill("1.27");
   await page.getByLabel("当前节下边距", { exact: true }).fill("1.27");
   await page.getByLabel("当前节页眉距纸边", { exact: true }).fill("0.85");
@@ -509,6 +512,7 @@ try {
   const storedSectionLayout = JSON.parse(storedSectionLayoutText);
   // 中文注解：直接验证节点负载，避免界面文本存在但连续设置被旧状态覆盖后仍误判为保存成功。
   assert.equal(storedSectionLayout.orientation, "landscape");
+  assert.deepEqual(storedSectionLayout.paperSize, { width: 12240, height: 20160 });
   assert.equal(storedSectionLayout.headerText, "第二节横向页眉\n审批状态：已确认");
   assert.equal(storedSectionLayout.footerText, "第二节横向页脚");
   assert.deepEqual(storedSectionLayout.headerStyle, styledHeader);
@@ -558,6 +562,7 @@ try {
     oddEvenDifferent: true,
     evenPage: { headerText: "偶数页项目页眉", headerStyle: defaultPageTextStyle, headerImages: [], footerText: "偶数页办公文档", footerStyle: defaultPageTextStyle, footerImages: [], headerPageNumberTemplate: "", footerPageNumberTemplate: "第 {PAGE} 页 / 共 {NUMPAGES} 页", headerPageNumberSeparate: false, footerPageNumberSeparate: false, pageNumberEnabled: true, pageNumberPosition: "footer" },
     orientation: "portrait",
+    paperSize: { width: 11906, height: 16838 },
     pageNumberFormat: "decimal",
     pageNumberStart: null,
     headerDistance: 708,
@@ -620,6 +625,7 @@ try {
   assert.match(documentXml, /<w:pgMar[^>]+w:header="482"[^>]+w:footer="839"/);
   assert.match(documentXml, /<w:pgNumType[^>]+w:start="3"[^>]*w:fmt="upperRoman"/);
   const exportedLandscapeSection = (documentXml.match(/<w:sectPr>[\s\S]*?<\/w:sectPr>/g) || []).find((section) => /w:orient="landscape"/.test(section)) || "";
+  assert.match(exportedLandscapeSection, /<w:pgSz[^>]+w:w="20160"[^>]+w:h="12240"[^>]+w:orient="landscape"/);
   assert.match(exportedLandscapeSection, /<w:cols[^>]+w:num="2"[^>]+w:sep="true"[^>]+w:equalWidth="false"/);
   assert.match(exportedLandscapeSection, /<w:col w:w="2999" w:space="454"\/><w:col w:w="10505"\/>/);
   assert.match(exportedLandscapeSection, /<w:pgBorders[^>]+w:display="firstPage"[^>]+w:offsetFrom="page"[^>]+w:zOrder="front"/);
@@ -896,7 +902,7 @@ try {
   assert.equal(result.lineVariable, "1.5833");
   const secondSectionFirstPage = result.sectionIndexes.indexOf(1);
   assert.ok(secondSectionFirstPage > 0);
-  assert.deepEqual(result.pageSizes[secondSectionFirstPage], { width: 1123, height: 794 });
+  assert.deepEqual(result.pageSizes[secondSectionFirstPage], { width: 1344, height: 816 });
   assert.equal(result.secondSectionColumns?.widths.length, 2);
   assert.ok(Math.abs((result.secondSectionColumns?.widths[0] || 0) - 199.93) < 0.2);
   assert.ok(Math.abs((result.secondSectionColumns?.widths[1] || 0) - 700.33) < 0.2);
