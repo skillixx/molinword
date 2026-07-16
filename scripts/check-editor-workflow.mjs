@@ -382,6 +382,8 @@ try {
   await page.waitForTimeout(50);
   await page.locator('label[title="设置当前单元格垂直对齐"] select').selectOption("bottom");
   assert.equal(await businessReviewCell.getAttribute("data-cell-vertical-align"), "bottom");
+  await page.locator('label[title="设置当前单元格文字方向"] select').selectOption("btLr");
+  assert.equal(await businessReviewCell.getAttribute("data-cell-text-direction"), "btLr");
   await page.locator('label[title="设置当前单元格内边距"] select').selectOption("180");
   assert.equal(await businessReviewCell.getAttribute("data-cell-vertical-align"), "bottom");
   await page.locator('label[title="设置当前单元格底色"] select').selectOption("#FFF2CC");
@@ -389,6 +391,7 @@ try {
   const sourceCellFormat = await businessReviewCell.evaluate((cell) => ({
     margins: cell.getAttribute("data-cell-margins"),
     verticalAlign: cell.getAttribute("data-cell-vertical-align"),
+    textDirection: cell.getAttribute("data-cell-text-direction"),
     shading: cell.getAttribute("data-cell-shading"),
     borders: cell.getAttribute("data-cell-borders"),
     style: {
@@ -397,6 +400,7 @@ try {
       paddingBottom: getComputedStyle(cell).paddingBottom,
       paddingLeft: getComputedStyle(cell).paddingLeft,
       verticalAlign: getComputedStyle(cell).verticalAlign,
+      writingMode: getComputedStyle(cell).writingMode,
       backgroundColor: getComputedStyle(cell).backgroundColor,
       borderTopStyle: getComputedStyle(cell).borderTopStyle,
       borderTopWidth: getComputedStyle(cell).borderTopWidth,
@@ -406,6 +410,7 @@ try {
   // 中文注解：单元格语义属性负责 Word 导出，计算样式负责在线编辑和分页，两套结果必须同步。
   assert.deepEqual(JSON.parse(sourceCellFormat.margins || "{}"), { top: 180, right: 180, bottom: 180, left: 180 });
   assert.equal(sourceCellFormat.verticalAlign, "bottom");
+  assert.equal(sourceCellFormat.textDirection, "btLr");
   assert.equal(sourceCellFormat.shading, "#FFF2CC");
   assert.deepEqual(JSON.parse(sourceCellFormat.borders || "{}"), Object.fromEntries(["top", "right", "bottom", "left"].map((side) => [side, { style: "dashed", size: 6, color: "#6B7280" }])));
   assert.deepEqual(sourceCellFormat.style, {
@@ -414,6 +419,7 @@ try {
     paddingBottom: "12px",
     paddingLeft: "12px",
     verticalAlign: "bottom",
+    writingMode: "sideways-lr",
     backgroundColor: "rgb(255, 242, 204)",
     borderTopStyle: "dashed",
     borderTopWidth: "1px",
@@ -682,7 +688,7 @@ try {
   assert.match(reopenedHtml, /data-section-break="nextPage"/);
   assert.match(reopenedHtml, /第二节横向内容/);
   assert.equal((reopenedHtml.match(/data-docx-tab="true"/g) || []).length, 4);
-  assert.match(reopenedHtml, /<td[^>]+data-cell-margins="[^"]*&quot;top&quot;:180[^"]*"[^>]+data-cell-vertical-align="bottom"[^>]+data-cell-shading="#FFF2CC"[^>]*>.*商务评审/s);
+  assert.match(reopenedHtml, /<td[^>]+data-cell-margins="[^"]*&quot;top&quot;:180[^"]*"[^>]+data-cell-vertical-align="bottom"[^>]+data-cell-text-direction="btLr"[^>]+data-cell-shading="#FFF2CC"[^>]*>.*商务评审/s);
   assert.match(reopenedHtml, /<td[^>]+data-cell-borders="[^"]*&quot;top&quot;[^"]*dashed[^"]*6B7280[^"]*"[^>]*>.*商务评审/s);
   assert.match(reopenedHtml, /<table(?=[^>]*data-table-alignment="left")(?=[^>]*data-table-indent="567")(?=[^>]*style="[^"]*margin-left:\s*37\.8px)(?=[^>]*style="[^"]*margin-right:\s*auto)[^>]*>[\s\S]*?商务评审/);
   assert.match(reopenedHtml, /<h4[^>]+data-outline-level="3"[^>]*>[\s\S]*?大纲级别工具[\s\S]*?<\/h4>/);
@@ -743,6 +749,7 @@ try {
   }
   assert.match(businessReviewCellXml, /<w:shd w:fill="FFF2CC"\/>/);
   assert.match(businessReviewCellXml, /<w:vAlign w:val="bottom"\/>/);
+  assert.match(businessReviewCellXml, /<w:textDirection w:val="btLr"\/>/);
   const businessReviewBordersXml = businessReviewCellXml.match(/<w:tcBorders>[\s\S]*?<\/w:tcBorders>/)?.[0] || "";
   for (const side of ["top", "right", "bottom", "left"]) {
     assert.match(businessReviewBordersXml, new RegExp(`<w:${side} w:val="dashed" w:color="6B7280" w:sz="6"\\/>`));
@@ -1005,6 +1012,7 @@ try {
           paddingBottom: style.paddingBottom,
           paddingLeft: style.paddingLeft,
           verticalAlign: style.verticalAlign,
+          writingMode: style.writingMode,
           backgroundColor: style.backgroundColor,
           borderTopStyle: style.borderTopStyle,
           borderTopWidth: style.borderTopWidth,
@@ -1080,6 +1088,7 @@ try {
     paddingBottom: "12px",
     paddingLeft: "12px",
     verticalAlign: "bottom",
+    writingMode: "sideways-lr",
     backgroundColor: "rgb(255, 242, 204)",
     borderTopStyle: "dashed",
     borderTopWidth: "1px",

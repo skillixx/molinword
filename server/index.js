@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import express from "express";
-import { AlignmentType, BorderStyle, Column, Document, ExternalHyperlink, Footer, Header, HeadingLevel, HeightRule, ImageRun, LevelFormat, LineRuleType, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, Tab, Table, TableCell, TableLayoutType, TableRow, TextRun, TextWrappingSide, TextWrappingType, VerticalAlignTable, WidthType } from "docx";
+import { AlignmentType, BorderStyle, Column, Document, ExternalHyperlink, Footer, Header, HeadingLevel, HeightRule, ImageRun, LevelFormat, LineRuleType, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, Tab, Table, TableCell, TableLayoutType, TableRow, TextDirection, TextRun, TextWrappingSide, TextWrappingType, VerticalAlignTable, WidthType } from "docx";
 import { imageSize } from "image-size";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
@@ -462,8 +462,8 @@ function sanitizeImportedHtml(value = "") {
       ol: ["style", "data-list-format", "start"],
       table: ["style", "data-table-width-type", "data-table-width-value", "data-table-grid-width", "data-table-layout", "data-table-alignment", "data-table-indent", "data-table-borders"],
       tr: ["style", "data-row-height", "data-row-height-rule", "data-row-cant-split", "data-row-repeat-header"],
-      th: ["style", "colspan", "rowspan", "colwidth", "data-docx-cell", "data-cell-margins", "data-cell-vertical-align", "data-cell-shading", "data-cell-borders"],
-      td: ["style", "colspan", "rowspan", "colwidth", "data-docx-cell", "data-cell-margins", "data-cell-vertical-align", "data-cell-shading", "data-cell-borders"],
+      th: ["style", "colspan", "rowspan", "colwidth", "data-docx-cell", "data-cell-margins", "data-cell-vertical-align", "data-cell-text-direction", "data-cell-shading", "data-cell-borders"],
+      td: ["style", "colspan", "rowspan", "colwidth", "data-docx-cell", "data-cell-margins", "data-cell-vertical-align", "data-cell-text-direction", "data-cell-shading", "data-cell-borders"],
       img: ["src", "alt", "style", "width", "height", "data-docx-floating", "data-docx-wrap", "data-docx-float-align"],
       div: ["data-page-break", "data-section-break", "data-section-layout", "class"]
     },
@@ -535,6 +535,7 @@ function sanitizeImportedHtml(value = "") {
         "padding-bottom": [/^\d+(?:\.\d+)?px$/],
         "padding-left": [/^\d+(?:\.\d+)?px$/],
         "vertical-align": [/^(?:top|middle|bottom)$/],
+        "writing-mode": [/^(?:horizontal-tb|sideways-rl|sideways-lr)$/],
         "background-color": [/^#[0-9a-f]{6}$/i],
         "border-top": [/^(?:none|\d+(?:\.\d+)?px (?:solid|dashed|dotted|double) #[0-9a-f]{6})$/i],
         "border-right": [/^(?:none|\d+(?:\.\d+)?px (?:solid|dashed|dotted|double) #[0-9a-f]{6})$/i],
@@ -547,6 +548,7 @@ function sanitizeImportedHtml(value = "") {
         "padding-bottom": [/^\d+(?:\.\d+)?px$/],
         "padding-left": [/^\d+(?:\.\d+)?px$/],
         "vertical-align": [/^(?:top|middle|bottom)$/],
+        "writing-mode": [/^(?:horizontal-tb|sideways-rl|sideways-lr)$/],
         "background-color": [/^#[0-9a-f]{6}$/i],
         "border-top": [/^(?:none|\d+(?:\.\d+)?px (?:solid|dashed|dotted|double) #[0-9a-f]{6})$/i],
         "border-right": [/^(?:none|\d+(?:\.\d+)?px (?:solid|dashed|dotted|double) #[0-9a-f]{6})$/i],
@@ -1462,6 +1464,8 @@ async function parseStyledDocxTableCell(cellNode, context, tagName) {
   const cellMargins = { ...(context.tableCellMargins || {}), ...parseDocxCellMargins(xmlChild(tcPr, "w:tcMar")) };
   const rawVerticalAlign = xmlVal(xmlChild(tcPr, "w:vAlign"));
   const verticalAlign = ["top", "center", "bottom"].includes(rawVerticalAlign) ? rawVerticalAlign : "";
+  const rawTextDirection = xmlVal(xmlChild(tcPr, "w:textDirection"));
+  const textDirection = ["lrTb", "tbRl", "btLr"].includes(rawTextDirection) ? rawTextDirection : "";
   const shading = docxShadingColor(xmlChild(tcPr, "w:shd"), context.themeColors || {});
   const cellBorders = parseDocxBorders(xmlChild(tcPr, "w:tcBorders"), context.themeColors || {}, false);
 
@@ -1469,7 +1473,7 @@ async function parseStyledDocxTableCell(cellNode, context, tagName) {
     .map((paragraph) => parseStyledDocxParagraph(paragraph, context)));
   // 中文注解：单元格内同样可能包含连续编号段落，必须在表格结构内恢复 ol/ul，不能退化为普通 p。
   const paragraphs = renderDocxParagraphs(parsedParagraphs) || "<p><br></p>";
-  return { tagName, paragraphs, columnSpan, rowSpan: 1, verticalMerge, cellWidth, columnWidths: [], cellMargins, verticalAlign, shading, cellBorders, columnIndex: 0 };
+  return { tagName, paragraphs, columnSpan, rowSpan: 1, verticalMerge, cellWidth, columnWidths: [], cellMargins, verticalAlign, textDirection, shading, cellBorders, columnIndex: 0 };
 }
 
 function parseDocxCellMargins(container) {
@@ -1640,6 +1644,7 @@ async function parseStyledDocxTable(tableNode, context) {
       attrs.push('data-docx-cell="true"');
       if (Object.keys(cell.cellMargins).length) attrs.push(`data-cell-margins="${escapeHtml(JSON.stringify(cell.cellMargins))}"`);
       if (cell.verticalAlign) attrs.push(`data-cell-vertical-align="${cell.verticalAlign}"`);
+      if (cell.textDirection) attrs.push(`data-cell-text-direction="${cell.textDirection}"`);
       if (cell.shading) attrs.push(`data-cell-shading="${cell.shading}"`);
       const effectiveBorders = {
         top: cell.cellBorders.top || tableBorders[rowIndex === 0 ? "top" : "insideHorizontal"],
@@ -1653,6 +1658,7 @@ async function parseStyledDocxTable(tableNode, context) {
         if (cell.cellMargins[side] !== undefined) styles.push(`padding-${side}: ${Math.round(cell.cellMargins[side] * 96 / 1440 * 100) / 100}px`);
       }
       if (cell.verticalAlign) styles.push(`vertical-align: ${cell.verticalAlign === "center" ? "middle" : cell.verticalAlign}`);
+      if (cell.textDirection) styles.push(`writing-mode: ${{ lrTb: "horizontal-tb", tbRl: "sideways-rl", btLr: "sideways-lr" }[cell.textDirection]}`);
       if (cell.shading) styles.push(`background-color: ${cell.shading}`);
       for (const side of ["top", "right", "bottom", "left"]) {
         if (effectiveBorders[side]) styles.push(`border-${side}: ${docxBorderCss(effectiveBorders[side])}`);
@@ -2664,6 +2670,8 @@ function tableFromNode(tableNode, listState) {
           margins: docxCellMarginsFromNode(cellNode),
           borders: docxBordersFromNode(cellNode, "data-cell-borders", false),
           verticalAlign: ({ top: VerticalAlignTable.TOP, center: VerticalAlignTable.CENTER, bottom: VerticalAlignTable.BOTTOM })[cellNode.attribs?.["data-cell-vertical-align"]],
+          // 中文注解：使用 docx 原生枚举写回 OOXML，确保 Word 中的旋转方向与在线预览一致。
+          textDirection: ({ lrTb: TextDirection.LEFT_TO_RIGHT_TOP_TO_BOTTOM, tbRl: TextDirection.TOP_TO_BOTTOM_RIGHT_TO_LEFT, btLr: TextDirection.BOTTOM_TO_TOP_LEFT_TO_RIGHT })[cellNode.attribs?.["data-cell-text-direction"]],
           shading: docxCellShadingFromNode(cellNode) || (cellNode.name === "th" && cellNode.attribs?.["data-docx-cell"] !== "true" ? { fill: "F3F6F8" } : undefined)
         });
       })

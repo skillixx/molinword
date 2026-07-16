@@ -838,6 +838,11 @@ const tableCellVerticalAlignOptions = [
   { label: "居中", value: "center" },
   { label: "底部", value: "bottom" }
 ];
+const tableCellTextDirectionOptions = [
+  { label: "横排", value: "lrTb" },
+  { label: "顺时针 90°", value: "tbRl" },
+  { label: "逆时针 90°", value: "btLr" }
+];
 const tableAlignmentOptions = [
   { label: "左对齐", value: "left" },
   { label: "居中", value: "center" },
@@ -1212,6 +1217,7 @@ function normalizeTableCellStyle(value: unknown) {
     const styleValue = declaration.slice(separator + 1).trim();
     if (/^padding-(?:top|right|bottom|left)$/.test(name) && /^\d+(?:\.\d+)?px$/.test(styleValue)) styles.push(`${name}: ${styleValue}`);
     if (name === "vertical-align" && /^(?:top|middle|bottom)$/.test(styleValue)) styles.push(`${name}: ${styleValue}`);
+    if (name === "writing-mode" && /^(?:horizontal-tb|sideways-rl|sideways-lr)$/.test(styleValue)) styles.push(`${name}: ${styleValue}`);
     if (name === "background-color" && /^#[0-9a-f]{6}$/i.test(styleValue)) styles.push(`${name}: ${styleValue.toUpperCase()}`);
     if (/^border-(?:top|right|bottom|left)$/.test(name) && /^(?:none|\d+(?:\.\d+)?px (?:solid|dashed|dotted|double) #[0-9a-f]{6})$/i.test(styleValue)) styles.push(`${name}: ${styleValue}`);
   }
@@ -1249,7 +1255,7 @@ function tableBorderPreset(value: string) {
   return normalizeTableBorders(Object.fromEntries(["top", "right", "bottom", "left"].map((side) => [side, border])));
 }
 
-function tableCellStyle(cellMargins: string | null, verticalAlign: string, shading: string, cellBorders: string | null = null) {
+function tableCellStyle(cellMargins: string | null, verticalAlign: string, textDirection: string, shading: string, cellBorders: string | null = null) {
   const styles: string[] = [];
   try {
     const margins = JSON.parse(cellMargins || "{}");
@@ -1260,6 +1266,8 @@ function tableCellStyle(cellMargins: string | null, verticalAlign: string, shadi
     // 中文注解：损坏的历史属性不应阻断表格继续编辑，忽略后由用户重新设置。
   }
   if (["top", "center", "bottom"].includes(verticalAlign)) styles.push(`vertical-align: ${verticalAlign === "center" ? "middle" : verticalAlign}`);
+  const writingMode = ({ lrTb: "horizontal-tb", tbRl: "sideways-rl", btLr: "sideways-lr" } as Record<string, string>)[textDirection];
+  if (writingMode) styles.push(`writing-mode: ${writingMode}`);
   if (/^#[0-9a-f]{6}$/i.test(shading)) styles.push(`background-color: ${shading.toUpperCase()}`);
   try {
     const borders = JSON.parse(cellBorders || "{}");
@@ -1580,6 +1588,11 @@ function documentTableCellAttributes() {
       parseHTML: (element: HTMLElement) => ["top", "center", "bottom"].includes(element.getAttribute("data-cell-vertical-align") || "") ? element.getAttribute("data-cell-vertical-align") : null,
       renderHTML: (attributes: Record<string, unknown>) => ["top", "center", "bottom"].includes(String(attributes.cellVerticalAlign)) ? { "data-cell-vertical-align": attributes.cellVerticalAlign } : {}
     },
+    cellTextDirection: {
+      default: null,
+      parseHTML: (element: HTMLElement) => ["lrTb", "tbRl", "btLr"].includes(element.getAttribute("data-cell-text-direction") || "") ? element.getAttribute("data-cell-text-direction") : null,
+      renderHTML: (attributes: Record<string, unknown>) => ["lrTb", "tbRl", "btLr"].includes(String(attributes.cellTextDirection)) ? { "data-cell-text-direction": attributes.cellTextDirection } : {}
+    },
     cellShading: {
       default: null,
       parseHTML: (element: HTMLElement) => /^#[0-9a-f]{6}$/i.test(element.getAttribute("data-cell-shading") || "") ? element.getAttribute("data-cell-shading")?.toUpperCase() : null,
@@ -1600,6 +1613,7 @@ function documentTableCellAttributes() {
         const semanticStyle = tableCellStyle(
           normalizeTableCellMargins(attributes.cellMargins),
           String(attributes.cellVerticalAlign || ""),
+          String(attributes.cellTextDirection || ""),
           String(attributes.cellShading || ""),
           normalizeTableBorders(attributes.cellBorders)
         );
@@ -3682,7 +3696,7 @@ function Editor(props: {
     setSelectionHint(applied ? `已切换${label}。` : "请把光标放到段落或标题中，再设置分页控制。");
   };
 
-  const updateCurrentTableCell = (patch: { margin?: number; verticalAlign?: string | null; shading?: string | null; borderPreset?: string }, label: string) => {
+  const updateCurrentTableCell = (patch: { margin?: number; verticalAlign?: string | null; textDirection?: string | null; shading?: string | null; borderPreset?: string }, label: string) => {
     if (!editor || !editor.isActive("table")) {
       setSelectionHint("请先把光标放到需要设置的表格单元格中。");
       return;
@@ -3693,12 +3707,14 @@ function Editor(props: {
       ? normalizeTableCellMargins(current.cellMargins)
       : normalizeTableCellMargins({ top: patch.margin, right: patch.margin, bottom: patch.margin, left: patch.margin });
     const verticalAlign = patch.verticalAlign === undefined ? String(current.cellVerticalAlign || "") : String(patch.verticalAlign || "");
+    const textDirection = patch.textDirection === undefined ? String(current.cellTextDirection || "") : String(patch.textDirection || "");
     const shading = patch.shading === undefined ? String(current.cellShading || "") : String(patch.shading || "");
     const borders = patch.borderPreset === undefined ? normalizeTableBorders(current.cellBorders) : tableBorderPreset(patch.borderPreset);
-    const style = tableCellStyle(margins, verticalAlign, shading, borders);
+    const style = tableCellStyle(margins, verticalAlign, textDirection, shading, borders);
     const applied = editor.chain().focus()
       .setCellAttribute("cellMargins", margins)
       .setCellAttribute("cellVerticalAlign", verticalAlign || null)
+      .setCellAttribute("cellTextDirection", textDirection || null)
       .setCellAttribute("cellShading", shading || null)
       .setCellAttribute("cellBorders", borders)
       .setCellAttribute("style", style)
@@ -4211,6 +4227,7 @@ function Editor(props: {
             <FormatSelect title="设置当前表格对齐方式" placeholder="表格对齐" options={tableAlignmentOptions} disabled={!editor?.isActive("table")} onSelect={(value, label) => updateCurrentTableAlignment(value, label)} />
             <FormatSelect title="设置当前表格左缩进" placeholder="表格缩进" options={tableIndentOptions} disabled={!editor?.isActive("table")} onSelect={(value, label) => updateCurrentTableIndent(Number(value), label)} />
             <FormatSelect title="设置当前单元格垂直对齐" placeholder="单元格对齐" options={tableCellVerticalAlignOptions} onSelect={(value, label) => updateCurrentTableCell({ verticalAlign: value }, `单元格${label}对齐`)} />
+            <FormatSelect title="设置当前单元格文字方向" placeholder="文字方向" options={tableCellTextDirectionOptions} onSelect={(value, label) => updateCurrentTableCell({ textDirection: value }, `单元格文字${label}`)} />
             <FormatSelect title="设置当前单元格内边距" placeholder="单元格边距" options={tableCellPaddingOptions} onSelect={(value, label) => updateCurrentTableCell({ margin: Number(value) }, `${label}单元格边距`)} />
             <FormatSelect title="设置当前单元格底色" placeholder="单元格底色" options={tableCellShadingOptions} onSelect={(value, label) => updateCurrentTableCell({ shading: value === "none" ? null : value }, `单元格${label}`)} />
             <FormatSelect title="设置当前单元格边框" placeholder="单元格边框" options={tableCellBorderOptions} onSelect={(value, label) => updateCurrentTableCell({ borderPreset: value }, `单元格${label}`)} />

@@ -160,7 +160,7 @@ async function buildFormattedDocxFixture() {
     <w:tbl>
       <w:tblPr><w:tblW w:type="dxa" w:w="6000"/><w:jc w:val="center"/><w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="100" w:type="dxa"/><w:right w:w="200" w:type="dxa"/><w:bottom w:w="300" w:type="dxa"/><w:left w:w="400" w:type="dxa"/></w:tblCellMar><w:tblBorders><w:top w:val="single" w:sz="8" w:color="FF0000"/><w:right w:val="dashed" w:sz="6" w:color="00AA00"/><w:bottom w:val="double" w:sz="12" w:color="0000FF"/><w:left w:val="nil" w:sz="0" w:color="auto"/><w:insideH w:val="dotted" w:sz="4" w:color="888888"/><w:insideV w:val="single" w:sz="4" w:color="000000"/></w:tblBorders></w:tblPr>
       <w:tblGrid><w:gridCol w:w="1800"/><w:gridCol w:w="4200"/></w:tblGrid>
-      <w:tr><w:trPr><w:tblHeader/><w:cantSplit/><w:trHeight w:val="720" w:hRule="exact"/></w:trPr><w:tc><w:tcPr><w:tcW w:type="dxa" w:w="1800"/><w:tcMar><w:right w:w="600" w:type="dxa"/></w:tcMar><w:vAlign w:val="center"/><w:shd w:val="clear" w:fill="D9EAD3"/><w:tcBorders><w:right w:val="double" w:sz="16" w:color="800080"/></w:tcBorders></w:tcPr><w:p><w:r><w:t>Geometry A</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:tcW w:type="dxa" w:w="4200"/></w:tcPr><w:p><w:r><w:t>Geometry B</w:t></w:r></w:p></w:tc></w:tr>
+      <w:tr><w:trPr><w:tblHeader/><w:cantSplit/><w:trHeight w:val="720" w:hRule="exact"/></w:trPr><w:tc><w:tcPr><w:tcW w:type="dxa" w:w="1800"/><w:tcMar><w:right w:w="600" w:type="dxa"/></w:tcMar><w:vAlign w:val="center"/><w:textDirection w:val="tbRl"/><w:shd w:val="clear" w:fill="D9EAD3"/><w:tcBorders><w:right w:val="double" w:sz="16" w:color="800080"/></w:tcBorders></w:tcPr><w:p><w:r><w:t>Geometry A</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:tcW w:type="dxa" w:w="4200"/><w:textDirection w:val="btLr"/></w:tcPr><w:p><w:r><w:t>Geometry B</w:t></w:r></w:p></w:tc></w:tr>
     </w:tbl>
     <w:tbl>
       <w:tblPr><w:jc w:val="left"/><w:tblInd w:w="720" w:type="dxa"/></w:tblPr>
@@ -524,6 +524,7 @@ const importedGeometryCell = importedGeometryTable.match(/<th[^>]*>[^<]*<p[^>]*>
 assert.match(importedGeometryCell, /data-docx-cell="true"/);
 assert.match(importedGeometryCell, /data-cell-margins="[^\"]*100[^\"]*600[^\"]*300[^\"]*400[^\"]*"/);
 assert.match(importedGeometryCell, /data-cell-vertical-align="center"/);
+assert.match(importedGeometryCell, /data-cell-text-direction="tbRl"/);
 assert.match(importedGeometryCell, /data-cell-shading="#D9EAD3"/);
 assert.match(importedGeometryCell, /data-cell-borders="[^"]*&quot;top&quot;[^"]*FF0000[^"]*&quot;right&quot;[^"]*800080[^"]*&quot;bottom&quot;[^"]*0000FF[^"]*&quot;left&quot;[^"]*nil[^"]*"/);
 assert.match(importedGeometryCell, /padding-top:\s*6\.67px/);
@@ -531,6 +532,7 @@ assert.match(importedGeometryCell, /padding-right:\s*40px/);
 assert.match(importedGeometryCell, /padding-bottom:\s*20px/);
 assert.match(importedGeometryCell, /padding-left:\s*26\.67px/);
 assert.match(importedGeometryCell, /vertical-align:\s*middle/);
+assert.match(importedGeometryCell, /writing-mode:\s*sideways-rl/);
 assert.match(importedGeometryCell, /background-color:\s*#D9EAD3/);
 assert.match(importedGeometryCell, /border-top:\s*1\.33px solid #FF0000/);
 assert.match(importedGeometryCell, /border-right:\s*2\.67px double #800080/);
@@ -685,6 +687,9 @@ assert.match(geometryCellRoundTripXml, /<w:tcMar>/);
 for (const [side, width] of [["top", 100], ["right", 600], ["bottom", 300], ["left", 400]]) assert.match(geometryCellRoundTripXml, new RegExp(`<w:${side} w:type="dxa" w:w="${width}"\\/>`));
 assert.match(geometryCellRoundTripXml, /<w:shd w:fill="D9EAD3"\/>/);
 assert.match(geometryCellRoundTripXml, /<w:vAlign w:val="center"\/>/);
+assert.match(geometryCellRoundTripXml, /<w:textDirection w:val="tbRl"\/>/);
+const reverseGeometryCellRoundTripXml = (geometryRoundTripXml.match(/<w:tc>[\s\S]*?<\/w:tc>/g) || []).find((cell) => cell.includes("Geometry B")) || "";
+assert.match(reverseGeometryCellRoundTripXml, /<w:textDirection w:val="btLr"\/>/);
 const geometryCellBordersRoundTripXml = geometryCellRoundTripXml.match(/<w:tcBorders>[\s\S]*?<\/w:tcBorders>/)?.[0] || "";
 assert.match(geometryCellBordersRoundTripXml, /<w:top w:val="single" w:color="FF0000" w:sz="8"\/>/);
 assert.match(geometryCellBordersRoundTripXml, /<w:right w:val="double" w:color="800080" w:sz="16"\/>/);
@@ -733,6 +738,10 @@ const roundTripImportedIndentedTable = (roundTripImported.content.match(/<table(
 assert.match(roundTripImportedIndentedTable, /data-table-indent="720"/);
 assert.match(roundTripImportedIndentedTable, /margin-left:\s*48px/);
 assert.match(roundTripImportedGeometryTable, /data-cell-vertical-align="center"/);
+assert.match(roundTripImportedGeometryTable, /data-cell-text-direction="tbRl"/);
+assert.match(roundTripImportedGeometryTable, /data-cell-text-direction="btLr"/);
+assert.match(roundTripImportedGeometryTable, /writing-mode:\s*sideways-rl/);
+assert.match(roundTripImportedGeometryTable, /writing-mode:\s*sideways-lr/);
 assert.match(roundTripImportedGeometryTable, /data-cell-shading="#D9EAD3"/);
 assert.match(roundTripImportedGeometryTable, /padding-right:\s*40px/);
 assert.match(roundTripImportedGeometryTable, /data-row-height="720"/);
