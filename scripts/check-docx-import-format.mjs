@@ -529,10 +529,10 @@ assert.match(imported.content, /<img[^>]+data-docx-wrap="square"[^>]+data-docx-f
 // 中文注解：超出 A4 内容区的大图在导入时即等比缩放，避免浏览器与导出端分别限制宽高后产生占位差。
 assert.match(imported.content, /<img[^>]+style="[^"]*width:\s*602px;\s*height:\s*401\.33px;/);
 // 中文注解：读取 numbering.xml 后应恢复编号类型和嵌套层级，供 Tiptap 继续编辑。
-assert.match(imported.content, /<ol><li>Ordered item 1<ol><li>Nested ordered item<\/li><\/ol><\/li><li>Ordered item 2<\/li><\/ol>/);
+assert.match(imported.content, /<ol data-list-format="decimal" style="list-style-type:\s*decimal"><li>Ordered item 1<ol data-list-format="lowerLetter" style="list-style-type:\s*lower-alpha"><li>Nested ordered item<\/li><\/ol><\/li><li>Ordered item 2<\/li><\/ol>/);
 assert.match(imported.content, /<ul><li>Bullet item<\/li><\/ul>/);
-assert.match(imported.content, /<ol><li>Override ordered item<\/li><\/ol><ol><li>Restart ordered item<\/li><\/ol>/);
-assert.match(imported.content, /<td[^>]*><p[^>]*>Import Cell 1<\/p><ol><li>Table ordered item<\/li><\/ol><\/td>/);
+assert.match(imported.content, /<ol data-list-format="decimal"[^>]*><li>Override ordered item<\/li><\/ol><ol data-list-format="decimal"[^>]*><li>Restart ordered item<\/li><\/ol>/);
+assert.match(imported.content, /<td[^>]*><p[^>]*>Import Cell 1<\/p><ol data-list-format="decimal"[^>]*><li>Table ordered item<\/li><\/ol><\/td>/);
 assert.match(imported.content, /<td colspan="2" rowspan="2"[^>]*><p[^>]*>Merged approval<\/p><\/td><td[^>]*><p[^>]*>Approved<\/p><\/td>/);
 assert.deepEqual(imported.pageLayout, {
   headerText: "导入页眉",
@@ -672,6 +672,7 @@ assert.match(roundTripImported.content, /text-decoration-color:\s*#00AA00/i);
 assert.match(roundTripImported.content, /text-transform:\s*uppercase/);
 assert.match(roundTripImported.content, /font-variant-caps:\s*small-caps/);
 assert.match(roundTripImported.content, /--word-text-border:\s*double,12,C00000,2/i);
+assert.match(roundTripImported.content, /<ol data-list-format="decimal"[^>]*>[\s\S]*?<ol data-list-format="lowerLetter" style="list-style-type:\s*lower-alpha">[\s\S]*?Nested ordered item/);
 assert.match(roundTripImported.content, /<p[^>]+data-keep-next="true"[^>]+data-keep-lines="true"[^>]+data-page-break-before="true"[^>]+data-widow-control="true"[^>]*>[\s\S]*?Pagination controlled paragraph[\s\S]*?<\/p>/);
 assert.match(roundTripImported.content, /<p[^>]+data-widow-control="false"[^>]*>[\s\S]*?Widow control disabled paragraph[\s\S]*?<\/p>/);
 const roundTripImportedTabParagraph = (roundTripImported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || [])

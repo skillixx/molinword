@@ -21,7 +21,21 @@ const docxPage = {
   widthTwip: 11906,
   heightTwip: 16838
 };
-const orderedListReference = "online-ordered-list";
+const orderedListFormatDefinitions = [
+  { format: "decimal", reference: "online-ordered-list-decimal", css: "decimal", docx: LevelFormat.DECIMAL },
+  { format: "upperRoman", reference: "online-ordered-list-upper-roman", css: "upper-roman", docx: LevelFormat.UPPER_ROMAN },
+  { format: "lowerRoman", reference: "online-ordered-list-lower-roman", css: "lower-roman", docx: LevelFormat.LOWER_ROMAN },
+  { format: "upperLetter", reference: "online-ordered-list-upper-letter", css: "upper-alpha", docx: LevelFormat.UPPER_LETTER },
+  { format: "lowerLetter", reference: "online-ordered-list-lower-letter", css: "lower-alpha", docx: LevelFormat.LOWER_LETTER }
+];
+function normalizeOrderedListFormat(value = "") {
+  return orderedListFormatDefinitions.some((item) => item.format === value) ? value : "decimal";
+}
+
+function orderedListFormatDefinition(value = "") {
+  const format = normalizeOrderedListFormat(value);
+  return orderedListFormatDefinitions.find((item) => item.format === format) || orderedListFormatDefinitions[0];
+}
 const defaultPageTextStyle = Object.freeze({ alignment: "center", fontFamily: "Microsoft YaHei", fontSizePt: 9, color: "#6B7280", bold: false, italic: false });
 const defaultPageNumberTemplate = "第 {PAGE} 页 / 共 {NUMPAGES} 页";
 const supportedPageImageMimeTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
@@ -431,6 +445,7 @@ function sanitizeImportedHtml(value = "") {
       span: ["style", "class", "data-docx-tab", "data-tab-position", "data-tab-alignment"],
       mark: ["data-highlight", "style"],
       a: ["href", "target", "rel"],
+      ol: ["style", "data-list-format"],
       table: ["style", "data-table-width-type", "data-table-width-value", "data-table-grid-width", "data-table-layout", "data-table-borders"],
       tr: ["style", "data-row-height", "data-row-height-rule", "data-row-cant-split", "data-row-repeat-header"],
       th: ["style", "colspan", "rowspan", "colwidth", "data-docx-cell", "data-cell-margins", "data-cell-vertical-align", "data-cell-shading", "data-cell-borders"],
@@ -448,6 +463,7 @@ function sanitizeImportedHtml(value = "") {
         "font-style": [/^italic$/],
         "font-variant-caps": [/^(?:normal|small-caps)$/],
         "text-transform": [/^(?:none|uppercase)$/],
+        "list-style-type": [/^(?:decimal|upper-roman|lower-roman|upper-alpha|lower-alpha)$/],
         "letter-spacing": [/^normal$/, /^-?\d+(?:\.\d+)?pt$/],
         "vertical-align": [/^baseline$/, /^-?\d+(?:\.\d+)?pt$/],
         "text-decoration-line": [/^underline$/],
@@ -990,7 +1006,7 @@ function docxListInfo(pPr, style, numbering) {
   const numberFormat = numbering.get(numberId)?.get(level);
   // 中文注解：Word 中除 bullet/none 外的编号格式都属于有序列表，包含中文数字、字母和罗马数字。
   const ordered = numberFormat ? !["bullet", "none"].includes(numberFormat) : /number|编号/i.test(styleText);
-  return { level, ordered, numberId };
+  return { level, ordered, numberId, numberFormat: ordered ? normalizeOrderedListFormat(numberFormat) : "bullet" };
 }
 
 function docxTextFromRun(runNode) {
@@ -1387,7 +1403,8 @@ async function parseStyledDocxParagraph(paragraphNode, context) {
     listItem: list ? body : "",
     ordered: Boolean(list?.ordered),
     listLevel: list?.level || 0,
-    listNumberId: list?.numberId || ""
+    listNumberId: list?.numberId || "",
+    listFormat: list?.numberFormat || "decimal"
   };
 }
 
@@ -1628,23 +1645,29 @@ function renderDocxListItems(items) {
   let html = "";
   const openLists = [];
 
+  const openingTag = (item) => {
+    if (!item.ordered) return "<ul>";
+    const definition = orderedListFormatDefinition(item.listFormat);
+    return `<ol data-list-format="${definition.format}" style="list-style-type: ${definition.css}">`;
+  };
+
   for (const item of items) {
     const tag = item.ordered ? "ol" : "ul";
     const level = Math.min(item.listLevel, openLists.length);
     if (!openLists.length || level === openLists.length) {
-      html += `<${tag}><li>${item.listItem}`;
-      openLists.push({ tag, numberId: item.listNumberId });
+      html += `${openingTag(item)}<li>${item.listItem}`;
+      openLists.push({ tag, numberId: item.listNumberId, format: item.listFormat });
       continue;
     }
 
     while (openLists.length - 1 > level) html += `</li></${openLists.pop().tag}>`;
     const currentList = openLists[openLists.length - 1];
-    if (currentList.tag === tag && currentList.numberId === item.listNumberId) {
+    if (currentList.tag === tag && currentList.numberId === item.listNumberId && currentList.format === item.listFormat) {
       html += `</li><li>${item.listItem}`;
     } else {
       // 中文注解：相同类型但 numId 不同代表 Word 中的新编号实例，必须拆开列表以保留“重新从 1 开始”。
-      html += `</li></${openLists.pop().tag}><${tag}><li>${item.listItem}`;
-      openLists.push({ tag, numberId: item.listNumberId });
+      html += `</li></${openLists.pop().tag}>${openingTag(item)}<li>${item.listItem}`;
+      openLists.push({ tag, numberId: item.listNumberId, format: item.listFormat });
     }
   }
 
@@ -2500,7 +2523,7 @@ function paragraphFromNode(node, listContext = null) {
   if (tagName === "li") {
     const level = Math.max(0, Math.min(listContext?.level || 0, 5));
     const listOptions = listContext?.type === "ol"
-      ? { numbering: { reference: orderedListReference, level, instance: listContext.instance } }
+      ? { numbering: { reference: orderedListFormatDefinition(listContext.format).reference, level, instance: listContext.instance } }
       : { bullet: { level } };
     // 中文注解：按 HTML 的 ol/ul 类型和嵌套深度写入 Word 原生列表，在线编号不会在导出后变成圆点。
     return new Paragraph({
@@ -2536,8 +2559,9 @@ function tableCellChildrenFromNode(cellNode, listState) {
 function appendListParagraphs(listNode, blocks, level, orderedInstance) {
   // 中文注解：列表项和嵌套列表分别导出为 Word 段落，递归深度直接映射到 ilvl。
   const listType = listNode.name;
+  const listFormat = listType === "ol" ? normalizeOrderedListFormat(listNode.attribs?.["data-list-format"]) : "bullet";
   for (const listItem of (listNode.children || []).filter((child) => child.name === "li")) {
-    const paragraph = paragraphFromNode(listItem, { type: listType, level, instance: orderedInstance });
+    const paragraph = paragraphFromNode(listItem, { type: listType, level, instance: orderedInstance, format: listFormat });
     if (paragraph) blocks.push(paragraph);
     for (const nestedList of (listItem.children || []).filter(isHtmlListNode)) {
       appendListParagraphs(nestedList, blocks, Math.min(level + 1, 5), orderedInstance);
@@ -3088,17 +3112,17 @@ async function createDocxBuffer({ title, content, templateStyle = null, pageLayo
     styles: createDocxStyles(templateStyle || {}),
     numbering: {
       config: [
-        {
-          reference: orderedListReference,
-          // 中文注解：预置六级十进制编号，与编辑器支持的最大嵌套深度一致，并保持稳定缩进。
+        ...orderedListFormatDefinitions.map((definition) => ({
+          reference: definition.reference,
+          // 中文注解：每种常用编号格式都预置六级定义，在线 ol 语义可直接恢复为原生 w:numFmt。
           levels: Array.from({ length: 6 }, (_, level) => ({
             level,
-            format: LevelFormat.DECIMAL,
+            format: definition.docx,
             text: `%${level + 1}.`,
             alignment: AlignmentType.LEFT,
             style: { paragraph: { indent: { left: 720 * (level + 1), hanging: 360 } } }
           }))
-        }
+        }))
       ]
     },
     sections: documentSections

@@ -48,6 +48,7 @@ const content = `
     <li>Ordered item 1<ol><li>Nested ordered item</li></ol></li>
     <li>Ordered item 2</li>
   </ol>
+  <ol data-list-format="upperRoman" style="list-style-type:upper-roman"><li>Roman item 1</li><li>Roman item 2</li></ol>
   <ul><li>Bullet item</li></ul>
   <p>图片导出测试</p>
   <img src="data:image/png;base64,${tinyPngBase64}" style="width:120px;max-width:100%;height:auto" alt="export image" />
@@ -319,6 +320,7 @@ function numberFormatForList({ numberId, level }) {
 const orderedItem = listInfoForText("Ordered item 1");
 const nestedOrderedItem = listInfoForText("Nested ordered item");
 const bulletItem = listInfoForText("Bullet item");
+const romanItem = listInfoForText("Roman item 1");
 const tableListA = listInfoForText("Table list A");
 const tableListB = listInfoForText("Table list B");
 assert.equal(orderedItem.level, 0);
@@ -332,6 +334,7 @@ assert.notEqual(tableListB.numberId, orderedItem.numberId);
 assert.equal(numberFormatForList(orderedItem), "decimal");
 assert.equal(numberFormatForList(nestedOrderedItem), "decimal");
 assert.equal(numberFormatForList(bulletItem), "bullet");
+assert.equal(numberFormatForList(romanItem), "upperRoman");
 
 // 中文注解：图片必须进入 DOCX 媒体目录并建立 image relationship，避免导出文件只剩占位文本。
 assert.match(documentXml, /<w:drawing>/);

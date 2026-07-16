@@ -815,6 +815,20 @@ const paragraphSideIndentOptions = [
   { label: "1 厘米", value: "28.35pt" },
   { label: "1.5 厘米", value: "42.52pt" }
 ];
+const orderedListFormatOptions = [
+  { label: "1, 2, 3", value: "decimal" },
+  { label: "I, II, III", value: "upperRoman" },
+  { label: "i, ii, iii", value: "lowerRoman" },
+  { label: "A, B, C", value: "upperLetter" },
+  { label: "a, b, c", value: "lowerLetter" }
+];
+const orderedListCssTypes: Record<string, string> = {
+  decimal: "decimal",
+  upperRoman: "upper-roman",
+  lowerRoman: "lower-roman",
+  upperLetter: "upper-alpha",
+  lowerLetter: "lower-alpha"
+};
 const tableCellVerticalAlignOptions = [
   { label: "顶部", value: "top" },
   { label: "居中", value: "center" },
@@ -1594,6 +1608,26 @@ const DocumentTableRow = TableRow.extend({
         renderHTML: (attributes) => attributes.rowRepeatHeader ? { "data-row-repeat-header": "true" } : {}
       }
     };
+  }
+});
+
+const ListFormatAttributes = Extension.create({
+  name: "listFormatAttributes",
+  addGlobalAttributes() {
+    return [{
+      types: ["orderedList"],
+      attributes: {
+        listFormat: {
+          default: "decimal",
+          parseHTML: (element) => Object.hasOwn(orderedListCssTypes, element.getAttribute("data-list-format") || "") ? element.getAttribute("data-list-format") : "decimal",
+          renderHTML: (attributes) => {
+            const format = Object.hasOwn(orderedListCssTypes, attributes.listFormat) ? attributes.listFormat : "decimal";
+            // 中文注解：受控语义值供 DOCX 导出使用，CSS list-style-type 负责编辑态和分页态的编号外观。
+            return { "data-list-format": format, style: `list-style-type: ${orderedListCssTypes[format]}` };
+          }
+        }
+      }
+    }];
   }
 });
 
@@ -3040,7 +3074,7 @@ function Editor(props: {
   }, [props.pageLayout]);
 
   const editor = useEditor({
-    extensions: [StarterKit.configure({ link: { openOnClick: false, autolink: false, linkOnPaste: true, HTMLAttributes: { target: "_blank", rel: "noopener noreferrer" } } }), DocumentImage.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DocxTab, ParagraphIndent, PageBreak, SectionBreak, DocumentTable, DocumentTableRow, DocumentTableHeader, DocumentTableCell],
+    extensions: [StarterKit.configure({ link: { openOnClick: false, autolink: false, linkOnPaste: true, HTMLAttributes: { target: "_blank", rel: "noopener noreferrer" } } }), DocumentImage.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DocxTab, ListFormatAttributes, ParagraphIndent, PageBreak, SectionBreak, DocumentTable, DocumentTableRow, DocumentTableHeader, DocumentTableCell],
     content: props.content,
     editorProps: { attributes: { class: "word-editor" } },
     onCreate({ editor }) {
@@ -3503,6 +3537,15 @@ function Editor(props: {
     }
     const applied = style === "paragraph" ? chain.setParagraph().run() : chain.setHeading({ level }).run();
     setSelectionHint(applied ? "已应用段落样式。" : "请把光标放到需要调整的段落中。");
+  };
+
+  const applyOrderedListFormat = (format: string, label: string) => {
+    if (!editor?.isActive("orderedList") || !Object.hasOwn(orderedListCssTypes, format)) {
+      setSelectionHint("请先把光标放到编号列表中。");
+      return;
+    }
+    const applied = editor.chain().focus().updateAttributes("orderedList", { listFormat: format }).run();
+    setSelectionHint(applied ? `已设置编号格式为${label}。` : "编号格式设置失败，请重新选择列表。");
   };
 
   const applyParagraphAlignment = (alignment: "left" | "center" | "right" | "justify", label: string) => {
@@ -4006,6 +4049,7 @@ function Editor(props: {
             </label>
             <button className={editor?.isActive("bulletList") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleBulletList().run()} title="项目符号列表"><List size={16} />列表</button>
             <button className={editor?.isActive("orderedList") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleOrderedList().run()} title="编号列表"><ListOrdered size={16} />编号</button>
+            <FormatSelect title="设置当前编号列表的编号格式" placeholder="编号格式" options={orderedListFormatOptions} icon={<ListOrdered size={16} />} disabled={!editor?.isActive("orderedList")} onSelect={(value, label) => applyOrderedListFormat(value, label)} />
             <button onClick={() => editor?.chain().focus().insertContent({ type: "docxTab", attrs: { positionTwip: 720, alignment: "left" } }).run()} title="插入制表符">制表位</button>
             <span className="format-divider" />
             <button onClick={() => editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()} title="插入 3x3 表格"><TableIcon size={16} />表格</button>

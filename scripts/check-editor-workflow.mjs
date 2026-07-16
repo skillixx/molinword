@@ -269,6 +269,8 @@ try {
   await selectEditorText("段落左右缩进工具");
   await page.getByLabel("左缩进", { exact: true }).selectOption("28.35pt");
   await page.getByLabel("右缩进", { exact: true }).selectOption("14.17pt");
+  await selectEditorText("第二个编号项");
+  await page.getByLabel("编号格式", { exact: true }).selectOption("upperRoman");
   await selectEditorText("all Caps Format");
   await page.getByLabel("字母格式", { exact: true }).selectOption("uppercase");
   await selectEditorText("small Caps Format");
@@ -289,6 +291,7 @@ try {
   assert.match(textBorderHtml, /padding(?:-top)?:\s*1\.33px/i);
   assert.match(advancedFormatHtml, /<p[^>]+style="[^"]*margin-left:\s*28\.35pt[^"]*text-indent:\s*-28\.35pt[^"]*"[^>]*>[\s\S]*?悬挂缩进工具内容[\s\S]*?<\/p>/);
   assert.match(advancedFormatHtml, /<p[^>]+style="[^"]*margin-left:\s*28\.35pt[^"]*margin-right:\s*14\.17pt[^"]*"[^>]*>[\s\S]*?段落左右缩进工具内容[\s\S]*?<\/p>/);
+  assert.match(advancedFormatHtml, /<ol[^>]+data-list-format="upperRoman"[^>]+style="[^"]*list-style-type:\s*upper-roman/);
   assert.match(advancedFormatHtml, /<span[^>]+style="[^"]*text-transform:\s*uppercase[^"]*"[^>]*>all Caps Format<\/span>/);
   assert.match(advancedFormatHtml, /<span[^>]+style="[^"]*font-variant-caps:\s*small-caps[^"]*"[^>]*>small Caps Format<\/span>/);
   await selectEditorText("链接工具");
@@ -563,6 +566,7 @@ try {
   assert.match(storedDocument.content, /margin-left:\s*28\.35pt/);
   assert.match(storedDocument.content, /text-indent:\s*-28\.35pt/);
   assert.match(storedDocument.content, /margin-right:\s*14\.17pt/);
+  assert.match(storedDocument.content, /data-list-format="upperRoman"/);
   assert.match(storedDocument.content, /text-transform:\s*uppercase/);
   assert.match(storedDocument.content, /font-variant-caps:\s*small-caps/);
   assert.match(storedDocument.content, /data-highlight="darkCyan"/);
@@ -676,6 +680,7 @@ try {
   const archive = await JSZip.loadAsync(downloadedBuffer);
   const documentXml = await archive.file("word/document.xml")?.async("string");
   const documentRelationshipsXml = await archive.file("word/_rels/document.xml.rels")?.async("string") || "";
+  const numberingXml = await archive.file("word/numbering.xml")?.async("string") || "";
   const settingsXml = await archive.file("word/settings.xml")?.async("string");
   const headerXmlParts = await Promise.all(archive.file(/^word\/header\d+\.xml$/).map((file) => file.async("string")));
   const footerXmlParts = await Promise.all(archive.file(/^word\/footer\d+\.xml$/).map((file) => file.async("string")));
@@ -740,6 +745,12 @@ try {
   assert.match(hangingIndentParagraph, /<w:ind(?=[^>]+w:left="567")(?=[^>]+w:hanging="567")[^>]*\/>/);
   const sideIndentsParagraph = (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("段落左右缩进工具内容")) || "";
   assert.match(sideIndentsParagraph, /<w:ind(?=[^>]+w:left="567")(?=[^>]+w:right="283")[^>]*\/>/);
+  const romanListParagraph = (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("第二个编号项")) || "";
+  const romanNumberId = romanListParagraph.match(/<w:numId w:val="(\d+)"\/>/)?.[1] || "";
+  const romanNumberXml = [...numberingXml.matchAll(/<w:num w:numId="(\d+)">([\s\S]*?)<\/w:num>/g)].find((match) => match[1] === romanNumberId)?.[2] || "";
+  const romanAbstractId = romanNumberXml.match(/<w:abstractNumId w:val="(\d+)"\/>/)?.[1] || "";
+  const romanAbstractXml = [...numberingXml.matchAll(/<w:abstractNum w:abstractNumId="(\d+)"[^>]*>([\s\S]*?)<\/w:abstractNum>/g)].find((match) => match[1] === romanAbstractId)?.[2] || "";
+  assert.match(romanAbstractXml, /<w:lvl[^>]+w:ilvl="0"[^>]*>[\s\S]*?<w:numFmt w:val="upperRoman"\/>/);
   const allCapsRun = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("all Caps Format")) || "";
   const smallCapsRun = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("small Caps Format")) || "";
   assert.match(allCapsRun, /<w:caps\/>/);
@@ -923,6 +934,8 @@ try {
       sourceListItemMarginBottom: getComputedStyle(document.querySelector(".word-editor ol > li")).marginBottom,
       firstFragmentMarginBottom: getComputedStyle(document.querySelector(".page-body ol > li")).marginBottom,
       secondListStart: Array.from(document.querySelectorAll(".page-body ol")).find((list) => list.textContent?.includes("第二个编号项"))?.getAttribute("start") || "1",
+      sourceOrderedListStyle: getComputedStyle(document.querySelector(".word-editor ol")).listStyleType,
+      previewOrderedListStyle: getComputedStyle(Array.from(document.querySelectorAll(".page-body ol")).find((list) => list.textContent?.includes("第二个编号项"))).listStyleType,
       sourceListText: sourceListItems[0]?.textContent || "",
       previewListText: previewListItems.filter((item) => !item.textContent?.includes("第二个编号项")).map((item) => item.textContent || "").join(""),
       sourceCells,
@@ -1004,6 +1017,8 @@ try {
   assert.equal(result.sourceListItemMarginBottom, "5.33px");
   assert.equal(result.firstFragmentMarginBottom, "0px");
   assert.equal(result.secondListStart, "2");
+  assert.equal(result.sourceOrderedListStyle, "upper-roman");
+  assert.equal(result.previewOrderedListStyle, "upper-roman");
   assert.equal(result.previewListText, result.sourceListText);
   assert.deepEqual(result.previewCells, result.sourceCells);
   assert.ok(result.tableContinuationCount > 0);
