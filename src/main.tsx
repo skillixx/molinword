@@ -71,6 +71,7 @@ type AiApplyMode = "replace" | "insert";
 type TextCaseMode = "upper" | "lower" | "title";
 type EditorViewMode = "edit" | "page";
 type PreviewFootnote = { id: number; text: string };
+type EditorComment = { id: number; text: string; author: string; initials: string; date: string; from: number; to: number; excerpt: string };
 type ParagraphSpacingProperty = "line-height" | "margin-top" | "margin-bottom" | "margin-left" | "margin-right" | "text-indent" | "--word-line-rule";
 type ParagraphSpacingStyles = Partial<Record<ParagraphSpacingProperty, string>>;
 type ParagraphPaginationAttribute = "keepNext" | "keepLines" | "pageBreakBefore" | "widowControl" | "bidirectional";
@@ -1509,6 +1510,47 @@ const DoubleStrikeText = Mark.create({
   }, 0]
 });
 
+const CommentMark = Mark.create({
+  name: "commentMark",
+  inclusive: false,
+  addAttributes() {
+    return {
+      commentId: {
+        default: 0,
+        parseHTML: (element) => Math.max(0, Math.min(Math.round(Number(element.getAttribute("data-comment-id")) || 0), 2147483647)),
+        renderHTML: (attributes) => ({ "data-comment-id": Math.max(0, Math.min(Math.round(Number(attributes.commentId) || 0), 2147483647)) })
+      },
+      commentText: {
+        default: "",
+        parseHTML: (element) => String(element.getAttribute("data-comment-text") || "").replace(/\r\n?/g, "\n").trim().slice(0, 4000),
+        renderHTML: (attributes) => ({ "data-comment-text": String(attributes.commentText || "").replace(/\r\n?/g, "\n").trim().slice(0, 4000) })
+      },
+      commentAuthor: {
+        default: "审阅者",
+        parseHTML: (element) => String(element.getAttribute("data-comment-author") || "审阅者").trim().slice(0, 200),
+        renderHTML: (attributes) => ({ "data-comment-author": String(attributes.commentAuthor || "审阅者").trim().slice(0, 200) })
+      },
+      commentInitials: {
+        default: "",
+        parseHTML: (element) => String(element.getAttribute("data-comment-initials") || "").trim().slice(0, 20),
+        renderHTML: (attributes) => ({ "data-comment-initials": String(attributes.commentInitials || "").trim().slice(0, 20) })
+      },
+      commentDate: {
+        default: "",
+        parseHTML: (element) => String(element.getAttribute("data-comment-date") || "").trim().slice(0, 40),
+        renderHTML: (attributes) => attributes.commentDate ? { "data-comment-date": String(attributes.commentDate).trim().slice(0, 40) } : {}
+      }
+    };
+  },
+  parseHTML() {
+    return [{ tag: "span.comment-mark[data-comment-id][data-comment-text]" }];
+  },
+  // 中文注解：批注是独立审阅语义，不与普通高亮复用，导出时才能恢复 commentRangeStart/End。
+  renderHTML({ HTMLAttributes }) {
+    return ["span", mergeAttributes(HTMLAttributes, { class: "comment-mark", title: `${HTMLAttributes["data-comment-author"] || "审阅者"}：${HTMLAttributes["data-comment-text"] || ""}` }), 0];
+  }
+});
+
 const FootnoteReference = TiptapNode.create({
   name: "footnoteReference",
   group: "inline",
@@ -2459,6 +2501,29 @@ function getSelectedText(editor: TiptapEditor | null) {
   return editor.state.doc.textBetween(from, to, "\n").trim();
 }
 
+function collectEditorComments(editor: TiptapEditor) {
+  const comments = new Map<number, EditorComment>();
+  editor.state.doc.descendants((node, position) => {
+    if (!node.isText) return;
+    const mark = node.marks.find((item) => item.type.name === "commentMark");
+    if (!mark) return;
+    const id = Math.max(0, Math.min(Math.round(Number(mark.attrs.commentId) || 0), 2147483647));
+    const existing = comments.get(id);
+    const excerpt = `${existing?.excerpt || ""}${node.text || ""}`.trim().slice(0, 120);
+    comments.set(id, {
+      id,
+      text: String(mark.attrs.commentText || ""),
+      author: String(mark.attrs.commentAuthor || "审阅者"),
+      initials: String(mark.attrs.commentInitials || ""),
+      date: String(mark.attrs.commentDate || ""),
+      from: Math.min(existing?.from ?? position, position),
+      to: Math.max(existing?.to ?? position + node.nodeSize, position + node.nodeSize),
+      excerpt
+    });
+  });
+  return Array.from(comments.values()).sort((left, right) => left.from - right.from);
+}
+
 function transformTextCase(text: string, mode: TextCaseMode) {
   if (mode === "upper") return text.toUpperCase();
   if (mode === "lower") return text.toLowerCase();
@@ -3291,6 +3356,9 @@ function Editor(props: {
   const [footnoteText, setFootnoteText] = React.useState("");
   const [endnoteEditorOpen, setEndnoteEditorOpen] = React.useState(false);
   const [endnoteText, setEndnoteText] = React.useState("");
+  const [commentEditorOpen, setCommentEditorOpen] = React.useState(false);
+  const [commentText, setCommentText] = React.useState("");
+  const [comments, setComments] = React.useState<EditorComment[]>([]);
   const [imageAspectLocked, setImageAspectLocked] = React.useState(true);
   const paginationMeasureRef = React.useRef<HTMLDivElement | null>(null);
   const imageInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -3298,6 +3366,10 @@ function Editor(props: {
   const activeSectionIndexRef = React.useRef(0);
   const activeSectionLayoutRef = React.useRef<DocumentPageLayout>(normalizeDocumentPageLayout(props.pageLayout));
   const lastEditorSelectionRef = React.useRef<{ from: number; to: number } | null>(null);
+
+  const refreshEditorComments = React.useCallback((editor: TiptapEditor) => {
+    setComments(collectEditorComments(editor));
+  }, []);
 
   const updateOutlineFromEditor = React.useCallback((editor: TiptapEditor) => {
     const nextOutline: OutlineItem[] = [];
@@ -3330,15 +3402,16 @@ function Editor(props: {
   }, [props.pageLayout]);
 
   const editor = useEditor({
-    extensions: [StarterKit.configure({ link: { openOnClick: false, autolink: false, linkOnPaste: true, HTMLAttributes: { target: "_blank", rel: "noopener noreferrer" } } }), DocumentImage.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DoubleStrikeText, FootnoteReference, EndnoteReference, DocxTab, ListFormatAttributes, OutlineLevelAttributes, ParagraphIndent, PageBreak, ColumnBreak, SectionBreak, DocumentTable, DocumentTableRow, DocumentTableHeader, DocumentTableCell],
+    extensions: [StarterKit.configure({ link: { openOnClick: false, autolink: false, linkOnPaste: true, HTMLAttributes: { target: "_blank", rel: "noopener noreferrer" } } }), DocumentImage.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DoubleStrikeText, CommentMark, FootnoteReference, EndnoteReference, DocxTab, ListFormatAttributes, OutlineLevelAttributes, ParagraphIndent, PageBreak, ColumnBreak, SectionBreak, DocumentTable, DocumentTableRow, DocumentTableHeader, DocumentTableCell],
     content: props.content,
     editorProps: { attributes: { class: "word-editor" } },
     onCreate({ editor }) {
       lastEditorSelectionRef.current = { from: editor.state.selection.from, to: editor.state.selection.to };
       updateOutlineFromEditor(editor);
       syncActiveSectionFromEditor(editor);
+      refreshEditorComments(editor);
     },
-    onUpdate({ editor }) { props.setContent(editor.getHTML()); updateOutlineFromEditor(editor); syncActiveSectionFromEditor(editor); },
+    onUpdate({ editor }) { props.setContent(editor.getHTML()); updateOutlineFromEditor(editor); syncActiveSectionFromEditor(editor); refreshEditorComments(editor); },
     onSelectionUpdate({ editor }) {
       lastEditorSelectionRef.current = { from: editor.state.selection.from, to: editor.state.selection.to };
       const selectedText = getSelectedText(editor);
@@ -3352,7 +3425,8 @@ function Editor(props: {
     if (!editor || editor.getHTML() === props.content) return;
     editor.commands.setContent(props.content);
     updateOutlineFromEditor(editor);
-  }, [editor, props.content, updateOutlineFromEditor]);
+    refreshEditorComments(editor);
+  }, [editor, props.content, refreshEditorComments, updateOutlineFromEditor]);
 
   React.useLayoutEffect(() => {
     if (!editor) return;
@@ -4229,9 +4303,60 @@ function Editor(props: {
     setSelectionHint("已取消超链接。");
   };
 
+  const openCommentEditor = () => {
+    if (!editor || (editor.state.selection.empty && !editor.isActive("commentMark"))) {
+      setSelectionHint("请先选中需要批注的文字，或把光标放到已有批注中。");
+      return;
+    }
+    setFootnoteEditorOpen(false);
+    setEndnoteEditorOpen(false);
+    const attributes = editor.getAttributes("commentMark");
+    setCommentText(editor.isActive("commentMark") ? String(attributes.commentText || "") : "");
+    setCommentEditorOpen(true);
+  };
+
+  const applyComment = () => {
+    if (!editor) return;
+    const text = commentText.replace(/\r\n?/g, "\n").trim().slice(0, 4000);
+    if (!text) {
+      setSelectionHint("请输入批注内容。");
+      return;
+    }
+    if (editor.isActive("commentMark")) {
+      const attributes = editor.getAttributes("commentMark");
+      editor.chain().focus().extendMarkRange("commentMark").setMark("commentMark", { ...attributes, commentText: text }).run();
+      setSelectionHint("已更新批注。");
+    } else {
+      const commentId = Math.min(2147483647, comments.reduce((maxId, comment) => Math.max(maxId, comment.id), 0) + 1);
+      editor.chain().focus().setMark("commentMark", {
+        commentId,
+        commentText: text,
+        commentAuthor: "在线审阅者",
+        commentInitials: "ZX",
+        commentDate: new Date().toISOString()
+      }).run();
+      setSelectionHint("已添加批注。");
+    }
+    setCommentEditorOpen(false);
+  };
+
+  const removeComment = () => {
+    if (!editor?.isActive("commentMark")) return;
+    editor.chain().focus().extendMarkRange("commentMark").unsetMark("commentMark").run();
+    setCommentEditorOpen(false);
+    setSelectionHint("已删除批注。");
+  };
+
+  const jumpToComment = (comment: EditorComment) => {
+    if (!editor) return;
+    editor.chain().focus().setTextSelection({ from: comment.from, to: comment.to }).run();
+    setSelectionHint(`已定位批注：${comment.excerpt}`);
+  };
+
   const openFootnoteEditor = () => {
     if (!editor) return;
     setEndnoteEditorOpen(false);
+    setCommentEditorOpen(false);
     const attributes = editor.getAttributes("footnoteReference");
     setFootnoteText(editor.isActive("footnoteReference") ? String(attributes.footnoteText || "") : "");
     setFootnoteEditorOpen(true);
@@ -4270,6 +4395,7 @@ function Editor(props: {
   const openEndnoteEditor = () => {
     if (!editor) return;
     setFootnoteEditorOpen(false);
+    setCommentEditorOpen(false);
     const attributes = editor.getAttributes("endnoteReference");
     setEndnoteText(editor.isActive("endnoteReference") ? String(attributes.endnoteText || "") : "");
     setEndnoteEditorOpen(true);
@@ -4499,6 +4625,7 @@ function Editor(props: {
               <button aria-label="确认超链接" onClick={applyHyperlink} title="确认超链接"><Check size={16} /></button>
               <button aria-label="关闭超链接编辑" onClick={() => setLinkEditorOpen(false)} title="关闭"><X size={16} /></button>
             </div> : null}
+            <button aria-label="添加或编辑批注" className={editor?.isActive("commentMark") ? "active-format" : ""} onClick={openCommentEditor} title="为选中文字添加批注，或修改当前批注"><PenLine size={16} />批注</button>
             <button aria-label="插入或编辑脚注" className={editor?.isActive("footnoteReference") ? "active-format" : ""} onClick={openFootnoteEditor} title="在当前位置插入脚注，或修改选中的脚注"><FileText size={16} />脚注</button>
             <button aria-label="插入或编辑尾注" className={editor?.isActive("endnoteReference") ? "active-format" : ""} onClick={openEndnoteEditor} title="在当前位置插入尾注，或修改选中的尾注"><FileText size={16} />尾注</button>
             <button className={editor?.isActive("strike") ? "active-format" : ""} onClick={() => applyStrikeStyle(editor?.isActive("strike") ? "none" : "single", editor?.isActive("strike") ? "无删除线" : "单删除线")} title="删除线"><Strikethrough size={16} /></button>
@@ -4628,6 +4755,14 @@ function Editor(props: {
               <button aria-label="关闭尾注编辑" onClick={() => setEndnoteEditorOpen(false)} title="关闭"><X size={16} /></button>
             </div>
           </div> : null}
+          {commentEditorOpen ? <div className="footnote-editor comment-editor">
+            <textarea aria-label="批注内容" autoFocus maxLength={4000} rows={3} value={commentText} onChange={(event) => setCommentText(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") applyComment(); if (event.key === "Escape") setCommentEditorOpen(false); }} />
+            <div className="footnote-editor-actions">
+              <button aria-label="确认批注" onClick={applyComment} title="确认批注"><Check size={16} /></button>
+              {editor?.isActive("commentMark") ? <button aria-label="删除批注" onClick={removeComment} title="删除批注"><Trash2 size={16} /></button> : null}
+              <button aria-label="关闭批注编辑" onClick={() => setCommentEditorOpen(false)} title="关闭"><X size={16} /></button>
+            </div>
+          </div> : null}
           {props.aiLoading === "正在生成正文" || paginationPending ? <div className="paper-loading"><LoadingProcess label={paginationPending ? "正在计算分页" : props.aiLoading || "正在处理"} /></div> : null}
           <div className="editor-scroll" style={documentPreviewStyle(props.selectedTemplate)}>
             <div className={viewMode === "edit" ? "editor-source" : "editor-source is-hidden"}>
@@ -4665,7 +4800,31 @@ function Editor(props: {
             <div className="pagination-measurer" ref={paginationMeasureRef} aria-hidden="true" />
           </div>
         </section>
-        <aside className="ai-panel"><div className="section-title"><Bot size={18} /><h2>AI 助手</h2></div><div className="points-cost">生成大纲 {usageCosts.outline} 积分 · 生成正文 {usageCosts.body} 积分 · 局部编辑 {usageCosts.edit} 积分 · 导出 {usageCosts.exportDocx} 积分</div>{props.pointsEnabled ? <div className="selection-hint">当前剩余积分：{props.pointsRemaining ?? "未知"}</div> : null}<div className="selection-hint">{selectionHint}</div><button onClick={() => runSelectionAi("polish")} disabled={Boolean(props.aiLoading) || !hasSelection}><Sparkles size={17} />润色选中文本</button><button onClick={() => runSelectionAi("format")} disabled={Boolean(props.aiLoading) || !hasSelection}><ListTree size={17} />格式优化选中</button><button onClick={optimizeTitleFormat} disabled={Boolean(props.aiLoading)}><PenLine size={17} />AI标题优化</button><button onClick={() => applyAiFirstLineIndent(1)} disabled={Boolean(props.aiLoading)}><IndentIncrease size={17} />AI首行缩进</button><button onClick={() => applyAiFirstLineIndent(0)} disabled={Boolean(props.aiLoading)}><IndentDecrease size={17} />取消首行缩进</button><button onClick={() => runSelectionAi("continue")} disabled={Boolean(props.aiLoading) || !hasSelection}><Wand2 size={17} />续写选中文本</button><button onClick={() => runSelectionAi("expand")} disabled={Boolean(props.aiLoading) || !hasSelection}><AlignLeft size={17} />扩写选中文本</button><button onClick={() => runSelectionAi("shorten")} disabled={Boolean(props.aiLoading) || !hasSelection}><AlignLeft size={17} />缩写选中文本</button><button onClick={() => runSelectionAi("correct")} disabled={Boolean(props.aiLoading) || !hasSelection}><CheckCircle2 size={17} />纠错选中文本</button><button onClick={props.generateBody} disabled={Boolean(props.aiLoading)}><ListTree size={17} />根据大纲生成正文</button>{props.aiLoading ? <LoadingProcess label={props.aiLoading} compact /> : null}{props.exportStatus === "导出中" ? <LoadingProcess label="正在导出 Word" compact /> : null}{props.aiError ? <div className="ai-message error"><XCircle size={16} /><span>{props.aiError}</span></div> : null}{aiResult ? <div className="ai-result"><strong>AI 处理结果</strong><p>{aiResult.content}</p><div className="ai-result-actions"><button onClick={() => applyAiResult("replace")}>替换原文</button><button onClick={() => applyAiResult("insert")}>插入下方</button><button onClick={copyAiResult}>复制结果</button><button onClick={() => setAiResult(null)}>取消结果</button></div></div> : null}<div className="assistant-note"><strong>{props.aiStatus}</strong><span>AI 密钥仅保存在服务端；墨灵积分只会在动作成功后扣减。</span></div></aside>
+        <aside className="ai-panel">
+          <div className="section-title"><Bot size={18} /><h2>AI 助手</h2></div>
+          <div className="points-cost">生成大纲 {usageCosts.outline} 积分 · 生成正文 {usageCosts.body} 积分 · 局部编辑 {usageCosts.edit} 积分 · 导出 {usageCosts.exportDocx} 积分</div>
+          {props.pointsEnabled ? <div className="selection-hint">当前剩余积分：{props.pointsRemaining ?? "未知"}</div> : null}
+          <div className="selection-hint">{selectionHint}</div>
+          <button onClick={() => runSelectionAi("polish")} disabled={Boolean(props.aiLoading) || !hasSelection}><Sparkles size={17} />润色选中文本</button>
+          <button onClick={() => runSelectionAi("format")} disabled={Boolean(props.aiLoading) || !hasSelection}><ListTree size={17} />格式优化选中</button>
+          <button onClick={optimizeTitleFormat} disabled={Boolean(props.aiLoading)}><PenLine size={17} />AI标题优化</button>
+          <button onClick={() => applyAiFirstLineIndent(1)} disabled={Boolean(props.aiLoading)}><IndentIncrease size={17} />AI首行缩进</button>
+          <button onClick={() => applyAiFirstLineIndent(0)} disabled={Boolean(props.aiLoading)}><IndentDecrease size={17} />取消首行缩进</button>
+          <button onClick={() => runSelectionAi("continue")} disabled={Boolean(props.aiLoading) || !hasSelection}><Wand2 size={17} />续写选中文本</button>
+          <button onClick={() => runSelectionAi("expand")} disabled={Boolean(props.aiLoading) || !hasSelection}><AlignLeft size={17} />扩写选中文本</button>
+          <button onClick={() => runSelectionAi("shorten")} disabled={Boolean(props.aiLoading) || !hasSelection}><AlignLeft size={17} />缩写选中文本</button>
+          <button onClick={() => runSelectionAi("correct")} disabled={Boolean(props.aiLoading) || !hasSelection}><CheckCircle2 size={17} />纠错选中文本</button>
+          <button onClick={props.generateBody} disabled={Boolean(props.aiLoading)}><ListTree size={17} />根据大纲生成正文</button>
+          {props.aiLoading ? <LoadingProcess label={props.aiLoading} compact /> : null}
+          {props.exportStatus === "导出中" ? <LoadingProcess label="正在导出 Word" compact /> : null}
+          {props.aiError ? <div className="ai-message error"><XCircle size={16} /><span>{props.aiError}</span></div> : null}
+          {aiResult ? <div className="ai-result"><strong>AI 处理结果</strong><p>{aiResult.content}</p><div className="ai-result-actions"><button onClick={() => applyAiResult("replace")}>替换原文</button><button onClick={() => applyAiResult("insert")}>插入下方</button><button onClick={copyAiResult}>复制结果</button><button onClick={() => setAiResult(null)}>取消结果</button></div></div> : null}
+          <div className="document-comments">
+            <div className="document-comments-title"><strong>文档批注</strong><span>{comments.length}</span></div>
+            {comments.length ? comments.map((comment) => <button className="document-comment" onClick={() => jumpToComment(comment)} title="定位到批注文字" key={comment.id}><span>{comment.excerpt || "批注范围"}</span><strong>{comment.text}</strong><small>{comment.author}{comment.date ? ` · ${new Date(comment.date).toLocaleString("zh-CN")}` : ""}</small></button>) : <div className="document-comments-empty">暂无批注</div>}
+          </div>
+          <div className="assistant-note"><strong>{props.aiStatus}</strong><span>AI 密钥仅保存在服务端；墨灵积分只会在动作成功后扣减。</span></div>
+        </aside>
       </div>
     </section>
   );

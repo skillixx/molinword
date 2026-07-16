@@ -41,7 +41,7 @@ const fixtureDocument = {
 };
 // 中文注解：复用现有编辑器回归文档，同时加入链接和浮动图片，覆盖保存、分页与导出的真实节点持久化。
 fixtureDocument.content = `<img src="${tinyPng}" alt="浮动审批标识" style="width:48px;height:48px" data-docx-floating='${JSON.stringify(floatingBodyImage)}' data-docx-wrap="square" data-docx-float-align="right" />${fixtureDocument.content.replace("下标工具", "下标工具 链接工具")}`;
-fixtureDocument.content += "<p>脚注工具</p><p>尾注工具</p>";
+fixtureDocument.content += "<p>脚注工具</p><p>尾注工具</p><p>批注工具</p>";
 const fixtureTemplate = {
   id: 3,
   name: "商业计划书",
@@ -369,9 +369,10 @@ try {
   await page.getByRole("button", { name: "插入或编辑脚注", exact: true }).click();
   await page.getByLabel("脚注内容", { exact: true }).fill("审批依据说明");
   await page.getByRole("button", { name: "确认脚注", exact: true }).click();
-  const sourceFootnoteReference = footnoteParagraph.locator('.footnote-reference[data-footnote-id="1"]');
+  const sourceFootnoteReference = editor.locator('.footnote-reference[data-footnote-id="1"]');
   await sourceFootnoteReference.waitFor();
   assert.equal(await sourceFootnoteReference.getAttribute("data-footnote-text"), "审批依据说明");
+  assert.match(await sourceFootnoteReference.locator("xpath=ancestor::p[1]").textContent() || "", /脚注工具/);
 
   const endnoteParagraph = editor.locator("p").filter({ hasText: "尾注工具" });
   await endnoteParagraph.click();
@@ -383,6 +384,19 @@ try {
   await sourceEndnoteReference.waitFor();
   assert.equal(await sourceEndnoteReference.getAttribute("data-endnote-text"), "文末法规来源");
   assert.match(await sourceEndnoteReference.locator("xpath=ancestor::p[1]").textContent() || "", /尾注工具/);
+
+  await selectEditorText("批注工具");
+  await page.getByRole("button", { name: "添加或编辑批注", exact: true }).click();
+  await page.getByLabel("批注内容", { exact: true }).fill("请补充审批依据");
+  await page.getByRole("button", { name: "确认批注", exact: true }).click();
+  const sourceCommentMark = editor.locator('.comment-mark[data-comment-id="1"]');
+  await sourceCommentMark.waitFor();
+  assert.equal(await sourceCommentMark.getAttribute("data-comment-text"), "请补充审批依据");
+  assert.equal(await sourceCommentMark.getAttribute("data-comment-author"), "在线审阅者");
+  const commentListItem = page.locator(".document-comment").filter({ hasText: "请补充审批依据" });
+  await commentListItem.waitFor();
+  await commentListItem.click();
+  assert.equal(await page.evaluate(() => window.getSelection()?.toString() || ""), "批注工具");
 
   const paragraphAppearance = editor.locator("p").filter({ hasText: "段落外观工具" });
   await paragraphAppearance.click();
@@ -663,6 +677,7 @@ try {
   assert.match(storedDocument.content, /手动换行工具 第一行[\s\S]*?<br[^>]*>[\s\S]*?第二行/);
   assert.match(storedDocument.content, /脚注工具[\s\S]*?<span(?=[^>]*class="footnote-reference")(?=[^>]*data-footnote-id="1")(?=[^>]*data-footnote-text="审批依据说明")[^>]*>/);
   assert.match(storedDocument.content, /尾注工具[\s\S]*?<span(?=[^>]*class="endnote-reference")(?=[^>]*data-endnote-id="1")(?=[^>]*data-endnote-text="文末法规来源")[^>]*>/);
+  assert.match(storedDocument.content, /<span(?=[^>]*class="comment-mark")(?=[^>]*data-comment-id="1")(?=[^>]*data-comment-text="请补充审批依据")(?=[^>]*data-comment-author="在线审阅者")[^>]*>[\s\S]*?批注工具[\s\S]*?<\/span>/);
   assert.match(storedDocument.content, /<p[^>]+data-bidirectional="true"[^>]+style="[^"]*direction:\s*rtl[^"]*"[^>]*>[\s\S]*?RTL段落工具内容[\s\S]*?<\/p>/);
   assert.doesNotMatch(storedDocument.content, /<mark[^>]*>清除高亮工具<\/mark>/);
   assert.match(storedDocument.content, /<p[^>]+data-paragraph-shading="[^\"]*DDEBF7[^\"]*"[^>]+data-paragraph-borders="[^\"]*dashed[^\"]*"[^>]*>[\s\S]*?段落外观工具[\s\S]*?<\/p>/);
@@ -763,6 +778,7 @@ try {
   assert.match(reopenedHtml, /手动换行工具 第一行[\s\S]*?<br[^>]*>[\s\S]*?第二行/);
   assert.match(reopenedHtml, /脚注工具[\s\S]*?<span(?=[^>]*class="footnote-reference")(?=[^>]*data-footnote-id="1")(?=[^>]*data-footnote-text="审批依据说明")[^>]*>/);
   assert.match(reopenedHtml, /尾注工具[\s\S]*?<span(?=[^>]*class="endnote-reference")(?=[^>]*data-endnote-id="1")(?=[^>]*data-endnote-text="文末法规来源")[^>]*>/);
+  assert.match(reopenedHtml, /<span(?=[^>]*class="comment-mark")(?=[^>]*data-comment-id="1")(?=[^>]*data-comment-text="请补充审批依据")(?=[^>]*data-comment-author="在线审阅者")[^>]*>[\s\S]*?批注工具[\s\S]*?<\/span>/);
   assert.match(reopenedHtml, /data-section-break="nextPage"/);
   assert.match(reopenedHtml, /第二节横向内容/);
   assert.match(reopenedHtml, /<div[^>]+data-column-break="true"[^>]*><\/div>/);
@@ -794,6 +810,7 @@ try {
   const footerXmlParts = await Promise.all(archive.file(/^word\/footer\d+\.xml$/).map((file) => file.async("string")));
   const footnotesXml = await archive.file("word/footnotes.xml")?.async("string") || "";
   const endnotesXml = await archive.file("word/endnotes.xml")?.async("string") || "";
+  const commentsXml = await archive.file("word/comments.xml")?.async("string") || "";
   const headerMedia = archive.file(/^word\/media\/.+\.png$/);
   assert.ok(documentXml, "导出的 DOCX 应包含 document.xml");
   assert.equal(headerXmlParts.length, 5, "导出的 DOCX 应包含首节三类页眉和第二节默认/偶数页眉");
@@ -905,6 +922,9 @@ try {
   assert.match(documentXml, /尾注工具[\s\S]*?<w:endnoteReference w:id="1"\/>/);
   assert.match(documentRelationshipsXml, /relationships\/endnotes" Target="endnotes\.xml"/);
   assert.match(endnotesXml, /<w:endnote w:id="1">[\s\S]*文末法规来源[\s\S]*<\/w:endnote>/);
+  assert.match(documentXml, /<w:commentRangeStart w:id="1"\/>[\s\S]*批注工具[\s\S]*<w:commentRangeEnd w:id="1"\/>[\s\S]*<w:commentReference w:id="1"\/>/);
+  assert.match(documentRelationshipsXml, /relationships\/comments" Target="comments\.xml"/);
+  assert.match(commentsXml, /<w:comment(?=[^>]+w:id="1")(?=[^>]+w:author="在线审阅者")(?=[^>]+w:initials="ZX")[^>]*>[\s\S]*请补充审批依据[\s\S]*<\/w:comment>/);
   const appearanceParagraph = (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("段落外观工具")) || "";
   assert.match(appearanceParagraph, /<w:shd[^>]+w:fill="DDEBF7"/);
   for (const side of ["top", "right", "bottom", "left"]) {
@@ -967,6 +987,10 @@ try {
   const endnotePreview = page.locator('.page-sheet:last-child .endnote-entry[data-endnote-id="1"]');
   await endnotePreview.waitFor();
   assert.match(await endnotePreview.textContent() || "", /1文末法规来源/);
+  const previewCommentMark = page.locator('.page-body .comment-mark[data-comment-id="1"]').first();
+  await previewCommentMark.waitFor();
+  assert.equal(await previewCommentMark.textContent(), "批注工具");
+  assert.match(await previewCommentMark.evaluate((mark) => `${getComputedStyle(mark).backgroundColor} ${getComputedStyle(mark).borderBottomStyle}`), /rgb\(255, 244, 199\).*solid/);
   const previewLink = page.locator('.page-body a[href="https://example.com/office"]').first();
   await previewLink.waitFor();
   await page.waitForFunction(() => Array.from(document.querySelectorAll('.page-body a[href="https://example.com/office"]')).some((link) => getComputedStyle(link).textDecorationLine.includes("underline")));

@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import express from "express";
-import { AlignmentType, BorderStyle, Column, ColumnBreak as DocxColumnBreak, Document, EndnoteReferenceRun, ExternalHyperlink, Footer, FootnoteReferenceRun, Header, HeadingLevel, HeightRule, ImageRun, LevelFormat, LineRuleType, NoBreakHyphen, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, SoftHyphen, Tab, Table, TableCell, TableLayoutType, TableRow, TextDirection, TextRun, TextWrappingSide, TextWrappingType, VerticalAlignTable, WidthType } from "docx";
+import { AlignmentType, BorderStyle, Column, ColumnBreak as DocxColumnBreak, CommentRangeEnd, CommentRangeStart, CommentReference, Document, EndnoteReferenceRun, ExternalHyperlink, Footer, FootnoteReferenceRun, Header, HeadingLevel, HeightRule, ImageRun, LevelFormat, LineRuleType, NoBreakHyphen, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, SoftHyphen, Tab, Table, TableCell, TableLayoutType, TableRow, TextDirection, TextRun, TextWrappingSide, TextWrappingType, VerticalAlignTable, WidthType } from "docx";
 import { imageSize } from "image-size";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
@@ -459,7 +459,7 @@ function sanitizeImportedHtml(value = "") {
       h6: ["style", "data-outline-level", "data-indent", "data-bidirectional", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
       p: ["style", "data-outline-level", "data-indent", "data-bidirectional", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
       li: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
-      span: ["style", "class", "data-docx-tab", "data-tab-position", "data-tab-alignment", "data-double-strike", "data-footnote-id", "data-footnote-text", "data-endnote-id", "data-endnote-text"],
+      span: ["style", "class", "data-docx-tab", "data-tab-position", "data-tab-alignment", "data-double-strike", "data-footnote-id", "data-footnote-text", "data-endnote-id", "data-endnote-text", "data-comment-id", "data-comment-text", "data-comment-author", "data-comment-initials", "data-comment-date"],
       mark: ["data-highlight", "style"],
       a: ["href", "target", "rel"],
       ol: ["style", "data-list-format", "start"],
@@ -1391,6 +1391,48 @@ function parseDocxNotes(xml = "", noteName = "footnote") {
   return notes;
 }
 
+function normalizeCommentId(value) {
+  const id = Number(value);
+  return Number.isInteger(id) && id >= 0 && id <= 2147483647 ? id : null;
+}
+
+function normalizeCommentField(value = "", limit = 200) {
+  return String(value).replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, limit);
+}
+
+function normalizeCommentDate(value = "") {
+  const date = new Date(String(value || ""));
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+}
+
+function parseDocxComments(xml = "") {
+  const comments = new Map();
+  if (!xml.trim()) return comments;
+  const document = parseDocument(xml, { xmlMode: true });
+  for (const comment of xmlDescendants(document, "w:comment")) {
+    const id = normalizeCommentId(firstValue(comment.attribs, ["w:id", "id"]));
+    if (id === null) continue;
+    const text = normalizeFootnoteText(xmlDescendants(comment, "w:p").map((paragraph) => (
+      xmlDescendants(paragraph, "w:t").map((textNode) => (textNode.children || []).map((child) => child.data || "").join("")).join("")
+    )).join("\n"));
+    if (!text) continue;
+    comments.set(id, {
+      id,
+      text,
+      author: normalizeCommentField(firstValue(comment.attribs, ["w:author", "author"])) || "审阅者",
+      initials: normalizeCommentField(firstValue(comment.attribs, ["w:initials", "initials"]), 20),
+      date: normalizeCommentDate(firstValue(comment.attribs, ["w:date", "date"]))
+    });
+  }
+  return comments;
+}
+
+function commentMarkStartHtml(comment) {
+  if (!comment) return "";
+  const dateAttribute = comment.date ? ` data-comment-date="${escapeHtml(comment.date)}"` : "";
+  return `<span class="comment-mark" data-comment-id="${comment.id}" data-comment-text="${escapeHtml(comment.text)}" data-comment-author="${escapeHtml(comment.author)}" data-comment-initials="${escapeHtml(comment.initials)}"${dateAttribute}>`;
+}
+
 async function docxRunToHtml(runNode, inheritedRunStyles = {}, context = {}, tabState = { stops: [], index: 0 }) {
   const { zip = null, relationships = new Map(), styleMap = new Map(), themeFonts = {}, themeColors = {}, footnotes = new Map(), endnotes = new Map() } = context;
   const text = docxTextFromRun(runNode);
@@ -1468,9 +1510,30 @@ async function parseStyledDocxParagraph(paragraphNode, context) {
   const paragraphStyles = { ...(style.paragraph || {}), ...parseParagraphProperties(pPr, context.themeColors || {}) };
   const inheritedRunStyles = style.run || {};
   const tabState = { stops: normalizeDocxTabStops(paragraphStyles.$tabStops), index: 0 };
-  const bodyParts = [];
+  const activeCommentIds = context.activeCommentIds || (context.activeCommentIds = []);
+  const bodyParts = activeCommentIds.map((id) => commentMarkStartHtml(context.comments?.get(id)));
   // 中文注解：按真实子节点顺序解析普通 run 与 hyperlink，链接容器中的文字不能被跳过或移动位置。
   for (const child of paragraphNode.children || []) {
+    if (child.name === "w:commentRangeStart") {
+      const commentId = normalizeCommentId(firstValue(child.attribs, ["w:id", "id"]));
+      if (commentId !== null && context.comments?.has(commentId) && !activeCommentIds.includes(commentId)) {
+        activeCommentIds.push(commentId);
+        bodyParts.push(commentMarkStartHtml(context.comments.get(commentId)));
+      }
+      continue;
+    }
+    if (child.name === "w:commentRangeEnd") {
+      const commentId = normalizeCommentId(firstValue(child.attribs, ["w:id", "id"]));
+      const commentIndex = commentId === null ? -1 : activeCommentIds.lastIndexOf(commentId);
+      if (commentIndex >= 0) {
+        // 中文注解：HTML 不能表达交叉范围；关闭目标之后的标记再重开，可保留每个 Word 批注覆盖的文字集合。
+        const reopenIds = activeCommentIds.slice(commentIndex + 1);
+        for (let index = activeCommentIds.length - 1; index >= commentIndex; index -= 1) bodyParts.push("</span>");
+        activeCommentIds.splice(commentIndex, 1);
+        reopenIds.forEach((id) => bodyParts.push(commentMarkStartHtml(context.comments.get(id))));
+      }
+      continue;
+    }
     if (child.name === "w:r") {
       bodyParts.push(await docxRunToHtml(child, inheritedRunStyles, context, tabState));
       continue;
@@ -1483,6 +1546,8 @@ async function parseStyledDocxParagraph(paragraphNode, context) {
     const linkHtml = linkParts.join("");
     bodyParts.push(href && linkHtml ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${linkHtml}</a>` : linkHtml);
   }
+  // 中文注解：跨段批注在每个 HTML 块末尾闭合、下一段重新打开，保持合法 HTML 与连续审阅语义。
+  for (let index = activeCommentIds.length - 1; index >= 0; index -= 1) bodyParts.push("</span>");
   const body = bodyParts.join("") || "<br>";
   const tag = docxParagraphTag(style, paragraphStyles);
   const list = docxListInfo(pPr, style, numbering);
@@ -1847,12 +1912,14 @@ async function parseStyledDocxToHtml(buffer, sectionLayouts = [], sectionBreakTy
   const relsXml = await zip.file("word/_rels/document.xml.rels")?.async("string");
   const footnotesXml = await zip.file("word/footnotes.xml")?.async("string");
   const endnotesXml = await zip.file("word/endnotes.xml")?.async("string");
+  const commentsXml = await zip.file("word/comments.xml")?.async("string");
   const styleContext = parseDocxStyles(stylesXml || "", themeXml || "");
   const numbering = parseDocxNumbering(numberingXml || "");
   const relationships = parseDocxRelationships(relsXml || "");
   const footnotes = parseDocxNotes(footnotesXml || "", "footnote");
   const endnotes = parseDocxNotes(endnotesXml || "", "endnote");
-  const context = { ...styleContext, numbering, zip, relationships, footnotes, endnotes };
+  const comments = parseDocxComments(commentsXml || "");
+  const context = { ...styleContext, numbering, zip, relationships, footnotes, endnotes, comments, activeCommentIds: [] };
   const document = parseDocument(documentXml, { xmlMode: true });
   const body = xmlDescendants(document, "w:body")[0];
   const chunks = [];
@@ -2537,6 +2604,17 @@ function paragraphStyleFromNode(node) {
 
 function textRunsFromNode(node, marks = {}) {
   if (!node) return [];
+  const commentId = normalizeCommentId(node?.attribs?.["data-comment-id"]);
+  const commentText = normalizeFootnoteText(node?.attribs?.["data-comment-text"]);
+  if (commentId !== null && commentText) {
+    const children = (node.children || []).flatMap((child) => textRunsFromNode(child, marks));
+    // 中文注解：批注必须包围真实文字范围，并在范围结束后写入引用标记，Word 才会显示审阅气泡。
+    return [
+      ...(node.attribs?.["data-comment-range-start"] !== "false" ? [new CommentRangeStart(commentId)] : []),
+      ...children,
+      ...(node.attribs?.["data-comment-range-end"] !== "false" ? [new CommentRangeEnd(commentId), new CommentReference(commentId)] : [])
+    ];
+  }
   const footnoteId = normalizeFootnoteId(node?.attribs?.["data-footnote-id"]);
   const footnoteText = normalizeFootnoteText(node?.attribs?.["data-footnote-text"]);
   if (footnoteId && footnoteText) {
@@ -3059,6 +3137,20 @@ function extractDocxBlocksFromNodes(nodes = [], emptyText = "空白文档") {
 
 function extractDocxSectionsFromHtml(html = "", firstPageLayout = defaultPageLayout) {
   const parsed = parseDocument(html, { decodeEntities: true });
+  const commentRanges = new Map();
+  for (const node of xmlDescendants(parsed, "span")) {
+    const commentId = normalizeCommentId(node.attribs?.["data-comment-id"]);
+    if (commentId === null || !normalizeFootnoteText(node.attribs?.["data-comment-text"])) continue;
+    if (!commentRanges.has(commentId)) commentRanges.set(commentId, []);
+    commentRanges.get(commentId).push(node);
+  }
+  for (const nodes of commentRanges.values()) {
+    // 中文注解：跨段批注在 HTML 中会拆成多个合法 span，导出前只让首片段开启、末片段关闭原生 Word 范围。
+    nodes.forEach((node, index) => {
+      node.attribs["data-comment-range-start"] = index === 0 ? "true" : "false";
+      node.attribs["data-comment-range-end"] = index === nodes.length - 1 ? "true" : "false";
+    });
+  }
   const sections = [{ pageLayout: normalizePageLayout(firstPageLayout), breakType: "nextPage", nodes: [] }];
   for (const child of parsed.children || []) {
     if (isSectionBreakNode(child)) {
@@ -3156,6 +3248,26 @@ function collectHtmlNotes(content = "", noteName = "footnote") {
     // 中文注解：每一行作为注释部件中的独立段落，保留在线输入的手动分段。
     children: text.split("\n").map((line) => new Paragraph({ text: line || " ", style: paragraphStyle, spacing: { after: 0 } }))
   }]));
+}
+
+function collectHtmlComments(content = "") {
+  const document = parseDocument(content, { decodeEntities: true });
+  const comments = new Map();
+  for (const node of xmlDescendants(document, "span")) {
+    const id = normalizeCommentId(node.attribs?.["data-comment-id"]);
+    const text = normalizeFootnoteText(node.attribs?.["data-comment-text"]);
+    if (id === null || !text || comments.has(id)) continue;
+    const dateText = normalizeCommentDate(node.attribs?.["data-comment-date"]);
+    comments.set(id, {
+      id,
+      text,
+      author: normalizeCommentField(node.attribs?.["data-comment-author"]) || "在线审阅者",
+      initials: normalizeCommentField(node.attribs?.["data-comment-initials"], 20),
+      ...(dateText ? { date: new Date(dateText) } : {}),
+      children: text.split("\n").map((line) => new Paragraph({ text: line || " " }))
+    });
+  }
+  return Array.from(comments.values());
 }
 
 function createDocxHeaderFooter(pageLayout, templateStyle = {}, forceDefault = false, forceEven = false) {
@@ -3306,6 +3418,7 @@ async function createDocxBuffer({ title, content, templateStyle = null, pageLayo
   const contentSections = extractDocxSectionsFromHtml(content, pageLayout);
   const footnotes = collectHtmlNotes(content, "footnote");
   const endnotes = collectHtmlNotes(content, "endnote");
+  const comments = collectHtmlComments(content);
   const orderedListStarts = new Map();
   const contentDocument = parseDocument(content || "", { decodeEntities: true });
   for (const listNode of xmlDescendants(contentDocument, "ol")) {
@@ -3360,6 +3473,7 @@ async function createDocxBuffer({ title, content, templateStyle = null, pageLayo
     },
     ...(Object.keys(footnotes).length ? { footnotes } : {}),
     ...(Object.keys(endnotes).length ? { endnotes } : {}),
+    ...(comments.length ? { comments: { children: comments } } : {}),
     sections: documentSections
   });
 

@@ -51,6 +51,7 @@ const content = `
   <p>Manual line one<br>Manual line two</p>
   <p>Footnote export source<span class="footnote-reference" data-footnote-id="7" data-footnote-text="Exported footnote detail">7</span></p>
   <p>Endnote export source<span class="endnote-reference" data-endnote-id="8" data-endnote-text="Exported endnote detail">8</span></p>
+  <p>Comment export <span class="comment-mark" data-comment-id="9" data-comment-text="Exported review note" data-comment-author="Review User" data-comment-initials="RU" data-comment-date="2026-07-16T02:00:00.000Z">reviewed text</span></p>
   <p data-paragraph-shading='{"fill":"#DDEBF7","color":"#000000","type":"clear"}' data-paragraph-borders='{"top":{"style":"single","size":8,"color":"#FF0000","space":4},"right":{"style":"dashed","size":6,"color":"#00AA00","space":3},"bottom":{"style":"double","size":12,"color":"#0000FF","space":2},"left":{"style":"nil","size":0,"color":"#000000","space":0},"between":{"style":"dotted","size":4,"color":"#888888","space":1}}' style="background-color:#DDEBF7;border-top:1.33px solid #FF0000;padding-top:5.33px">Paragraph appearance export</p>
   <p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab project<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Tab amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p>
   <p>查看 <a href="https://example.com/report?from=editor" target="_blank" rel="noopener noreferrer">Linked report</a></p>
@@ -111,6 +112,7 @@ const headerXmlParts = await Promise.all(zip.file(/^word\/header\d+\.xml$/).map(
 const footerXmlParts = await Promise.all(zip.file(/^word\/footer\d+\.xml$/).map((file) => file.async("string")));
 const footnotesXml = await zip.file("word/footnotes.xml")?.async("string") || "";
 const endnotesXml = await zip.file("word/endnotes.xml")?.async("string") || "";
+const commentsXml = await zip.file("word/comments.xml")?.async("string") || "";
 const mediaFiles = zip.file(/^word\/media\/.+\.(?:png|jpe?g|gif|webp)$/i);
 
 assert.ok(documentXml, "document.xml should exist");
@@ -122,6 +124,9 @@ assert.match(footnotesXml, /<w:footnote w:id="7">[\s\S]*Exported footnote detail
 assert.match(documentXml, /<w:endnoteReference w:id="8"\/>/);
 assert.match(relationshipsXml, /relationships\/endnotes" Target="endnotes\.xml"/);
 assert.match(endnotesXml, /<w:endnote w:id="8">[\s\S]*Exported endnote detail[\s\S]*<\/w:endnote>/);
+assert.match(documentXml, /<w:commentRangeStart w:id="9"\/>[\s\S]*reviewed text[\s\S]*<w:commentRangeEnd w:id="9"\/>[\s\S]*<w:commentReference w:id="9"\/>/);
+assert.match(relationshipsXml, /relationships\/comments" Target="comments\.xml"/);
+assert.match(commentsXml, /<w:comment(?=[^>]+w:id="9")(?=[^>]+w:author="Review User")(?=[^>]+w:initials="RU")[^>]*>[\s\S]*Exported review note[\s\S]*<\/w:comment>/);
 // 中文注解：在线链接必须写入原生 DOCX hyperlink 关系，不能退化成仅有蓝色下划线的普通文字。
 assert.match(documentXml, /<w:hyperlink[^>]+r:id="[^"]+"[^>]*>[\s\S]*Linked report[\s\S]*<\/w:hyperlink>/);
 assert.match(relationshipsXml, /Target="https:\/\/example\.com\/report\?from=editor" TargetMode="External"/);

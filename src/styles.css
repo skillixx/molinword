@@ -308,6 +308,74 @@ button:disabled {
   text-align: right;
 }
 
+.comment-mark {
+  padding: 0 1px;
+  border-bottom: 2px solid #d49b16;
+  background: #fff4c7;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  cursor: pointer;
+}
+
+.document-comments {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #dfe5eb;
+}
+
+.document-comments-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  color: #26323d;
+  font-size: 13px;
+}
+
+.document-comments-title > span {
+  min-width: 22px;
+  color: #687684;
+  text-align: right;
+}
+
+.ai-panel button.document-comment {
+  display: grid;
+  gap: 3px;
+  min-height: 0;
+  padding: 8px 10px;
+  border-left: 3px solid #d49b16;
+  text-align: left;
+}
+
+.document-comment > span,
+.document-comment > strong,
+.document-comment > small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-comment > span {
+  color: #24313d;
+  font-size: 12px;
+}
+
+.document-comment > strong {
+  color: #715207;
+  font-size: 12px;
+}
+
+.document-comment > small,
+.document-comments-empty {
+  color: #687684;
+  font-size: 11px;
+}
+
+.document-comments-empty {
+  padding: 6px 0;
+}
+
 .image-format-control,
 .image-layout-segments {
   display: inline-flex;

@@ -22,6 +22,7 @@ async function buildFormattedDocxFixture() {
   <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
   <Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>
   <Override PartName="/word/endnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml"/>
+  <Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/>
 </Types>`
   );
   zip.folder("_rels").file(
@@ -41,6 +42,7 @@ async function buildFormattedDocxFixture() {
   <Relationship Id="rIdHyperlink1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://platform.openai.com/docs" TargetMode="External"/>
   <Relationship Id="rIdFootnotes1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/>
   <Relationship Id="rIdEndnotes1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/endnotes" Target="endnotes.xml"/>
+  <Relationship Id="rIdComments1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/>
 </Relationships>`
   );
   zip.folder("word").file("footnotes.xml", `<?xml version="1.0" encoding="UTF-8"?>
@@ -55,6 +57,11 @@ async function buildFormattedDocxFixture() {
   <w:endnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:endnote>
   <w:endnote w:id="3"><w:p><w:r><w:endnoteRef/><w:t xml:space="preserve"> Imported endnote detail</w:t></w:r></w:p></w:endnote>
 </w:endnotes>`);
+  zip.folder("word").file("comments.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:comment w:id="4" w:author="Imported Reviewer" w:initials="IR" w:date="2026-07-16T03:00:00Z"><w:p><w:r><w:t>Imported review note</w:t></w:r></w:p></w:comment>
+  <w:comment w:id="5" w:author="Cross Reviewer" w:initials="CR" w:date="2026-07-16T04:00:00Z"><w:p><w:r><w:t>Cross paragraph review</w:t></w:r></w:p></w:comment>
+</w:comments>`);
   zip.folder("word").file("header1.xml", `<?xml version="1.0" encoding="UTF-8"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:eastAsia="Microsoft YaHei"/><w:sz w:val="24"/><w:color w:val="1F4E79"/><w:b/><w:i/></w:rPr><w:t>导入页眉</w:t></w:r></w:p></w:hdr>`);
   zip.folder("word").file("footer1.xml", `<?xml version="1.0" encoding="UTF-8"?><w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia="SimSun"/><w:sz w:val="21"/><w:color w:val="C00000"/></w:rPr><w:t>导入页脚 · 第 </w:t><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="end"/><w:t> 页 / 共 </w:t><w:fldChar w:fldCharType="begin"/><w:instrText>NUMPAGES</w:instrText><w:fldChar w:fldCharType="end"/><w:t> 页</w:t></w:r></w:p></w:ftr>`);
   zip.folder("word").folder("media").file("image1.png", tinyPngBase64, { base64: true });
@@ -174,6 +181,9 @@ async function buildFormattedDocxFixture() {
     <w:p><w:r><w:t>Manual line one</w:t><w:br/><w:t>Manual line two</w:t></w:r></w:p>
     <w:p><w:r><w:t>Footnote source</w:t><w:footnoteReference w:id="2"/></w:r></w:p>
     <w:p><w:r><w:t>Endnote source</w:t><w:endnoteReference w:id="3"/></w:r></w:p>
+    <w:p><w:r><w:t>Comment before </w:t></w:r><w:commentRangeStart w:id="4"/><w:r><w:t>commented source</w:t></w:r><w:commentRangeEnd w:id="4"/><w:r><w:commentReference w:id="4"/></w:r><w:r><w:t> after</w:t></w:r></w:p>
+    <w:p><w:commentRangeStart w:id="5"/><w:r><w:t>Cross comment first paragraph</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Cross comment second paragraph</w:t></w:r><w:commentRangeEnd w:id="5"/><w:r><w:commentReference w:id="5"/></w:r></w:p>
     <w:p><w:pPr><w:shd w:val="clear" w:color="000000" w:fill="FFF2CC"/><w:pBdr><w:top w:val="single" w:sz="8" w:space="4" w:color="FF0000"/><w:right w:val="dashed" w:sz="6" w:space="3" w:color="00AA00"/><w:bottom w:val="double" w:sz="12" w:space="2" w:color="0000FF"/><w:left w:val="nil" w:sz="0" w:space="0" w:color="000000"/><w:between w:val="dotted" w:sz="4" w:space="1" w:color="888888"/></w:pBdr></w:pPr><w:r><w:t>Paragraph appearance</w:t></w:r></w:p>
     <w:p>
       <w:pPr><w:tabs><w:tab w:val="left" w:pos="1440"/><w:tab w:val="right" w:pos="5760"/></w:tabs></w:pPr>
@@ -533,6 +543,8 @@ const importedManualLineBreakParagraph = (imported.content.match(/<p(?:\s[^>]*)?
 assert.match(importedManualLineBreakParagraph, /Manual line one[\s\S]*?<br\s*\/?\s*>[\s\S]*?Manual line two/);
 assert.match(imported.content, /Footnote source[\s\S]*?<span[^>]+class="footnote-reference"[^>]+data-footnote-id="2"[^>]+data-footnote-text="Imported footnote detail"[^>]*>2<\/span>/);
 assert.match(imported.content, /Endnote source[\s\S]*?<span[^>]+class="endnote-reference"[^>]+data-endnote-id="3"[^>]+data-endnote-text="Imported endnote detail"[^>]*>3<\/span>/);
+assert.match(imported.content, /Comment before [\s\S]*?<span[^>]+class="comment-mark"[^>]+data-comment-id="4"[^>]+data-comment-text="Imported review note"[^>]+data-comment-author="Imported Reviewer"[^>]+data-comment-initials="IR"[^>]*>commented source<\/span>[\s\S]*? after/);
+assert.match(imported.content, /<p[^>]*><span[^>]+data-comment-id="5"[^>]+data-comment-text="Cross paragraph review"[^>]*>Cross comment first paragraph<\/span><\/p>[\s\S]*?<p[^>]*><span[^>]+data-comment-id="5"[^>]+data-comment-text="Cross paragraph review"[^>]*>Cross comment second paragraph<\/span><\/p>/);
 const importedTabParagraph = (imported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || [])
   .find((paragraph) => paragraph.includes("Tab project") && paragraph.includes("100.00")) || "";
 assert.match(importedTabParagraph, /data-tab-stops="[^\"]*1440[^\"]*5760[^\"]*"/);
@@ -667,6 +679,7 @@ const roundTripXml = await roundTripZip.file("word/document.xml")?.async("string
 const roundTripNumberingXml = await roundTripZip.file("word/numbering.xml")?.async("string") || "";
 const roundTripFootnotesXml = await roundTripZip.file("word/footnotes.xml")?.async("string") || "";
 const roundTripEndnotesXml = await roundTripZip.file("word/endnotes.xml")?.async("string") || "";
+const roundTripCommentsXml = await roundTripZip.file("word/comments.xml")?.async("string") || "";
 const decoratedRoundTripXml = (roundTripXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || [])
   .find((run) => run.includes(">斜体下划线删除线文本</w:t>")) || "";
 assert.match(decoratedRoundTripXml, /<w:i\/>/);
@@ -716,6 +729,12 @@ assert.match(roundTripXml, /Footnote source[\s\S]*?<w:footnoteReference w:id="2"
 assert.match(roundTripFootnotesXml, /<w:footnote w:id="2">[\s\S]*Imported footnote detail[\s\S]*<\/w:footnote>/);
 assert.match(roundTripXml, /Endnote source[\s\S]*?<w:endnoteReference w:id="3"\/>/);
 assert.match(roundTripEndnotesXml, /<w:endnote w:id="3">[\s\S]*Imported endnote detail[\s\S]*<\/w:endnote>/);
+assert.match(roundTripXml, /<w:commentRangeStart w:id="4"\/>[\s\S]*commented source[\s\S]*<w:commentRangeEnd w:id="4"\/>[\s\S]*<w:commentReference w:id="4"\/>/);
+assert.match(roundTripCommentsXml, /<w:comment(?=[^>]+w:id="4")(?=[^>]+w:author="Imported Reviewer")(?=[^>]+w:initials="IR")[^>]*>[\s\S]*Imported review note[\s\S]*<\/w:comment>/);
+assert.equal((roundTripXml.match(/<w:commentRangeStart w:id="5"\/>/g) || []).length, 1);
+assert.equal((roundTripXml.match(/<w:commentRangeEnd w:id="5"\/>/g) || []).length, 1);
+assert.match(roundTripXml, /<w:commentRangeStart w:id="5"\/>[\s\S]*Cross comment first paragraph[\s\S]*Cross comment second paragraph[\s\S]*<w:commentRangeEnd w:id="5"\/>/);
+assert.match(roundTripCommentsXml, /<w:comment(?=[^>]+w:id="5")(?=[^>]+w:author="Cross Reviewer")(?=[^>]+w:initials="CR")[^>]*>[\s\S]*Cross paragraph review[\s\S]*<\/w:comment>/);
 const customOutlineRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Custom outline level 4")) || "";
 const directOutlineRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Direct outline level 8")) || "";
 assert.match(customOutlineRoundTripXml, /<w:outlineLvl w:val="3"\/>/);
@@ -788,6 +807,10 @@ const roundTripManualLineBreakParagraph = (roundTripImported.content.match(/<p(?
 assert.match(roundTripManualLineBreakParagraph, /Manual line one[\s\S]*?<br\s*\/?\s*>[\s\S]*?Manual line two/);
 assert.match(roundTripImported.content, /Footnote source[\s\S]*?data-footnote-id="2"[^>]+data-footnote-text="Imported footnote detail"/);
 assert.match(roundTripImported.content, /Endnote source[\s\S]*?data-endnote-id="3"[^>]+data-endnote-text="Imported endnote detail"/);
+assert.match(roundTripImported.content, /<span(?=[^>]+data-comment-id="4")(?=[^>]+data-comment-text="Imported review note")(?=[^>]+data-comment-author="Imported Reviewer")(?=[^>]+data-comment-initials="IR")[^>]*>[\s\S]*?commented source[\s\S]*?<\/span>/);
+assert.equal((roundTripImported.content.match(/data-comment-id="5"/g) || []).length, 2);
+assert.match(roundTripImported.content, /data-comment-id="5"[^>]+data-comment-text="Cross paragraph review"[^>]*>[\s\S]*?Cross comment first paragraph/);
+assert.match(roundTripImported.content, /data-comment-id="5"[^>]+data-comment-text="Cross paragraph review"[^>]*>[\s\S]*?Cross comment second paragraph/);
 assert.match(roundTripImported.content, /<h4[^>]+data-outline-level="3"[^>]*>[\s\S]*?Custom outline level 4/);
 assert.match(roundTripImported.content, /<p[^>]+data-outline-level="7"[^>]*>[\s\S]*?Direct outline level 8/);
 assert.match(roundTripImported.content, /分栏符前[\s\S]*?<\/p><div data-column-break="true" class="column-break-marker"><\/div><p[^>]*>[\s\S]*?分栏符后/);
