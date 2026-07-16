@@ -1390,6 +1390,8 @@ textarea {
 
 .paged-preview .page-break-marker,
 .pagination-measurer .page-break-marker,
+.paged-preview .column-break-marker,
+.pagination-measurer .column-break-marker,
 .paged-preview .section-break-marker,
 .pagination-measurer .section-break-marker {
   display: none;
@@ -1543,6 +1545,7 @@ textarea {
 }
 
 .word-editor .page-break-marker,
+.word-editor .column-break-marker,
 .word-editor .section-break-marker {
   position: relative;
   display: block;
@@ -1557,6 +1560,16 @@ textarea {
 
 .word-editor .page-break-marker::before {
   content: "分页符";
+  position: absolute;
+  left: 50%;
+  top: -9px;
+  transform: translateX(-50%);
+  background: #ffffff;
+  padding: 0 8px;
+}
+
+.word-editor .column-break-marker::before {
+  content: "分栏符";
   position: absolute;
   left: 50%;
   top: -9px;

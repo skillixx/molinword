@@ -190,6 +190,9 @@ async function buildFormattedDocxFixture() {
       <w:r><w:br w:type="page"/></w:r>
       <w:r><w:t>分页符后</w:t></w:r>
     </w:p>
+    <w:p>
+      <w:r><w:t>分栏符前</w:t><w:br w:type="column"/><w:t>分栏符后</w:t></w:r>
+    </w:p>
     <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="7"/></w:numPr></w:pPr><w:r><w:t>Ordered item 1</w:t></w:r></w:p>
     <w:p><w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="7"/></w:numPr></w:pPr><w:r><w:t>Nested ordered item</w:t></w:r></w:p>
     <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="7"/></w:numPr></w:pPr><w:r><w:t>Ordered item 2</w:t></w:r></w:p>
@@ -550,6 +553,7 @@ assert.match(imported.content, /<th(?:\s|>)/);
 assert.match(imported.content, /<td(?:\s|>)/);
 assert.match(imported.content, /Import Cell 1/);
 assert.match(imported.content, /data-page-break="true"/);
+assert.match(imported.content, /分栏符前[\s\S]*?<\/p><div data-column-break="true" class="column-break-marker"><\/div><p[^>]*>[\s\S]*?分栏符后/);
 assert.match(imported.content, /<img[^>]+src="data:image\/png;base64,/);
 assert.match(imported.content, /<img[^>]+alt="正文流程图"/);
 assert.match(imported.content, /图片前文字[\s\S]*<img[^>]+alt="混排图标"[\s\S]*图片后文字/);
@@ -639,6 +643,7 @@ assert.match(decoratedRoundTripXml, /<w:i\/>/);
 assert.match(decoratedRoundTripXml, /<w:u(?:\s+w:val="single")?\/>/);
 assert.match(decoratedRoundTripXml, /<w:strike\/>/);
 assert.match(roundTripXml, /<w:gridSpan w:val="2"\/>/);
+assert.match(roundTripXml, /<w:br w:type="column"\/>/);
 assert.match(roundTripXml, /<w:vMerge w:val="restart"\/>/);
 assert.match(roundTripXml, /<w:vMerge w:val="continue"\/>/);
 assert.match(roundTripNumberingXml, /<w:start w:val="7"\/>/);
@@ -736,6 +741,7 @@ assert.match(roundTripRtlParagraph, /data-bidirectional="true"/);
 assert.match(roundTripRtlParagraph, /direction:\s*rtl/);
 assert.match(roundTripImported.content, /<h4[^>]+data-outline-level="3"[^>]*>[\s\S]*?Custom outline level 4/);
 assert.match(roundTripImported.content, /<p[^>]+data-outline-level="7"[^>]*>[\s\S]*?Direct outline level 8/);
+assert.match(roundTripImported.content, /分栏符前[\s\S]*?<\/p><div data-column-break="true" class="column-break-marker"><\/div><p[^>]*>[\s\S]*?分栏符后/);
 const roundTripImportedTabParagraph = (roundTripImported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || [])
   .find((paragraph) => paragraph.includes("Tab project") && paragraph.includes("100.00")) || "";
 assert.equal((roundTripImportedTabParagraph.match(/data-docx-tab="true"/g) || []).length, 2);

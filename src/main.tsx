@@ -23,6 +23,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Combine,
+  Columns3,
   Download,
   Eraser,
   FileText,
@@ -1967,6 +1968,20 @@ const PageBreak = TiptapNode.create({
   }
 });
 
+const ColumnBreak = TiptapNode.create({
+  name: "columnBreak",
+  group: "block",
+  atom: true,
+  selectable: true,
+  parseHTML() {
+    return [{ tag: 'div[data-column-break="true"]' }];
+  },
+  renderHTML() {
+    // 中文注解：分栏符作为独立块保存，分页器和 DOCX 导出可从同一节点恢复准确的栏流位置。
+    return ["div", { "data-column-break": "true", class: "column-break-marker" }];
+  }
+});
+
 const SectionBreak = TiptapNode.create({
   name: "sectionBreak",
   group: "block",
@@ -3187,7 +3202,7 @@ function Editor(props: {
   }, [props.pageLayout]);
 
   const editor = useEditor({
-    extensions: [StarterKit.configure({ link: { openOnClick: false, autolink: false, linkOnPaste: true, HTMLAttributes: { target: "_blank", rel: "noopener noreferrer" } } }), DocumentImage.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DocxTab, ListFormatAttributes, OutlineLevelAttributes, ParagraphIndent, PageBreak, SectionBreak, DocumentTable, DocumentTableRow, DocumentTableHeader, DocumentTableCell],
+    extensions: [StarterKit.configure({ link: { openOnClick: false, autolink: false, linkOnPaste: true, HTMLAttributes: { target: "_blank", rel: "noopener noreferrer" } } }), DocumentImage.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DocxTab, ListFormatAttributes, OutlineLevelAttributes, ParagraphIndent, PageBreak, ColumnBreak, SectionBreak, DocumentTable, DocumentTableRow, DocumentTableHeader, DocumentTableCell],
     content: props.content,
     editorProps: { attributes: { class: "word-editor" } },
     onCreate({ editor }) {
@@ -3414,6 +3429,16 @@ function Editor(props: {
       if (child instanceof HTMLElement && child.dataset.pageBreak === "true") {
         // 中文注解：手动分页符直接强制开启新页，保证在线分页位置和 DOCX 导出的分页位置一致。
         openNextPage(true);
+        return;
+      }
+      if (child instanceof HTMLElement && child.dataset.columnBreak === "true") {
+        // 中文注解：分栏符推进到下一栏；当前已经是末栏时按 Word 语义推进到下一页首栏。
+        if (currentColumnIndex < currentGeometry.columnCount - 1) {
+          currentColumnIndex += 1;
+          currentHeight = 0;
+        } else {
+          openNextPage(true);
+        }
         return;
       }
 
@@ -3867,6 +3892,13 @@ function Editor(props: {
     setSelectionHint("已插入分页符。");
   };
 
+  const insertManualColumnBreak = () => {
+    if (!editor) return;
+    // 中文注解：插入后补空段落，用户可以立即在下一栏继续输入，操作方式与桌面办公软件一致。
+    editor.chain().focus().insertContent([{ type: "columnBreak" }, { type: "paragraph" }]).run();
+    setSelectionHint("已插入分栏符。");
+  };
+
   const updateCurrentSectionLayout = (updater: (current: DocumentPageLayout) => DocumentPageLayout) => {
     const currentSectionIndex = activeSectionIndexRef.current;
     const nextLayout = normalizeDocumentPageLayout(updater(activeSectionLayoutRef.current));
@@ -4200,6 +4232,7 @@ function Editor(props: {
             <button onClick={() => editor?.chain().focus().undo().run()} disabled={!editor?.can().undo()} title="撤销" aria-label="撤销"><Undo2 size={16} /></button>
             <button onClick={() => editor?.chain().focus().redo().run()} disabled={!editor?.can().redo()} title="重做" aria-label="重做"><Redo2 size={16} /></button>
             <button onClick={insertManualPageBreak} title="在当前位置插入分页符"><FileText size={16} />分页符</button>
+            <button onClick={insertManualColumnBreak} title="在当前位置插入分栏符并进入下一栏"><Columns3 size={16} />分栏符</button>
             <button onClick={insertSectionBreak} title="从下一页开始新节并允许独立页面设置"><Rows3 size={16} />分节符</button>
             <span className="format-divider" />
             <FormatSelect title="设置当前段落样式" placeholder="段落样式" options={paragraphStyleOptions} onSelect={(value) => applyDocumentTextStyle(value)} />

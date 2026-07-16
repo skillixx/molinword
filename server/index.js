@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import express from "express";
-import { AlignmentType, BorderStyle, Column, Document, ExternalHyperlink, Footer, Header, HeadingLevel, HeightRule, ImageRun, LevelFormat, LineRuleType, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, Tab, Table, TableCell, TableLayoutType, TableRow, TextDirection, TextRun, TextWrappingSide, TextWrappingType, VerticalAlignTable, WidthType } from "docx";
+import { AlignmentType, BorderStyle, Column, ColumnBreak as DocxColumnBreak, Document, ExternalHyperlink, Footer, Header, HeadingLevel, HeightRule, ImageRun, LevelFormat, LineRuleType, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, Tab, Table, TableCell, TableLayoutType, TableRow, TextDirection, TextRun, TextWrappingSide, TextWrappingType, VerticalAlignTable, WidthType } from "docx";
 import { imageSize } from "image-size";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
@@ -468,7 +468,7 @@ function sanitizeImportedHtml(value = "") {
       th: ["style", "colspan", "rowspan", "colwidth", "data-docx-cell", "data-cell-margins", "data-cell-vertical-align", "data-cell-text-direction", "data-cell-shading", "data-cell-borders"],
       td: ["style", "colspan", "rowspan", "colwidth", "data-docx-cell", "data-cell-margins", "data-cell-vertical-align", "data-cell-text-direction", "data-cell-shading", "data-cell-borders"],
       img: ["src", "alt", "style", "width", "height", "data-docx-floating", "data-docx-wrap", "data-docx-float-align"],
-      div: ["data-page-break", "data-section-break", "data-section-layout", "class"]
+      div: ["data-page-break", "data-column-break", "data-section-break", "data-section-layout", "class"]
     },
     allowedSchemes: ["data", "http", "https", "mailto"],
     allowedStyles: {
@@ -1065,7 +1065,7 @@ function docxTextFromRun(runNode) {
     .map((child) => {
       if (child.type === "tag" && child.name === "w:t") return child.children?.map((textNode) => textNode.data || "").join("") || "";
       if (child.type === "tag" && child.name === "w:tab") return "\t";
-      if (child.type === "tag" && child.name === "w:br" && firstValue(child.attribs, ["w:type", "type"]) !== "page") return "\n";
+      if (child.type === "tag" && child.name === "w:br" && !["page", "column"].includes(firstValue(child.attribs, ["w:type", "type"]))) return "\n";
       return "";
     })
     .join("");
@@ -1073,6 +1073,10 @@ function docxTextFromRun(runNode) {
 
 function pageBreakHtml() {
   return '<div data-page-break="true" class="page-break-marker"></div>';
+}
+
+function columnBreakHtml() {
+  return '<div data-column-break="true" class="column-break-marker"></div>';
 }
 
 function normalizeSectionBreakType(value) {
@@ -1083,13 +1087,6 @@ function normalizeSectionBreakType(value) {
 function sectionBreakHtml(pageLayout, breakType = "nextPage") {
   const encodedLayout = escapeHtml(JSON.stringify(normalizePageLayout(pageLayout)));
   return `<div data-section-break="${normalizeSectionBreakType(breakType)}" data-section-layout="${encodedLayout}" class="section-break-marker"></div>`;
-}
-
-function docxPageBreaksFromRun(runNode) {
-  return xmlChildren(runNode, "w:br")
-    .filter((breakNode) => firstValue(breakNode.attribs, ["w:type", "type"]) === "page")
-    .map(() => pageBreakHtml())
-    .join("");
 }
 
 function imageMimeFromPath(value = "") {
@@ -1362,8 +1359,8 @@ async function docxRunToHtml(runNode, inheritedRunStyles = {}, context = {}, tab
   const { zip = null, relationships = new Map(), styleMap = new Map(), themeFonts = {}, themeColors = {} } = context;
   const text = docxTextFromRun(runNode);
   const imageHtml = zip ? (await docxImagesFromRun(runNode, zip, relationships)).join("") : "";
-  const pageBreaks = docxPageBreaksFromRun(runNode);
-  if (!text && !imageHtml && !pageBreaks) return "";
+  const hasBreak = xmlChildren(runNode, "w:br").some((breakNode) => ["page", "column"].includes(firstValue(breakNode.attribs, ["w:type", "type"])));
+  if (!text && !imageHtml && !hasBreak) return "";
   const runProperties = xmlChild(runNode, "w:rPr");
   const characterStyleId = xmlVal(xmlChild(runProperties, "w:rStyle"));
   const characterStyle = styleMap.get(characterStyleId) || { run: {} };
@@ -1395,9 +1392,18 @@ async function docxRunToHtml(runNode, inheritedRunStyles = {}, context = {}, tab
     const style = cssText(runStyles);
     return style && html ? `<span style="${escapeHtml(style)}">${html}</span>` : html;
   }).join("");
-  const textParts = text.split("\t");
-  const textHtml = textParts.map((part, index) => `${renderText(part)}${index < textParts.length - 1 ? docxTabHtml(tabState) : ""}`).join("");
-  return `${textHtml}${imageHtml}${pageBreaks}`;
+  // 中文注解：按 run 内真实子节点顺序输出文字、制表位与断点，避免同一 run 的分页符或分栏符被错误移动到文字末尾。
+  const contentHtml = (runNode.children || []).map((child) => {
+    if (child.type !== "tag") return "";
+    if (child.name === "w:t") return renderText(child.children?.map((textNode) => textNode.data || "").join("") || "");
+    if (child.name === "w:tab") return docxTabHtml(tabState);
+    if (child.name !== "w:br") return "";
+    const breakType = firstValue(child.attribs, ["w:type", "type"]);
+    if (breakType === "page") return pageBreakHtml();
+    if (breakType === "column") return columnBreakHtml();
+    return renderText("\n");
+  }).join("");
+  return `${contentHtml}${imageHtml}`;
 }
 
 async function parseStyledDocxParagraph(paragraphNode, context) {
@@ -1442,14 +1448,11 @@ async function parseStyledDocxParagraph(paragraphNode, context) {
   if (tabState.stops.length) attrs.push(`data-tab-stops="${escapeHtml(JSON.stringify(tabState.stops))}"`);
   if (paragraphStyles.$paragraphShading) attrs.push(`data-paragraph-shading="${escapeHtml(paragraphStyles.$paragraphShading)}"`);
   if (paragraphStyles.$paragraphBorders) attrs.push(`data-paragraph-borders="${escapeHtml(paragraphStyles.$paragraphBorders)}"`);
-  if (body.includes(pageBreakHtml())) {
-    // 中文注解：分页符是块级语义，导入时拆出段落外层，避免保存为非法的 p > div 结构。
-    const chunks = body.split(pageBreakHtml());
-    const html = chunks
-      .flatMap((chunk, index) => [
-        chunk ? `<${tag}${attrs.length ? ` ${attrs.join(" ")}` : ""}>${chunk}</${tag}>` : "",
-        index < chunks.length - 1 ? pageBreakHtml() : ""
-      ])
+  const blockBreakPattern = /(<div data-(?:page|column)-break="true" class="(?:page|column)-break-marker"><\/div>)/g;
+  if (body.includes('data-page-break="true"') || body.includes('data-column-break="true"')) {
+    // 中文注解：分页符和分栏符都是块级语义，导入时拆出段落外层，避免保存为非法的 p > div 结构。
+    const html = body.split(blockBreakPattern)
+      .map((chunk) => /data-(?:page|column)-break="true"/.test(chunk) ? chunk : chunk ? `<${tag}${attrs.length ? ` ${attrs.join(" ")}` : ""}>${chunk}</${tag}>` : "")
       .filter(Boolean)
       .join("");
     return { html: html || pageBreakHtml(), listItem: "", ordered: false, listLevel: 0 };
@@ -2893,6 +2896,10 @@ function isPageBreakNode(node) {
   return node?.name === "div" && node.attribs?.["data-page-break"] === "true";
 }
 
+function isColumnBreakNode(node) {
+  return node?.name === "div" && node.attribs?.["data-column-break"] === "true";
+}
+
 function isSectionBreakNode(node) {
   return node?.name === "div" && Boolean(node.attribs?.["data-section-break"]);
 }
@@ -2910,6 +2917,11 @@ function pageBreakParagraph() {
   return new Paragraph({ children: [new TextRun({ children: [new DocxPageBreak()] })] });
 }
 
+function columnBreakParagraph() {
+  // 中文注解：分栏符使用 Word 原生 ColumnBreak；单栏节中 Word 会自然推进到下一页，多栏节中推进到下一栏。
+  return new Paragraph({ children: [new DocxColumnBreak()] });
+}
+
 function extractDocxBlocksFromNodes(nodes = [], emptyText = "空白文档") {
   const blocks = [];
   // 中文注解：正文和每个表格单元格共用实例分配器，确保所有顶层编号列表都能独立从 1 开始。
@@ -2918,6 +2930,11 @@ function extractDocxBlocksFromNodes(nodes = [], emptyText = "空白文档") {
   function walk(node) {
     if (isPageBreakNode(node)) {
       blocks.push(pageBreakParagraph());
+      return;
+    }
+
+    if (isColumnBreakNode(node)) {
+      blocks.push(columnBreakParagraph());
       return;
     }
 

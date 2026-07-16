@@ -33,6 +33,9 @@ const content = `
   </table>
   <div data-page-break="true" class="page-break-marker"></div>
   <p>分页符后的内容</p>
+  <p>Column break before</p>
+  <div data-column-break="true" class="column-break-marker"></div>
+  <p>Column break after</p>
   <p style="line-height:1.5;margin-top:6pt;margin-bottom:12pt">Spacing paragraph</p>
   <h4 data-outline-level="3">Fourth-level heading</h4>
   <p data-outline-level="7">Eighth-level outline paragraph</p>
@@ -198,6 +201,7 @@ assert.match(documentXml, /<w:tc>/);
 assert.match(documentXml, /表头 A/);
 assert.match(documentXml, /单元格 1/);
 assert.match(documentXml, /<w:br w:type="page"\/>/);
+assert.match(documentXml, /<w:br w:type="column"\/>/);
 // 中文注解：在线选择的 Letter 纸张必须原样写入分节属性，不能在导出时退回 A4。
 assert.match(documentXml, /<w:pgSz[^>]+w:w="12240"[^>]+w:h="15840"/);
 assert.match(documentXml, /<w:pgMar[^>]+w:top="1440"[^>]+w:right="1440"[^>]+w:bottom="1440"[^>]+w:left="1440"/);

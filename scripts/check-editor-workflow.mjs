@@ -533,7 +533,7 @@ try {
   await editor.evaluate((element) => element.click());
   await editor.focus();
   await editor.press("Control+End");
-  await page.getByRole("button", { name: "分节符", exact: true }).click();
+  await page.getByRole("button", { name: "分节符", exact: true }).evaluate((button) => button.click());
   await editor.type("第二节横向内容");
   await page.getByText("页面设置", { exact: true }).click();
   await page.getByText("第 2 节 / 共 2 节", { exact: true }).waitFor();
@@ -567,6 +567,15 @@ try {
   await page.getByText("首页不同", { exact: true }).click();
   await page.getByText("奇偶页不同", { exact: true }).click();
   await page.getByText("页面设置", { exact: true }).click();
+
+  const secondSectionParagraph = editor.locator("p").filter({ hasText: "第二节横向内容" });
+  await secondSectionParagraph.click();
+  await secondSectionParagraph.press("End");
+  await page.getByRole("button", { name: "分栏符", exact: true }).click();
+  await editor.type("分栏符后内容");
+  const editorColumnBreak = editor.locator('[data-column-break="true"]');
+  assert.equal(await editorColumnBreak.count(), 1);
+  assert.deepEqual(await editorColumnBreak.evaluate((marker) => ({ before: marker.previousElementSibling?.textContent || "", after: marker.nextElementSibling?.textContent || "" })), { before: "第二节横向内容", after: "分栏符后内容" });
 
   await floatingEditorImage.click();
   await page.getByLabel("选中图片宽度", { exact: true }).fill("56");
@@ -614,6 +623,8 @@ try {
   assert.match(storedDocument.content, /rowspan="2"/);
   assert.match(storedDocument.content, /<table(?=[^>]*data-table-alignment="left")(?=[^>]*data-table-indent="567")(?=[^>]*data-table-cell-spacing="120")(?=[^>]*style="[^"]*margin-left:\s*37\.8px)(?=[^>]*style="[^"]*margin-right:\s*auto)(?=[^>]*style="[^"]*border-spacing:\s*8px)[^>]*>[\s\S]*?商务评审/);
   assert.match(storedDocument.content, /第二节横向内容/);
+  assert.match(storedDocument.content, /<div[^>]+data-column-break="true"[^>]*><\/div>/);
+  assert.ok(storedDocument.content.indexOf("第二节横向内容") < storedDocument.content.indexOf('data-column-break="true"') && storedDocument.content.indexOf('data-column-break="true"') < storedDocument.content.indexOf("分栏符后内容"));
   assert.match(storedDocument.content, /第二节横向页眉/);
   const storedSectionLayoutText = storedDocument.content.match(/data-section-layout="([^"]+)"/)?.[1]
     .replaceAll("&quot;", '"')
@@ -702,6 +713,8 @@ try {
   assert.match(reopenedHtml, /<p[^>]+data-bidirectional="true"[^>]+style="[^"]*direction:\s*rtl[^"]*"[^>]*>[\s\S]*?RTL段落工具内容[\s\S]*?<\/p>/);
   assert.match(reopenedHtml, /data-section-break="nextPage"/);
   assert.match(reopenedHtml, /第二节横向内容/);
+  assert.match(reopenedHtml, /<div[^>]+data-column-break="true"[^>]*><\/div>/);
+  assert.ok(reopenedHtml.indexOf("第二节横向内容") < reopenedHtml.indexOf('data-column-break="true"') && reopenedHtml.indexOf('data-column-break="true"') < reopenedHtml.indexOf("分栏符后内容"));
   assert.equal((reopenedHtml.match(/data-docx-tab="true"/g) || []).length, 4);
   assert.match(reopenedHtml, /<td[^>]+data-cell-margins="[^"]*&quot;top&quot;:180[^"]*"[^>]+data-cell-vertical-align="bottom"[^>]+data-cell-text-direction="btLr"[^>]+data-cell-shading="#FFF2CC"[^>]*>.*商务评审/s);
   assert.match(reopenedHtml, /<td[^>]+data-cell-borders="[^"]*&quot;top&quot;[^"]*dashed[^"]*6B7280[^"]*"[^>]*>.*商务评审/s);
@@ -734,6 +747,7 @@ try {
   assert.ok(headerXmlParts.some((xml) => /<w:drawing>/.test(xml)) && headerMedia.length > 0, "在线页眉图片应进入导出的 DOCX 媒体部件");
   assert.equal((documentXml.match(/<w:sectPr(?:\s|>)/g) || []).length, 2);
   assert.match(documentXml, /<w:type w:val="nextPage"\/>/);
+  assert.match(documentXml, /<w:br w:type="column"\/>/);
   assert.match(documentXml, /<w:pgSz[^>]+w:orient="landscape"/);
   assert.match(documentXml, /<w:pgMar[^>]+w:top="720"[^>]+w:right="1440"[^>]+w:bottom="720"[^>]+w:left="1440"/);
   assert.match(documentXml, /<w:pgMar[^>]+w:header="482"[^>]+w:footer="839"/);
@@ -1060,6 +1074,15 @@ try {
         return blocks[0]?.textContent?.includes("分页控制段落") && !page.textContent?.includes("分页控制前置段落");
       }),
       paginationControlKeepsNext: Array.from(document.querySelectorAll(".page-sheet")).some((page) => page.textContent?.includes("分页控制段落") && page.textContent?.includes("分页控制后续段落")),
+      columnBreakPlacement: (() => {
+        const page = Array.from(document.querySelectorAll('.page-sheet[data-section-index="1"]')).find((item) => item.textContent?.includes("第二节横向内容"));
+        const columns = page ? Array.from(page.querySelectorAll(".page-column")) : [];
+        return {
+          samePage: Boolean(page?.textContent?.includes("分栏符后内容")),
+          beforeColumn: columns.findIndex((column) => column.textContent?.includes("第二节横向内容")),
+          afterColumn: columns.findIndex((column) => column.textContent?.includes("分栏符后内容"))
+        };
+      })(),
       widowFragmentLineCounts: Array.from(document.querySelectorAll(".page-body p")).filter((paragraph) => paragraph.textContent?.includes("孤行控制验证段落")).map((paragraph) => {
         const range = document.createRange();
         range.selectNodeContents(paragraph);
@@ -1136,6 +1159,7 @@ try {
   });
   assert.equal(result.paginationControlStartsPage, true, "段前分页段落应成为新页首段");
   assert.equal(result.paginationControlKeepsNext, true, "与下段同页应保留后续段落在同一页");
+  assert.deepEqual(result.columnBreakPlacement, { samePage: true, beforeColumn: 0, afterColumn: 1 }, "分栏符应把后续内容推进到同页下一栏");
   assert.ok(result.widowFragmentLineCounts.length > 1, "孤行控制夹具应跨越多个页面");
   assert.ok(result.widowFragmentLineCounts.every((lines) => lines >= 2), "孤行控制段落的每个分页片段都应至少保留两行");
   assert.equal(result.widowPreviewText, widowText);
@@ -1251,7 +1275,7 @@ try {
   await page.getByRole("button", { name: "编辑", exact: true }).click();
   await editor.locator("td").first().click();
   const sectionCountBeforeNestedInsert = await editor.locator(":scope > .section-break-marker").count();
-  await page.getByRole("button", { name: "分节符", exact: true }).click();
+  await page.getByRole("button", { name: "分节符", exact: true }).evaluate((button) => button.click());
   // 中文注解：从表格单元格插入时也必须提升为正文顶层节点，否则预览和导出都无法拆节。
   assert.equal(await editor.locator(":scope > .section-break-marker").count(), sectionCountBeforeNestedInsert + 1);
   assert.equal(await editor.locator("table .section-break-marker, li .section-break-marker").count(), 0);
