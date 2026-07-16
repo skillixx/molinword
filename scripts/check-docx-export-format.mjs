@@ -20,6 +20,7 @@ const content = `
     <span style="text-decoration-line:underline;text-decoration-style:double;text-decoration-color:#00AA00;--word-underline-type:double">Advanced double underline</span>
     <span style="text-transform:uppercase">All caps export source</span>
     <span style="font-variant-caps:small-caps">Small caps export source</span>
+    <span style="border-top:2px double #C00000;border-right:2px double #C00000;border-bottom:2px double #C00000;border-left:2px double #C00000;padding-top:2.67px;padding-right:2.67px;padding-bottom:2.67px;padding-left:2.67px;--word-text-border:double,12,C00000,2">Run border export source</span>
   </p>
   <table>
     <tbody>
@@ -228,6 +229,8 @@ const allCapsXml = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []
 const smallCapsXml = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("Small caps export source")) || "";
 assert.match(allCapsXml, /<w:caps\/>/);
 assert.match(smallCapsXml, /<w:smallCaps\/>/);
+const runBorderXml = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("Run border export source")) || "";
+assert.match(runBorderXml, /<w:bdr[^>]+w:val="double"[^>]+w:color="C00000"[^>]+w:sz="12"[^>]+w:space="2"\/>/);
 
 const spacingParagraphXml = paragraphXmlForText("Spacing paragraph");
 assert.ok(spacingParagraphXml, "spacing paragraph should exist");

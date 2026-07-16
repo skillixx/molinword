@@ -454,6 +454,7 @@ function sanitizeImportedHtml(value = "") {
         "text-decoration-style": [/^(?:solid|double|dotted|dashed|wavy)$/],
         "text-decoration-color": [/^#[0-9a-f]{6}$/i],
         "--word-underline-type": [/^(?:single|words|double|thick|dotted|dottedHeavy|dash|dashedHeavy|dashLong|dashLongHeavy|dotDash|dashDotHeavy|dotDotDash|dashDotDotHeavy|wave|wavyHeavy|wavyDouble)$/],
+        "--word-text-border": [/^(?:single|dashed|dashSmallGap|dotted|dotDash|dotDotDash|double|thick|none|nil),(?:0|[1-9]\d?),[0-9a-f]{6},(?:[0-9]|[12]\d|3[01])$/i],
         "background-color": [/^#[0-9a-f]{6}$/i],
         "text-align": [/^(?:left|center|right|justify)$/],
         "text-indent": [/^-?\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
@@ -466,6 +467,11 @@ function sanitizeImportedHtml(value = "") {
         "padding-right": [/^\d+(?:\.\d+)?px$/],
         "padding-bottom": [/^\d+(?:\.\d+)?px$/],
         "padding-left": [/^\d+(?:\.\d+)?px$/],
+        // 中文注解：浏览器会把四边相同的字符边框合并为简写，保存时必须保留这些安全值供分页预览使用。
+        padding: [/^\d+(?:\.\d+)?px$/],
+        "border-width": [/^\d+(?:\.\d+)?px$/],
+        "border-style": [/^(?:solid|dashed|dotted|double)$/],
+        "border-color": [/^#[0-9a-f]{6}$/i, /^rgb\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*\)$/i],
         "border-top": [/^(?:none|\d+(?:\.\d+)?px (?:solid|dashed|dotted|double) #[0-9a-f]{6})$/i],
         "border-right": [/^(?:none|\d+(?:\.\d+)?px (?:solid|dashed|dotted|double) #[0-9a-f]{6})$/i],
         "border-bottom": [/^(?:none|\d+(?:\.\d+)?px (?:solid|dashed|dotted|double) #[0-9a-f]{6})$/i],
@@ -739,6 +745,17 @@ function parseRunProperties(rPr, themeFonts = {}, themeColors = {}) {
   if (positionNode && Number.isFinite(positionPt)) {
     // 中文注解：Word 的数字位置值以半磅计；正值上移、负值下移，与 CSS vertical-align 的方向一致。
     styles["vertical-align"] = positionPt === 0 ? "baseline" : `${positionPt}pt`;
+  }
+  const textBorder = parseDocxBorderElement(xmlChild(rPr, "w:bdr"), themeColors);
+  if (textBorder) {
+    const borderColor = String(textBorder.color || "#000000").replace("#", "").toUpperCase();
+    const borderSpace = Number(textBorder.space) || 0;
+    styles["--word-text-border"] = `${textBorder.style},${textBorder.size},${borderColor},${borderSpace}`;
+    for (const side of ["top", "right", "bottom", "left"]) styles[`border-${side}`] = docxBorderCss(textBorder);
+    if (borderSpace > 0) {
+      const padding = `${Math.round(borderSpace * 96 / 72 * 100) / 100}px`;
+      for (const side of ["top", "right", "bottom", "left"]) styles[`padding-${side}`] = padding;
+    }
   }
   if (bold) {
     styles.$bold = wordToggleEnabled(bold) ? "1" : "0";
@@ -1428,6 +1445,20 @@ function parseDocxParagraphShading(shadingNode, themeColors = {}) {
 
 const supportedDocxBorderStyles = new Set(["single", "dashed", "dashSmallGap", "dotted", "dotDash", "dotDotDash", "double", "thick", "none", "nil"]);
 
+function parseDocxBorderElement(element, themeColors = {}) {
+  if (!element) return null;
+  const rawStyle = firstValue(element.attribs, ["w:val", "val"]);
+  const style = supportedDocxBorderStyles.has(rawStyle) ? rawStyle : "single";
+  const rawColor = firstValue(element.attribs, ["w:color", "color"]);
+  const themeColor = themeColors[firstValue(element.attribs, ["w:themeColor", "themeColor"])];
+  const color = /^[0-9a-f]{6}$/i.test(rawColor) ? `#${rawColor.toUpperCase()}` : (themeColor ? transformDocxThemeColor(themeColor, firstValue(element.attribs, ["w:themeTint", "themeTint"]), firstValue(element.attribs, ["w:themeShade", "themeShade"])) : "#000000");
+  const rawSize = Number(firstValue(element.attribs, ["w:sz", "sz"]));
+  const size = ["none", "nil"].includes(style) ? 0 : Math.max(1, Math.min(96, Number.isFinite(rawSize) && rawSize > 0 ? Math.round(rawSize) : 4));
+  const rawSpace = firstValue(element.attribs, ["w:space", "space"]);
+  const space = rawSpace === "" ? undefined : Math.max(0, Math.min(31, Math.round(Number(rawSpace) || 0)));
+  return { style, size, color, ...(space === undefined ? {} : { space }) };
+}
+
 function parseDocxBorders(container, themeColors = {}, includeInside = true) {
   const borders = {};
   const names = {
@@ -1438,16 +1469,7 @@ function parseDocxBorders(container, themeColors = {}, includeInside = true) {
     if (!includeInside && side.startsWith("inside")) continue;
     const element = elementNames.map((name) => xmlChild(container, name)).find(Boolean);
     if (!element) continue;
-    const rawStyle = firstValue(element.attribs, ["w:val", "val"]);
-    const style = supportedDocxBorderStyles.has(rawStyle) ? rawStyle : "single";
-    const rawColor = firstValue(element.attribs, ["w:color", "color"]);
-    const themeColor = themeColors[firstValue(element.attribs, ["w:themeColor", "themeColor"])];
-    const color = /^[0-9a-f]{6}$/i.test(rawColor) ? `#${rawColor.toUpperCase()}` : (themeColor ? transformDocxThemeColor(themeColor, firstValue(element.attribs, ["w:themeTint", "themeTint"]), firstValue(element.attribs, ["w:themeShade", "themeShade"])) : "#000000");
-    const rawSize = Number(firstValue(element.attribs, ["w:sz", "sz"]));
-    const size = ["none", "nil"].includes(style) ? 0 : Math.max(1, Math.min(96, Number.isFinite(rawSize) && rawSize > 0 ? Math.round(rawSize) : 4));
-    const rawSpace = firstValue(element.attribs, ["w:space", "space"]);
-    const space = rawSpace === "" ? undefined : Math.max(0, Math.min(31, Math.round(Number(rawSpace) || 0)));
-    borders[side] = { style, size, color, ...(space === undefined ? {} : { space }) };
+    borders[side] = parseDocxBorderElement(element, themeColors);
   }
   return borders;
 }
@@ -2249,6 +2271,8 @@ function textRunStyleFromNode(node) {
     const underlineColor = normalizeDocxColor(styles["text-decoration-color"]);
     runStyle.underline = { type: nativeUnderlineType, ...(underlineColor ? { color: underlineColor } : {}) };
   }
+  const textBorder = docxRunBorderFromStyles(styles);
+  if (textBorder) runStyle.border = textBorder;
   const highlight = normalizeDocxHighlight(node?.attribs?.["data-highlight"]);
   if (highlight) runStyle.highlight = highlight;
   return runStyle;
@@ -2337,6 +2361,7 @@ function textRunsFromNode(node, marks = {}) {
       smallCaps: marks.allCaps !== undefined ? undefined : marks.smallCaps,
       allCaps: marks.allCaps,
       underline: marks.underline === true ? {} : marks.underline,
+      border: marks.border,
       strike: marks.strike,
       color: marks.color,
       size: marks.size,
@@ -2597,6 +2622,22 @@ function docxBordersFromNode(node, attributeName, includeInside, includeBetween 
   } catch {
     return undefined;
   }
+}
+
+function docxBorderStyleValue(style) {
+  return {
+    single: BorderStyle.SINGLE, dashed: BorderStyle.DASHED, dashSmallGap: BorderStyle.DASH_SMALL_GAP,
+    dotted: BorderStyle.DOTTED, dotDash: BorderStyle.DOT_DASH, dotDotDash: BorderStyle.DOT_DOT_DASH,
+    double: BorderStyle.DOUBLE, thick: BorderStyle.THICK, none: BorderStyle.NONE, nil: BorderStyle.NIL
+  }[style];
+}
+
+function docxRunBorderFromStyles(styles = {}) {
+  const match = String(styles["--word-text-border"] || "").match(/^(single|dashed|dashSmallGap|dotted|dotDash|dotDotDash|double|thick|none|nil),(\d{1,2}),([0-9a-f]{6}),(\d{1,2})$/i);
+  if (!match) return undefined;
+  const style = docxBorderStyleValue(match[1]);
+  if (!style) return undefined;
+  return { style, size: Math.max(0, Math.min(96, Number(match[2]))), color: match[3].toUpperCase(), space: Math.max(0, Math.min(31, Number(match[4]))) };
 }
 
 function docxCellMarginsFromNode(cellNode) {

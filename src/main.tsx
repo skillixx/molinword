@@ -776,6 +776,13 @@ const underlineStyleOptions = [
   { label: "波浪下划线", value: "wave" }
 ];
 const underlineCssStyleByType: Record<string, string> = { single: "solid", double: "double", dotted: "dotted", dash: "dashed", wave: "wavy" };
+const textBorderOptions = [
+  { label: "无字符边框", value: "none" },
+  { label: "细字符边框", value: "thin" },
+  { label: "粗字符边框", value: "thick" },
+  { label: "双字符边框", value: "double" },
+  { label: "虚线字符边框", value: "dashed" }
+];
 const letterCaseFormatOptions = [
   { label: "标准字母", value: "normal" },
   { label: "全部大写", value: "uppercase" },
@@ -787,7 +794,7 @@ const paragraphStyleOptions = [
   { label: "标题 2", value: "heading-2" },
   { label: "标题 3", value: "heading-3" }
 ];
-const importedInlineStyleNames = ["font-family", "font-size", "color", "font-weight", "font-style", "font-variant-caps", "text-transform", "letter-spacing", "vertical-align", "text-decoration-line", "text-decoration-style", "text-decoration-color", "--word-underline-type"];
+const importedInlineStyleNames = ["font-family", "font-size", "color", "font-weight", "font-style", "font-variant-caps", "text-transform", "letter-spacing", "vertical-align", "text-decoration-line", "text-decoration-style", "text-decoration-color", "--word-underline-type", "border-width", "border-style", "border-color", "border-top", "border-right", "border-bottom", "border-left", "padding", "padding-top", "padding-right", "padding-bottom", "padding-left", "--word-text-border"];
 const importedBlockStyleNames = ["text-align", "text-indent", "margin-left", "line-height", "margin-top", "margin-bottom", "--word-line-rule"];
 const lineSpacingOptions = [
   { label: "单倍", value: "1" },
@@ -1077,6 +1084,26 @@ function mergeStyleText(styleText: string | null, nextStyles: Record<string, str
     else styles.delete(name);
   });
   return Array.from(styles.entries()).map(([name, value]) => `${name}: ${value}`).join("; ");
+}
+
+function textBorderStylePatch(value: string): Record<string, string | undefined> {
+  const shorthandNames = ["border-width", "border-style", "border-color", "padding"];
+  const names = [...shorthandNames, "border-top", "border-right", "border-bottom", "border-left", "padding-top", "padding-right", "padding-bottom", "padding-left", "--word-text-border"];
+  if (value === "none") return Object.fromEntries(names.map((name) => [name, undefined]));
+  const presets: Record<string, { type: string; size: number; css: string }> = {
+    thin: { type: "single", size: 6, css: "1px solid #1F4E79" },
+    thick: { type: "thick", size: 12, css: "2px solid #1F4E79" },
+    double: { type: "double", size: 12, css: "2px double #1F4E79" },
+    dashed: { type: "dashed", size: 8, css: "1.33px dashed #1F4E79" }
+  };
+  const preset = presets[value] || presets.thin;
+  return {
+    // 中文注解：先清除浏览器可能生成的简写，避免重新设置边框时旧样式继续覆盖四边长写法。
+    ...Object.fromEntries(shorthandNames.map((name) => [name, undefined])),
+    "border-top": preset.css, "border-right": preset.css, "border-bottom": preset.css, "border-left": preset.css,
+    "padding-top": "1.33px", "padding-right": "1.33px", "padding-bottom": "1.33px", "padding-left": "1.33px",
+    "--word-text-border": `${preset.type},${preset.size},1F4E79,1`
+  };
 }
 
 function normalizeParagraphTabStops(value: unknown) {
@@ -3914,6 +3941,7 @@ function Editor(props: {
             <button className={editor?.isActive("italic") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleItalic().run()} title="斜体"><Italic size={16} /></button>
             <button className={editor?.isActive("underline") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleUnderline().run()} title="下划线"><UnderlineIcon size={16} />下划线</button>
             <FormatSelect title="设置选中文字的下划线样式" placeholder="下划线样式" options={underlineStyleOptions} onSelect={(value, label) => applySelectedTextStyle({ "text-decoration-line": "underline", "text-decoration-style": underlineCssStyleByType[value] || "solid", "--word-underline-type": value }, label)} />
+            <FormatSelect title="设置或清除选中文字的 Word 字符边框" placeholder="字符边框" options={textBorderOptions} onSelect={(value, label) => applySelectedTextStyle(textBorderStylePatch(value), label)} />
             <button aria-label="设置超链接" className={editor?.isActive("link") ? "active-format" : ""} onClick={openLinkEditor} title="设置超链接"><Link2 size={16} /></button>
             <button aria-label="取消超链接" onClick={removeHyperlink} disabled={!editor?.isActive("link")} title="取消超链接"><Unlink size={16} /></button>
             {linkEditorOpen ? <div className="link-editor">

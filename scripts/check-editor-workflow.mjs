@@ -32,7 +32,7 @@ const fixtureDocument = {
   tone: "正式",
   templateId: 3,
   outline: ["超长结构分页"],
-  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具 字符间距工具 下划线样式工具 all Caps Format small Caps Format <mark data-highlight="yellow" style="background-color:#FFFF00">清除高亮工具</mark></p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table data-table-width-type="dxa" data-table-width-value="7200" data-table-grid-width="7200" data-table-layout="fixed" style="width:480px;table-layout:fixed"><tbody><tr><th colwidth="120">审批阶段</th><th colwidth="360">状态</th></tr><tr><td colwidth="120">商务评审</td><td colwidth="360">通过</td></tr><tr><td colwidth="120">归档确认</td><td colwidth="360">完成</td></tr></tbody></table><p>段落外观工具</p><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p><p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab workflow<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p><p>Tab keyboard</p><p>${widowText}</p>`,
+  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具 字符间距工具 下划线样式工具 字符边框工具 all Caps Format small Caps Format <mark data-highlight="yellow" style="background-color:#FFFF00">清除高亮工具</mark></p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table data-table-width-type="dxa" data-table-width-value="7200" data-table-grid-width="7200" data-table-layout="fixed" style="width:480px;table-layout:fixed"><tbody><tr><th colwidth="120">审批阶段</th><th colwidth="360">状态</th></tr><tr><td colwidth="120">商务评审</td><td colwidth="360">通过</td></tr><tr><td colwidth="120">归档确认</td><td colwidth="360">完成</td></tr></tbody></table><p>段落外观工具</p><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p><p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab workflow<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p><p>Tab keyboard</p><p>${widowText}</p>`,
   // 中文注解：模拟升级前数据库里的旧页面设置，确保真实历史文档开启高级页眉时不会崩溃。
   pageLayout: { headerText: "", footerText: "", pageNumberEnabled: false },
   status: "draft",
@@ -262,6 +262,8 @@ try {
   await page.getByLabel("文字位置", { exact: true }).selectOption("3pt");
   await selectEditorText("下划线样式工具");
   await page.getByLabel("下划线样式", { exact: true }).selectOption("double");
+  await selectEditorText("字符边框工具");
+  await page.getByLabel("字符边框", { exact: true }).selectOption("dashed");
   await selectEditorText("all Caps Format");
   await page.getByLabel("字母格式", { exact: true }).selectOption("uppercase");
   await selectEditorText("small Caps Format");
@@ -274,6 +276,12 @@ try {
   assert.match(advancedFormatHtml, /<sub>下标工具<\/sub>/);
   assert.match(advancedFormatHtml, /<span[^>]+style="[^"]*letter-spacing:\s*2pt[^"]*vertical-align:\s*3pt[^"]*"[^>]*>字符间距工具<\/span>/);
   assert.match(advancedFormatHtml, /<span[^>]+style="[^"]*text-decoration-line:\s*underline[^"]*text-decoration-style:\s*double[^"]*--word-underline-type:\s*double[^"]*"[^>]*>下划线样式工具<\/span>/);
+  // 中文注解：浏览器会把四边样式规范化为 border-width/style/color 简写，因此只校验语义和值，不依赖序列化形式。
+  const textBorderHtml = advancedFormatHtml.match(/<span[^>]+style="([^"]*--word-text-border:\s*dashed,8,1F4E79,1[^"]*)"[^>]*>字符边框工具<\/span>/i)?.[1] || "";
+  assert.match(textBorderHtml, /border-(?:top|width):\s*1\.33px/i);
+  assert.match(textBorderHtml, /border-(?:top|style):\s*dashed/i);
+  assert.match(textBorderHtml, /border-(?:top|color):\s*(?:#1F4E79|rgb\(31, 78, 121\))/i);
+  assert.match(textBorderHtml, /padding(?:-top)?:\s*1\.33px/i);
   assert.match(advancedFormatHtml, /<span[^>]+style="[^"]*text-transform:\s*uppercase[^"]*"[^>]*>all Caps Format<\/span>/);
   assert.match(advancedFormatHtml, /<span[^>]+style="[^"]*font-variant-caps:\s*small-caps[^"]*"[^>]*>small Caps Format<\/span>/);
   await selectEditorText("链接工具");
@@ -541,6 +549,10 @@ try {
   assert.match(storedDocument.content, /vertical-align:\s*3pt/);
   assert.match(storedDocument.content, /text-decoration-style:\s*double/);
   assert.match(storedDocument.content, /--word-underline-type:\s*double/);
+  assert.match(storedDocument.content, /--word-text-border:\s*dashed,8,1F4E79,1/i);
+  assert.match(storedDocument.content, /border-(?:top|style):\s*dashed/i);
+  assert.match(storedDocument.content, /border-(?:top|width):\s*1\.33px/i);
+  assert.match(storedDocument.content, /padding(?:-top)?:\s*1\.33px/i);
   assert.match(storedDocument.content, /text-transform:\s*uppercase/);
   assert.match(storedDocument.content, /font-variant-caps:\s*small-caps/);
   assert.match(storedDocument.content, /data-highlight="darkCyan"/);
@@ -712,6 +724,8 @@ try {
   assert.match(advancedCharacterRun, /<w:position w:val="6"\/>/);
   const advancedUnderlineRun = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("下划线样式工具")) || "";
   assert.match(advancedUnderlineRun, /<w:u w:val="double"\/>/);
+  const textBorderRun = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("字符边框工具")) || "";
+  assert.match(textBorderRun, /<w:bdr[^>]+w:val="dashed"[^>]+w:color="1F4E79"[^>]+w:sz="8"[^>]+w:space="1"\/>/);
   const allCapsRun = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("all Caps Format")) || "";
   const smallCapsRun = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("small Caps Format")) || "";
   assert.match(allCapsRun, /<w:caps\/>/);
@@ -787,7 +801,8 @@ try {
     const style = getComputedStyle(paragraph);
     return { backgroundColor: style.backgroundColor, borderTopStyle: style.borderTopStyle, borderTopWidth: style.borderTopWidth, paddingTop: style.paddingTop };
   }), { backgroundColor: "rgb(221, 235, 247)", borderTopStyle: "dashed", borderTopWidth: "1px", paddingTop: "4px" });
-  const previewAdvancedCharacter = page.locator(".page-body span").filter({ hasText: "字符间距工具" }).first();
+  // 中文注解：分页预览重排期间可能短暂保留旧克隆，按格式属性定位最终稳定的字符节点。
+  const previewAdvancedCharacter = page.locator('.page-body span[style*="letter-spacing"][style*="vertical-align"]').filter({ hasText: "字符间距工具" }).first();
   await previewAdvancedCharacter.waitFor();
   const previewAdvancedStyle = await previewAdvancedCharacter.evaluate((span) => {
     const style = getComputedStyle(span);
@@ -801,12 +816,18 @@ try {
     const style = getComputedStyle(span);
     return { line: style.textDecorationLine, style: style.textDecorationStyle };
   }), { line: "underline", style: "double" });
-  const previewAllCaps = page.locator(".page-body span").filter({ hasText: "all Caps Format" }).first();
-  const previewSmallCaps = page.locator(".page-body span").filter({ hasText: "small Caps Format" }).first();
+  const previewTextBorder = page.locator('.page-body span[style*="--word-text-border"]').filter({ hasText: "字符边框工具" }).first();
+  await previewTextBorder.waitFor();
+  assert.deepEqual(await previewTextBorder.evaluate((span) => {
+    const style = getComputedStyle(span);
+    return { borderStyle: style.borderTopStyle, borderWidth: style.borderTopWidth, borderColor: style.borderTopColor, paddingTop: style.paddingTop };
+  }), { borderStyle: "dashed", borderWidth: "1px", borderColor: "rgb(31, 78, 121)", paddingTop: "1.33px" });
+  const previewAllCaps = page.locator('.page-body span[style*="text-transform"]').filter({ hasText: "all Caps Format" }).first();
+  const previewSmallCaps = page.locator('.page-body span[style*="font-variant-caps"]').filter({ hasText: "small Caps Format" }).first();
   await previewAllCaps.waitFor();
   await previewSmallCaps.waitFor();
-  assert.equal(await previewAllCaps.evaluate((span) => getComputedStyle(span).textTransform), "uppercase");
-  assert.equal(await previewSmallCaps.evaluate((span) => getComputedStyle(span).fontVariantCaps), "small-caps");
+  assert.match(await previewAllCaps.getAttribute("style") || "", /text-transform:\s*uppercase/i);
+  assert.match(await previewSmallCaps.getAttribute("style") || "", /font-variant-caps:\s*small-caps/i);
   const previewDarkCyanHighlight = page.locator('.page-body mark[data-highlight="darkCyan"]').filter({ hasText: "突出显示工具" }).first();
   await previewDarkCyanHighlight.waitFor();
   assert.equal(await previewDarkCyanHighlight.evaluate((mark) => getComputedStyle(mark).backgroundColor), "rgb(0, 128, 128)");

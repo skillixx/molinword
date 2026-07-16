@@ -835,6 +835,12 @@ textarea {
   flex: 0 0 auto;
 }
 
+.word-editor [style*="--word-text-border"],
+.page-body [style*="--word-text-border"] {
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
 .view-mode-control {
   display: inline-grid;
   grid-template-columns: repeat(2, 64px);
