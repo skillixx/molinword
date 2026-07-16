@@ -853,8 +853,11 @@ function parseParagraphProperties(pPr, themeColors = {}) {
   if (["left", "center", "right", "both", "justify"].includes(align)) styles["text-align"] = align === "both" ? "justify" : align;
   const indent = xmlChild(pPr, "w:ind");
   const firstLine = firstValue(indent?.attribs, ["w:firstLine", "firstLine"]);
-  const left = firstValue(indent?.attribs, ["w:left", "left"]);
-  if (firstLine) styles["text-indent"] = wordTwipToPt(firstLine);
+  const hanging = firstValue(indent?.attribs, ["w:hanging", "hanging"]);
+  const left = firstValue(indent?.attribs, ["w:left", "left", "w:start", "start"]);
+  // 中文注解：悬挂缩进必须用负首行缩进配合左边距，浏览器换行起点才与 Word 一致。
+  if (Number(hanging) > 0) styles["text-indent"] = `-${wordTwipToPt(hanging)}`;
+  else if (firstLine) styles["text-indent"] = wordTwipToPt(firstLine);
   if (left) styles["margin-left"] = wordTwipToPt(left);
   const spacing = xmlChild(pPr, "w:spacing");
   const before = wordSpacingToPt(firstValue(spacing?.attribs, ["w:before", "before"]));
@@ -2301,9 +2304,15 @@ function paragraphStyleFromNode(node) {
     justify: AlignmentType.JUSTIFIED
   };
   if (alignmentMap[styles["text-align"]]) paragraphStyle.alignment = alignmentMap[styles["text-align"]];
-  const firstLine = cssLengthToTwip(styles["text-indent"]);
+  const textIndent = cssSignedLengthToTwip(styles["text-indent"]);
   const left = cssLengthToTwip(styles["margin-left"]);
-  if (firstLine || left) paragraphStyle.indent = { ...(paragraphStyle.indent || {}), ...(firstLine ? { firstLine } : {}), ...(left ? { left } : {}) };
+  if (textIndent !== undefined || left !== undefined) {
+    // 中文注解：CSS 负 text-indent 对应 Word 的 hanging 正值；正值仍按 firstLine 导出。
+    paragraphStyle.indent = {
+      ...(textIndent && textIndent < 0 ? { hanging: Math.abs(textIndent) } : textIndent && textIndent > 0 ? { firstLine: textIndent } : {}),
+      ...(left !== undefined ? { left } : {})
+    };
+  }
   const spacing = {};
   const before = cssLengthToTwip(styles["margin-top"]);
   const after = cssLengthToTwip(styles["margin-bottom"]);

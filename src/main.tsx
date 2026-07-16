@@ -69,7 +69,7 @@ type AiAction = "continue" | "expand" | "shorten" | "correct" | "polish" | "form
 type AiApplyMode = "replace" | "insert";
 type TextCaseMode = "upper" | "lower" | "title";
 type EditorViewMode = "edit" | "page";
-type ParagraphSpacingProperty = "line-height" | "margin-top" | "margin-bottom" | "--word-line-rule";
+type ParagraphSpacingProperty = "line-height" | "margin-top" | "margin-bottom" | "margin-left" | "text-indent" | "--word-line-rule";
 type ParagraphSpacingStyles = Partial<Record<ParagraphSpacingProperty, string>>;
 type ParagraphPaginationAttribute = "keepNext" | "keepLines" | "pageBreakBefore" | "widowControl";
 type ParagraphAppearancePatch = { shading?: string | null; borders?: string | null };
@@ -803,6 +803,12 @@ const lineSpacingOptions = [
   { label: "双倍", value: "2" }
 ];
 const paragraphSpacingOptions = ["0pt", "6pt", "12pt", "18pt", "24pt"].map((value) => ({ label: value, value }));
+const hangingIndentOptions = [
+  { label: "无悬挂", value: "none" },
+  { label: "0.5 厘米", value: "14.17pt" },
+  { label: "1 厘米", value: "28.35pt" },
+  { label: "1.5 厘米", value: "42.52pt" }
+];
 const tableCellVerticalAlignOptions = [
   { label: "顶部", value: "top" },
   { label: "居中", value: "center" },
@@ -1711,8 +1717,15 @@ const ParagraphIndent = Extension.create({
         if (node.type.name !== "paragraph") return;
         const current = Number(node.attrs.indent || 0);
         const next = Math.max(0, Math.min(resolveNext(current), maxIndentLevel));
-        if (next === current) return;
-        tr.setNodeMarkup(position, undefined, { ...node.attrs, indent: next });
+        const currentImportedStyle = String(node.attrs.importedStyle || "");
+        const importedStyle = mergeStyleText(currentImportedStyle, {
+          "text-indent": undefined,
+          // 中文注解：普通左缩进可以与首行缩进共存；只有从悬挂缩进切换时才成对清除左边距。
+          ...(/(?:^|;)\s*text-indent\s*:\s*-/i.test(currentImportedStyle) ? { "margin-left": undefined } : {})
+        }, importedBlockStyleNames);
+        if (next === current && importedStyle === String(node.attrs.importedStyle || "")) return;
+        // 中文注解：首行缩进与悬挂缩进互斥，使用首行按钮时同步清除悬挂缩进的负偏移和左边距。
+        tr.setNodeMarkup(position, undefined, { ...node.attrs, indent: next, importedStyle });
         changed = true;
       };
 
@@ -1755,7 +1768,8 @@ const ParagraphIndent = Extension.create({
         ({ state, tr, dispatch }: CommandProps) => updateSelectedTextblocks(state, tr, dispatch, (node) => {
           // 中文注解：行距、段前和段后统一保存在段落安全样式中，编辑视图、分页预览和导出共用同一数据源。
           const importedStyle = mergeStyleText(String(node.attrs.importedStyle || ""), styles, importedBlockStyleNames);
-          return { importedStyle };
+          // 中文注解：悬挂缩进使用显式 text-indent，应用时清除旧的 data-indent，避免导出同时出现 firstLine 与 hanging。
+          return { importedStyle, ...(Object.hasOwn(styles, "text-indent") ? { indent: 0 } : {}) };
         }),
       setParagraphAppearance:
         (patch) =>
@@ -3497,6 +3511,12 @@ function Editor(props: {
     setSelectionHint(applied ? `已设置${label}。` : "请把光标放到段落或标题中，再设置段落间距。");
   };
 
+  const applyHangingIndent = (value: string, label: string) => {
+    const length = value === "none" ? "0pt" : value;
+    // 中文注解：左边距与负首行缩进成对修改，确保首行留在原位、后续各行向右缩进。
+    applyParagraphSpacing({ "margin-left": length, "text-indent": value === "none" ? "0pt" : `-${length}` }, label);
+  };
+
   const applyParagraphAppearance = (patch: ParagraphAppearancePatch, label: string) => {
     if (!editor) return;
     const lastSelection = lastEditorSelectionRef.current;
@@ -4021,6 +4041,7 @@ function Editor(props: {
             <FormatSelect title="设置当前段落或选区的行距" placeholder="行距" options={lineSpacingOptions} icon={<Rows3 size={16} />} onSelect={(value, label) => applyParagraphSpacing({ "line-height": value, "--word-line-rule": "auto" }, `${label}行距`)} />
             <FormatSelect title="设置当前段落或选区的段前间距" placeholder="段前" options={paragraphSpacingOptions} onSelect={(value) => applyParagraphSpacing({ "margin-top": value }, `段前 ${value}`)} />
             <FormatSelect title="设置当前段落或选区的段后间距" placeholder="段后" options={paragraphSpacingOptions} onSelect={(value) => applyParagraphSpacing({ "margin-bottom": value }, `段后 ${value}`)} />
+            <FormatSelect title="设置当前段落或选区的悬挂缩进" placeholder="悬挂缩进" options={hangingIndentOptions} icon={<IndentIncrease size={16} />} onSelect={(value, label) => applyHangingIndent(value, `${label}悬挂缩进`)} />
             <FormatSelect title="设置当前段落或选区的底纹" placeholder="段落底纹" options={paragraphShadingOptions} onSelect={(value, label) => applyParagraphAppearance({ shading: value === "none" ? null : JSON.stringify({ fill: value, color: "#000000", type: "clear" }) }, `段落${label}`)} />
             <FormatSelect title="设置当前段落或选区的边框" placeholder="段落边框" options={paragraphBorderOptions} onSelect={(value, label) => applyParagraphAppearance({ borders: paragraphBorderPreset(value) }, `段落${label}`)} />
             <button className={editor?.getAttributes("paragraph").keepNext || editor?.getAttributes("heading").keepNext ? "active-format" : ""} onClick={() => toggleParagraphPagination("keepNext", "与下段同页")} title="保持当前段落与下一段在同一页">与下段同页</button>

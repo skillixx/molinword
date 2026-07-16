@@ -132,6 +132,7 @@ async function buildFormattedDocxFixture() {
     </w:p>
     <w:p><w:r><w:t>链接前 </w:t></w:r><w:hyperlink r:id="rIdHyperlink1"><w:r><w:rPr><w:u w:val="single"/><w:color w:val="0563C1"/></w:rPr><w:t>OpenAI documentation</w:t></w:r></w:hyperlink><w:r><w:t> 链接后</w:t></w:r></w:p>
     <w:p><w:pPr><w:pStyle w:val="BodyBased"/></w:pPr><w:r><w:t>Inherited spacing</w:t></w:r></w:p>
+    <w:p><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr><w:r><w:t>Hanging indent source</w:t></w:r></w:p>
     <w:p><w:pPr><w:spacing w:line="360" w:lineRule="atLeast"/></w:pPr><w:r><w:t>At least spacing</w:t></w:r></w:p>
     <w:p><w:pPr><w:keepNext/><w:keepLines/><w:pageBreakBefore/><w:widowControl/></w:pPr><w:r><w:t>Pagination controlled paragraph</w:t></w:r></w:p>
     <w:p><w:pPr><w:widowControl w:val="false"/></w:pPr><w:r><w:t>Widow control disabled paragraph</w:t></w:r></w:p>
@@ -576,6 +577,9 @@ assert.match(inheritedParagraph, /margin-bottom:\s*12pt/);
 const atLeastParagraph = imported.content.match(/<p[^>]*>At least spacing<\/p>/)?.[0] || "";
 assert.match(atLeastParagraph, /line-height:\s*18pt/);
 assert.match(atLeastParagraph, /--word-line-rule:\s*atLeast/);
+const hangingIndentParagraph = imported.content.match(/<p[^>]*>Hanging indent source<\/p>/)?.[0] || "";
+assert.match(hangingIndentParagraph, /margin-left:\s*36pt/);
+assert.match(hangingIndentParagraph, /text-indent:\s*-18pt/);
 
 const roundTripBuffer = await createDocxBuffer({ title: "Spacing round trip", content: imported.content, pageLayout: imported.pageLayout });
 const roundTripColumnsZip = await JSZip.loadAsync(roundTripBuffer);
@@ -691,6 +695,9 @@ const atLeastRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p
 // 中文注解：最小行距往返后仍必须是 atLeast，避免大字号文字被固定行高裁切并改变分页。
 assert.match(atLeastRoundTripXml, /<w:spacing[^>]+w:line="360"/);
 assert.match(atLeastRoundTripXml, /<w:spacing[^>]+w:lineRule="atLeast"/);
+const hangingIndentRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || [])
+  .find((paragraph) => paragraph.includes(">Hanging indent source</w:t>")) || "";
+assert.match(hangingIndentRoundTripXml, /<w:ind(?=[^>]+w:left="720")(?=[^>]+w:hanging="360")[^>]*\/>/);
 
 const variantPageLayout = {
   headerText: "奇数页页眉",
