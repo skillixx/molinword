@@ -69,7 +69,7 @@ type AiAction = "continue" | "expand" | "shorten" | "correct" | "polish" | "form
 type AiApplyMode = "replace" | "insert";
 type TextCaseMode = "upper" | "lower" | "title";
 type EditorViewMode = "edit" | "page";
-type ParagraphSpacingProperty = "line-height" | "margin-top" | "margin-bottom" | "margin-left" | "text-indent" | "--word-line-rule";
+type ParagraphSpacingProperty = "line-height" | "margin-top" | "margin-bottom" | "margin-left" | "margin-right" | "text-indent" | "--word-line-rule";
 type ParagraphSpacingStyles = Partial<Record<ParagraphSpacingProperty, string>>;
 type ParagraphPaginationAttribute = "keepNext" | "keepLines" | "pageBreakBefore" | "widowControl";
 type ParagraphAppearancePatch = { shading?: string | null; borders?: string | null };
@@ -795,7 +795,7 @@ const paragraphStyleOptions = [
   { label: "标题 3", value: "heading-3" }
 ];
 const importedInlineStyleNames = ["font-family", "font-size", "color", "font-weight", "font-style", "font-variant-caps", "text-transform", "letter-spacing", "vertical-align", "text-decoration-line", "text-decoration-style", "text-decoration-color", "--word-underline-type", "border-width", "border-style", "border-color", "border-top", "border-right", "border-bottom", "border-left", "padding", "padding-top", "padding-right", "padding-bottom", "padding-left", "--word-text-border"];
-const importedBlockStyleNames = ["text-align", "text-indent", "margin-left", "line-height", "margin-top", "margin-bottom", "--word-line-rule"];
+const importedBlockStyleNames = ["text-align", "text-indent", "margin-left", "margin-right", "line-height", "margin-top", "margin-bottom", "--word-line-rule"];
 const lineSpacingOptions = [
   { label: "单倍", value: "1" },
   { label: "1.15 倍", value: "1.15" },
@@ -805,6 +805,12 @@ const lineSpacingOptions = [
 const paragraphSpacingOptions = ["0pt", "6pt", "12pt", "18pt", "24pt"].map((value) => ({ label: value, value }));
 const hangingIndentOptions = [
   { label: "无悬挂", value: "none" },
+  { label: "0.5 厘米", value: "14.17pt" },
+  { label: "1 厘米", value: "28.35pt" },
+  { label: "1.5 厘米", value: "42.52pt" }
+];
+const paragraphSideIndentOptions = [
+  { label: "0 厘米", value: "0pt" },
   { label: "0.5 厘米", value: "14.17pt" },
   { label: "1 厘米", value: "28.35pt" },
   { label: "1.5 厘米", value: "42.52pt" }
@@ -4042,6 +4048,8 @@ function Editor(props: {
             <FormatSelect title="设置当前段落或选区的段前间距" placeholder="段前" options={paragraphSpacingOptions} onSelect={(value) => applyParagraphSpacing({ "margin-top": value }, `段前 ${value}`)} />
             <FormatSelect title="设置当前段落或选区的段后间距" placeholder="段后" options={paragraphSpacingOptions} onSelect={(value) => applyParagraphSpacing({ "margin-bottom": value }, `段后 ${value}`)} />
             <FormatSelect title="设置当前段落或选区的悬挂缩进" placeholder="悬挂缩进" options={hangingIndentOptions} icon={<IndentIncrease size={16} />} onSelect={(value, label) => applyHangingIndent(value, `${label}悬挂缩进`)} />
+            <FormatSelect title="设置当前段落或选区的左缩进" placeholder="左缩进" options={paragraphSideIndentOptions} icon={<IndentIncrease size={16} />} onSelect={(value, label) => applyParagraphSpacing({ "margin-left": value }, `${label}左缩进`)} />
+            <FormatSelect title="设置当前段落或选区的右缩进" placeholder="右缩进" options={paragraphSideIndentOptions} icon={<IndentDecrease size={16} />} onSelect={(value, label) => applyParagraphSpacing({ "margin-right": value }, `${label}右缩进`)} />
             <FormatSelect title="设置当前段落或选区的底纹" placeholder="段落底纹" options={paragraphShadingOptions} onSelect={(value, label) => applyParagraphAppearance({ shading: value === "none" ? null : JSON.stringify({ fill: value, color: "#000000", type: "clear" }) }, `段落${label}`)} />
             <FormatSelect title="设置当前段落或选区的边框" placeholder="段落边框" options={paragraphBorderOptions} onSelect={(value, label) => applyParagraphAppearance({ borders: paragraphBorderPreset(value) }, `段落${label}`)} />
             <button className={editor?.getAttributes("paragraph").keepNext || editor?.getAttributes("heading").keepNext ? "active-format" : ""} onClick={() => toggleParagraphPagination("keepNext", "与下段同页")} title="保持当前段落与下一段在同一页">与下段同页</button>

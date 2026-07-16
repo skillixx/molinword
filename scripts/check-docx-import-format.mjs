@@ -133,6 +133,7 @@ async function buildFormattedDocxFixture() {
     <w:p><w:r><w:t>链接前 </w:t></w:r><w:hyperlink r:id="rIdHyperlink1"><w:r><w:rPr><w:u w:val="single"/><w:color w:val="0563C1"/></w:rPr><w:t>OpenAI documentation</w:t></w:r></w:hyperlink><w:r><w:t> 链接后</w:t></w:r></w:p>
     <w:p><w:pPr><w:pStyle w:val="BodyBased"/></w:pPr><w:r><w:t>Inherited spacing</w:t></w:r></w:p>
     <w:p><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr><w:r><w:t>Hanging indent source</w:t></w:r></w:p>
+    <w:p><w:pPr><w:ind w:start="480" w:end="360"/></w:pPr><w:r><w:t>Side indents source</w:t></w:r></w:p>
     <w:p><w:pPr><w:spacing w:line="360" w:lineRule="atLeast"/></w:pPr><w:r><w:t>At least spacing</w:t></w:r></w:p>
     <w:p><w:pPr><w:keepNext/><w:keepLines/><w:pageBreakBefore/><w:widowControl/></w:pPr><w:r><w:t>Pagination controlled paragraph</w:t></w:r></w:p>
     <w:p><w:pPr><w:widowControl w:val="false"/></w:pPr><w:r><w:t>Widow control disabled paragraph</w:t></w:r></w:p>
@@ -580,6 +581,9 @@ assert.match(atLeastParagraph, /--word-line-rule:\s*atLeast/);
 const hangingIndentParagraph = imported.content.match(/<p[^>]*>Hanging indent source<\/p>/)?.[0] || "";
 assert.match(hangingIndentParagraph, /margin-left:\s*36pt/);
 assert.match(hangingIndentParagraph, /text-indent:\s*-18pt/);
+const sideIndentsParagraph = imported.content.match(/<p[^>]*>Side indents source<\/p>/)?.[0] || "";
+assert.match(sideIndentsParagraph, /margin-left:\s*24pt/);
+assert.match(sideIndentsParagraph, /margin-right:\s*18pt/);
 
 const roundTripBuffer = await createDocxBuffer({ title: "Spacing round trip", content: imported.content, pageLayout: imported.pageLayout });
 const roundTripColumnsZip = await JSZip.loadAsync(roundTripBuffer);
@@ -698,6 +702,9 @@ assert.match(atLeastRoundTripXml, /<w:spacing[^>]+w:lineRule="atLeast"/);
 const hangingIndentRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || [])
   .find((paragraph) => paragraph.includes(">Hanging indent source</w:t>")) || "";
 assert.match(hangingIndentRoundTripXml, /<w:ind(?=[^>]+w:left="720")(?=[^>]+w:hanging="360")[^>]*\/>/);
+const sideIndentsRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || [])
+  .find((paragraph) => paragraph.includes(">Side indents source</w:t>")) || "";
+assert.match(sideIndentsRoundTripXml, /<w:ind(?=[^>]+w:left="480")(?=[^>]+w:right="360")[^>]*\/>/);
 
 const variantPageLayout = {
   headerText: "奇数页页眉",

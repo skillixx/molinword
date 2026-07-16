@@ -461,6 +461,7 @@ function sanitizeImportedHtml(value = "") {
         "line-height": [/^\d+(?:\.\d+)?(?:px|pt|em|rem|%)?$/],
         "--word-line-rule": [/^(?:auto|exact|atLeast)$/],
         "margin-left": [/^\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
+        "margin-right": [/^\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
         "margin-top": [/^\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
         "margin-bottom": [/^\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
         "padding-top": [/^\d+(?:\.\d+)?px$/],
@@ -855,10 +856,12 @@ function parseParagraphProperties(pPr, themeColors = {}) {
   const firstLine = firstValue(indent?.attribs, ["w:firstLine", "firstLine"]);
   const hanging = firstValue(indent?.attribs, ["w:hanging", "hanging"]);
   const left = firstValue(indent?.attribs, ["w:left", "left", "w:start", "start"]);
+  const right = firstValue(indent?.attribs, ["w:right", "right", "w:end", "end"]);
   // 中文注解：悬挂缩进必须用负首行缩进配合左边距，浏览器换行起点才与 Word 一致。
   if (Number(hanging) > 0) styles["text-indent"] = `-${wordTwipToPt(hanging)}`;
   else if (firstLine) styles["text-indent"] = wordTwipToPt(firstLine);
   if (left) styles["margin-left"] = wordTwipToPt(left);
+  if (right) styles["margin-right"] = wordTwipToPt(right);
   const spacing = xmlChild(pPr, "w:spacing");
   const before = wordSpacingToPt(firstValue(spacing?.attribs, ["w:before", "before"]));
   const after = wordSpacingToPt(firstValue(spacing?.attribs, ["w:after", "after"]));
@@ -2306,11 +2309,13 @@ function paragraphStyleFromNode(node) {
   if (alignmentMap[styles["text-align"]]) paragraphStyle.alignment = alignmentMap[styles["text-align"]];
   const textIndent = cssSignedLengthToTwip(styles["text-indent"]);
   const left = cssLengthToTwip(styles["margin-left"]);
-  if (textIndent !== undefined || left !== undefined) {
+  const right = cssLengthToTwip(styles["margin-right"]);
+  if (textIndent !== undefined || left !== undefined || right !== undefined) {
     // 中文注解：CSS 负 text-indent 对应 Word 的 hanging 正值；正值仍按 firstLine 导出。
     paragraphStyle.indent = {
       ...(textIndent && textIndent < 0 ? { hanging: Math.abs(textIndent) } : textIndent && textIndent > 0 ? { firstLine: textIndent } : {}),
-      ...(left !== undefined ? { left } : {})
+      ...(left !== undefined ? { left } : {}),
+      ...(right !== undefined ? { right } : {})
     };
   }
   const spacing = {};

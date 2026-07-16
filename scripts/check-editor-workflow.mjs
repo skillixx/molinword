@@ -32,7 +32,7 @@ const fixtureDocument = {
   tone: "正式",
   templateId: 3,
   outline: ["超长结构分页"],
-  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具 字符间距工具 下划线样式工具 字符边框工具 all Caps Format small Caps Format <mark data-highlight="yellow" style="background-color:#FFFF00">清除高亮工具</mark></p><p>悬挂缩进工具内容用于验证后续各行向右缩进并保持首行位置。</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table data-table-width-type="dxa" data-table-width-value="7200" data-table-grid-width="7200" data-table-layout="fixed" style="width:480px;table-layout:fixed"><tbody><tr><th colwidth="120">审批阶段</th><th colwidth="360">状态</th></tr><tr><td colwidth="120">商务评审</td><td colwidth="360">通过</td></tr><tr><td colwidth="120">归档确认</td><td colwidth="360">完成</td></tr></tbody></table><p>段落外观工具</p><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p><p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab workflow<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p><p>Tab keyboard</p><p>${widowText}</p>`,
+  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具 字符间距工具 下划线样式工具 字符边框工具 all Caps Format small Caps Format <mark data-highlight="yellow" style="background-color:#FFFF00">清除高亮工具</mark></p><p>悬挂缩进工具内容用于验证后续各行向右缩进并保持首行位置。</p><p>段落左右缩进工具内容用于验证正文可用行宽和分页位置。</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table data-table-width-type="dxa" data-table-width-value="7200" data-table-grid-width="7200" data-table-layout="fixed" style="width:480px;table-layout:fixed"><tbody><tr><th colwidth="120">审批阶段</th><th colwidth="360">状态</th></tr><tr><td colwidth="120">商务评审</td><td colwidth="360">通过</td></tr><tr><td colwidth="120">归档确认</td><td colwidth="360">完成</td></tr></tbody></table><p>段落外观工具</p><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p><p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab workflow<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p><p>Tab keyboard</p><p>${widowText}</p>`,
   // 中文注解：模拟升级前数据库里的旧页面设置，确保真实历史文档开启高级页眉时不会崩溃。
   pageLayout: { headerText: "", footerText: "", pageNumberEnabled: false },
   status: "draft",
@@ -266,6 +266,9 @@ try {
   await page.getByLabel("字符边框", { exact: true }).selectOption("dashed");
   await selectEditorText("悬挂缩进工具");
   await page.getByLabel("悬挂缩进", { exact: true }).selectOption("28.35pt");
+  await selectEditorText("段落左右缩进工具");
+  await page.getByLabel("左缩进", { exact: true }).selectOption("28.35pt");
+  await page.getByLabel("右缩进", { exact: true }).selectOption("14.17pt");
   await selectEditorText("all Caps Format");
   await page.getByLabel("字母格式", { exact: true }).selectOption("uppercase");
   await selectEditorText("small Caps Format");
@@ -285,6 +288,7 @@ try {
   assert.match(textBorderHtml, /border-(?:top|color):\s*(?:#1F4E79|rgb\(31, 78, 121\))/i);
   assert.match(textBorderHtml, /padding(?:-top)?:\s*1\.33px/i);
   assert.match(advancedFormatHtml, /<p[^>]+style="[^"]*margin-left:\s*28\.35pt[^"]*text-indent:\s*-28\.35pt[^"]*"[^>]*>[\s\S]*?悬挂缩进工具内容[\s\S]*?<\/p>/);
+  assert.match(advancedFormatHtml, /<p[^>]+style="[^"]*margin-left:\s*28\.35pt[^"]*margin-right:\s*14\.17pt[^"]*"[^>]*>[\s\S]*?段落左右缩进工具内容[\s\S]*?<\/p>/);
   assert.match(advancedFormatHtml, /<span[^>]+style="[^"]*text-transform:\s*uppercase[^"]*"[^>]*>all Caps Format<\/span>/);
   assert.match(advancedFormatHtml, /<span[^>]+style="[^"]*font-variant-caps:\s*small-caps[^"]*"[^>]*>small Caps Format<\/span>/);
   await selectEditorText("链接工具");
@@ -558,6 +562,7 @@ try {
   assert.match(storedDocument.content, /padding(?:-top)?:\s*1\.33px/i);
   assert.match(storedDocument.content, /margin-left:\s*28\.35pt/);
   assert.match(storedDocument.content, /text-indent:\s*-28\.35pt/);
+  assert.match(storedDocument.content, /margin-right:\s*14\.17pt/);
   assert.match(storedDocument.content, /text-transform:\s*uppercase/);
   assert.match(storedDocument.content, /font-variant-caps:\s*small-caps/);
   assert.match(storedDocument.content, /data-highlight="darkCyan"/);
@@ -733,6 +738,8 @@ try {
   assert.match(textBorderRun, /<w:bdr[^>]+w:val="dashed"[^>]+w:color="1F4E79"[^>]+w:sz="8"[^>]+w:space="1"\/>/);
   const hangingIndentParagraph = (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("悬挂缩进工具内容")) || "";
   assert.match(hangingIndentParagraph, /<w:ind(?=[^>]+w:left="567")(?=[^>]+w:hanging="567")[^>]*\/>/);
+  const sideIndentsParagraph = (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("段落左右缩进工具内容")) || "";
+  assert.match(sideIndentsParagraph, /<w:ind(?=[^>]+w:left="567")(?=[^>]+w:right="283")[^>]*\/>/);
   const allCapsRun = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("all Caps Format")) || "";
   const smallCapsRun = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("small Caps Format")) || "";
   assert.match(allCapsRun, /<w:caps\/>/);
@@ -811,9 +818,14 @@ try {
   // 中文注解：分页预览重排期间可能短暂保留旧克隆，按格式属性定位最终稳定的字符节点。
   const previewAdvancedCharacter = page.locator('.page-body span[style*="letter-spacing"][style*="vertical-align"]').filter({ hasText: "字符间距工具" }).first();
   await previewAdvancedCharacter.waitFor();
-  const previewAdvancedStyle = await previewAdvancedCharacter.evaluate((span) => {
+  await page.waitForFunction(() => Array.from(document.querySelectorAll('.page-body span[style*="letter-spacing"][style*="vertical-align"]')).some((span) => {
     const style = getComputedStyle(span);
-    return { letterSpacing: Number.parseFloat(style.letterSpacing), verticalAlign: Number.parseFloat(style.verticalAlign) };
+    return span.textContent?.includes("字符间距工具") && Math.abs(Number.parseFloat(style.letterSpacing) - (2 * 96 / 72)) < 0.05;
+  }));
+  const previewAdvancedStyle = await page.evaluate(() => {
+    const span = Array.from(document.querySelectorAll('.page-body span[style*="letter-spacing"][style*="vertical-align"]')).find((item) => item.textContent?.includes("字符间距工具") && Number.parseFloat(getComputedStyle(item).letterSpacing) > 0);
+    const style = span ? getComputedStyle(span) : null;
+    return { letterSpacing: Number.parseFloat(style?.letterSpacing || ""), verticalAlign: Number.parseFloat(style?.verticalAlign || "") };
   });
   assert.ok(Math.abs(previewAdvancedStyle.letterSpacing - (2 * 96 / 72)) < 0.05);
   assert.ok(Math.abs(previewAdvancedStyle.verticalAlign - (3 * 96 / 72)) < 0.05);
@@ -835,6 +847,14 @@ try {
     const style = getComputedStyle(paragraph);
     return { marginLeft: style.marginLeft, textIndent: style.textIndent };
   }), { marginLeft: "37.8px", textIndent: "-37.8px" });
+  const previewSideIndents = page.locator('.page-body p[style*="margin-right"]').filter({ hasText: "段落左右缩进工具内容" }).first();
+  await previewSideIndents.waitFor();
+  const previewSideIndentStyle = await previewSideIndents.evaluate((paragraph) => {
+    const style = getComputedStyle(paragraph);
+    return { marginLeft: Number.parseFloat(style.marginLeft), marginRight: Number.parseFloat(style.marginRight) };
+  });
+  assert.ok(Math.abs(previewSideIndentStyle.marginLeft - 37.8) < 0.05);
+  assert.ok(Math.abs(previewSideIndentStyle.marginRight - (14.17 * 96 / 72)) < 0.05);
   const previewAllCaps = page.locator('.page-body span[style*="text-transform"]').filter({ hasText: "all Caps Format" }).first();
   const previewSmallCaps = page.locator('.page-body span[style*="font-variant-caps"]').filter({ hasText: "small Caps Format" }).first();
   await previewAllCaps.waitFor();
