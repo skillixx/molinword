@@ -32,7 +32,7 @@ const fixtureDocument = {
   tone: "正式",
   templateId: 3,
   outline: ["超长结构分页"],
-  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具 字符间距工具</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table data-table-width-type="dxa" data-table-width-value="7200" data-table-grid-width="7200" data-table-layout="fixed" style="width:480px;table-layout:fixed"><tbody><tr><th colwidth="120">审批阶段</th><th colwidth="360">状态</th></tr><tr><td colwidth="120">商务评审</td><td colwidth="360">通过</td></tr><tr><td colwidth="120">归档确认</td><td colwidth="360">完成</td></tr></tbody></table><p>段落外观工具</p><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p><p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab workflow<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p><p>Tab keyboard</p><p>${widowText}</p>`,
+  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具 字符间距工具 下划线样式工具</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table data-table-width-type="dxa" data-table-width-value="7200" data-table-grid-width="7200" data-table-layout="fixed" style="width:480px;table-layout:fixed"><tbody><tr><th colwidth="120">审批阶段</th><th colwidth="360">状态</th></tr><tr><td colwidth="120">商务评审</td><td colwidth="360">通过</td></tr><tr><td colwidth="120">归档确认</td><td colwidth="360">完成</td></tr></tbody></table><p>段落外观工具</p><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p><p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab workflow<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p><p>Tab keyboard</p><p>${widowText}</p>`,
   // 中文注解：模拟升级前数据库里的旧页面设置，确保真实历史文档开启高级页眉时不会崩溃。
   pageLayout: { headerText: "", footerText: "", pageNumberEnabled: false },
   status: "draft",
@@ -59,6 +59,7 @@ let exportedDocxBuffer = null;
 let manualSaveRequestCount = 0;
 let activeSaveRequestCount = 0;
 let maxConcurrentSaveRequestCount = 0;
+let documentUpdatesFrozen = false;
 const distRoot = resolve("dist");
 
 function sendJson(response, value, status = 200) {
@@ -89,6 +90,11 @@ async function apiResponse(request, response) {
   }
   if (request.method === "PATCH" && url.pathname === `/api/documents/${fixtureDocument.id}`) {
     const update = await readJsonBody(request);
+    if (documentUpdatesFrozen) {
+      // 中文注解：历史数据迁移场景会冻结测试存储，避免页面卸载前的自动保存覆盖手工注入的旧节点。
+      sendJson(response, { document: storedDocument });
+      return true;
+    }
     if (update.saveVersion) manualSaveRequestCount += 1;
     activeSaveRequestCount += 1;
     maxConcurrentSaveRequestCount = Math.max(maxConcurrentSaveRequestCount, activeSaveRequestCount);
@@ -189,6 +195,15 @@ try {
   const editor = page.locator(".word-editor");
   await editor.waitFor();
   assert.equal(await editor.isEditable(), true);
+  const formatBarGeometry = await page.locator(".format-bar").evaluate((bar) => ({
+    height: bar.getBoundingClientRect().height,
+    clientWidth: bar.clientWidth,
+    scrollWidth: bar.scrollWidth,
+    flexWrap: getComputedStyle(bar).flexWrap
+  }));
+  assert.ok(formatBarGeometry.height <= 72, `格式栏高度应稳定在单行范围，实际为 ${formatBarGeometry.height}px`);
+  assert.equal(formatBarGeometry.flexWrap, "nowrap", "格式栏控件应保持在同一行");
+  assert.ok(formatBarGeometry.scrollWidth > formatBarGeometry.clientWidth, "格式控件超出时应在单行工具栏内横向滚动");
   await editor.click();
   await editor.press("Control+A");
   await page.getByLabel("字体", { exact: true }).selectOption("SimSun");
@@ -241,11 +256,14 @@ try {
   await selectEditorText("字符间距工具");
   await page.getByLabel("字符间距", { exact: true }).selectOption("2pt");
   await page.getByLabel("文字位置", { exact: true }).selectOption("3pt");
+  await selectEditorText("下划线样式工具");
+  await page.getByLabel("下划线样式", { exact: true }).selectOption("double");
   const advancedFormatHtml = await editor.innerHTML();
   assert.match(advancedFormatHtml, /<mark[^>]+data-highlight="yellow"[^>]*>突出显示工具<\/mark>/);
   assert.match(advancedFormatHtml, /<sup>上标工具<\/sup>/);
   assert.match(advancedFormatHtml, /<sub>下标工具<\/sub>/);
   assert.match(advancedFormatHtml, /<span[^>]+style="[^"]*letter-spacing:\s*2pt[^"]*vertical-align:\s*3pt[^"]*"[^>]*>字符间距工具<\/span>/);
+  assert.match(advancedFormatHtml, /<span[^>]+style="[^"]*text-decoration-line:\s*underline[^"]*text-decoration-style:\s*double[^"]*--word-underline-type:\s*double[^"]*"[^>]*>下划线样式工具<\/span>/);
   await selectEditorText("链接工具");
   await page.getByRole("button", { name: "设置超链接", exact: true }).click();
   await page.getByLabel("超链接地址", { exact: true }).fill("https://example.com/office");
@@ -509,6 +527,8 @@ try {
   assert.match(storedDocument.content, /font-size:\s*12pt/);
   assert.match(storedDocument.content, /letter-spacing:\s*2pt/);
   assert.match(storedDocument.content, /vertical-align:\s*3pt/);
+  assert.match(storedDocument.content, /text-decoration-style:\s*double/);
+  assert.match(storedDocument.content, /--word-underline-type:\s*double/);
   assert.match(storedDocument.content, /<p[^>]+data-paragraph-shading="[^\"]*DDEBF7[^\"]*"[^>]+data-paragraph-borders="[^\"]*dashed[^\"]*"[^>]*>[\s\S]*?段落外观工具[\s\S]*?<\/p>/);
   assert.match(storedDocument.content, /data-section-break="nextPage"/);
   assert.match(storedDocument.content, /rowspan="2"/);
@@ -671,6 +691,8 @@ try {
   const advancedCharacterRun = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("字符间距工具")) || "";
   assert.match(advancedCharacterRun, /<w:spacing w:val="40"\/>/);
   assert.match(advancedCharacterRun, /<w:position w:val="6"\/>/);
+  const advancedUnderlineRun = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("下划线样式工具")) || "";
+  assert.match(advancedUnderlineRun, /<w:u w:val="double"\/>/);
   const floatingBodyDrawing = (documentXml.match(/<w:drawing>[\s\S]*?<\/w:drawing>/g) || []).find((drawing) => drawing.includes("浮动审批标识")) || "";
   assert.match(floatingBodyDrawing, /<wp:anchor/);
   assert.match(floatingBodyDrawing, /<wp:positionH relativeFrom="column"><wp:align>left<\/wp:align><\/wp:positionH>/);
@@ -736,6 +758,7 @@ try {
   assert.equal(await previewFloatingImage.evaluate((image) => getComputedStyle(image).float), "left");
   const previewParagraphAppearance = page.locator(".page-body p").filter({ hasText: "段落外观工具" }).first();
   await previewParagraphAppearance.waitFor();
+  await page.waitForFunction(() => Array.from(document.querySelectorAll(".page-body p")).some((paragraph) => paragraph.textContent?.includes("段落外观工具") && getComputedStyle(paragraph).backgroundColor === "rgb(221, 235, 247)"));
   assert.deepEqual(await previewParagraphAppearance.evaluate((paragraph) => {
     const style = getComputedStyle(paragraph);
     return { backgroundColor: style.backgroundColor, borderTopStyle: style.borderTopStyle, borderTopWidth: style.borderTopWidth, paddingTop: style.paddingTop };
@@ -748,6 +771,12 @@ try {
   });
   assert.ok(Math.abs(previewAdvancedStyle.letterSpacing - (2 * 96 / 72)) < 0.05);
   assert.ok(Math.abs(previewAdvancedStyle.verticalAlign - (3 * 96 / 72)) < 0.05);
+  const previewAdvancedUnderline = page.locator(".page-body span").filter({ hasText: "下划线样式工具" }).first();
+  await previewAdvancedUnderline.waitFor();
+  assert.deepEqual(await previewAdvancedUnderline.evaluate((span) => {
+    const style = getComputedStyle(span);
+    return { line: style.textDecorationLine, style: style.textDecorationStyle };
+  }), { line: "underline", style: "double" });
 
   const result = await page.evaluate(() => {
     const pages = Array.from(document.querySelectorAll(".page-sheet"));
@@ -981,6 +1010,8 @@ try {
   assert.equal(desktopNavigation.assistantVisible, true);
 
   // 中文注解：模拟历史分节节点。旧节点显式关闭页码时，不能继承前一节已经迁移出的新页码模板。
+  documentUpdatesFrozen = true;
+  while (activeSaveRequestCount > 0) await new Promise((resolveDelay) => setTimeout(resolveDelay, 20));
   const legacySectionLayout = { ...storedSectionLayout, pageNumberEnabled: false, pageNumberPosition: "footer" };
   delete legacySectionLayout.headerPageNumberTemplate;
   delete legacySectionLayout.footerPageNumberTemplate;

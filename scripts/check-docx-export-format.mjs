@@ -16,6 +16,7 @@ const content = `
     <sup>上标文字</sup>
     <sub>下标文字</sub>
     <span style="letter-spacing:2pt;vertical-align:3pt">Advanced character spacing</span>
+    <span style="text-decoration-line:underline;text-decoration-style:double;text-decoration-color:#00AA00;--word-underline-type:double">Advanced double underline</span>
   </p>
   <table>
     <tbody>
@@ -216,6 +217,8 @@ assert.match(headingOneXml, /<w:spacing[^>]+w:after="120"/);
 const advancedCharacterXml = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("Advanced character spacing")) || "";
 assert.match(advancedCharacterXml, /<w:spacing w:val="40"\/>/);
 assert.match(advancedCharacterXml, /<w:position w:val="6"\/>/);
+const advancedUnderlineXml = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("Advanced double underline")) || "";
+assert.match(advancedUnderlineXml, /<w:u w:val="double" w:color="00AA00"\/>/);
 
 const spacingParagraphXml = paragraphXmlForText("Spacing paragraph");
 assert.ok(spacingParagraphXml, "spacing paragraph should exist");

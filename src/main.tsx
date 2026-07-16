@@ -768,13 +768,21 @@ const baselinePositionOptions = [
   { label: "提升 1.5 磅", value: "1.5pt" },
   { label: "提升 3 磅", value: "3pt" }
 ];
+const underlineStyleOptions = [
+  { label: "单下划线", value: "single" },
+  { label: "双下划线", value: "double" },
+  { label: "点下划线", value: "dotted" },
+  { label: "虚下划线", value: "dash" },
+  { label: "波浪下划线", value: "wave" }
+];
+const underlineCssStyleByType: Record<string, string> = { single: "solid", double: "double", dotted: "dotted", dash: "dashed", wave: "wavy" };
 const paragraphStyleOptions = [
   { label: "正文", value: "paragraph" },
   { label: "标题 1", value: "heading-1" },
   { label: "标题 2", value: "heading-2" },
   { label: "标题 3", value: "heading-3" }
 ];
-const importedInlineStyleNames = ["font-family", "font-size", "color", "font-weight", "font-style", "letter-spacing", "vertical-align"];
+const importedInlineStyleNames = ["font-family", "font-size", "color", "font-weight", "font-style", "letter-spacing", "vertical-align", "text-decoration-line", "text-decoration-style", "text-decoration-color", "--word-underline-type"];
 const importedBlockStyleNames = ["text-align", "text-indent", "margin-left", "line-height", "margin-top", "margin-bottom", "--word-line-rule"];
 const lineSpacingOptions = [
   { label: "单倍", value: "1" },
@@ -3869,6 +3877,7 @@ function Editor(props: {
             <button className={editor?.isActive("bold") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleBold().run()} title="加粗"><Bold size={16} />加粗</button>
             <button className={editor?.isActive("italic") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleItalic().run()} title="斜体"><Italic size={16} /></button>
             <button className={editor?.isActive("underline") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleUnderline().run()} title="下划线"><UnderlineIcon size={16} />下划线</button>
+            <FormatSelect title="设置选中文字的下划线样式" placeholder="下划线样式" options={underlineStyleOptions} onSelect={(value, label) => applySelectedTextStyle({ "text-decoration-line": "underline", "text-decoration-style": underlineCssStyleByType[value] || "solid", "--word-underline-type": value }, label)} />
             <button aria-label="设置超链接" className={editor?.isActive("link") ? "active-format" : ""} onClick={openLinkEditor} title="设置超链接"><Link2 size={16} /></button>
             <button aria-label="取消超链接" onClick={removeHyperlink} disabled={!editor?.isActive("link")} title="取消超链接"><Unlink size={16} /></button>
             {linkEditorOpen ? <div className="link-editor">

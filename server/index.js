@@ -448,6 +448,10 @@ function sanitizeImportedHtml(value = "") {
         "font-style": [/^italic$/],
         "letter-spacing": [/^normal$/, /^-?\d+(?:\.\d+)?pt$/],
         "vertical-align": [/^baseline$/, /^-?\d+(?:\.\d+)?pt$/],
+        "text-decoration-line": [/^underline$/],
+        "text-decoration-style": [/^(?:solid|double|dotted|dashed|wavy)$/],
+        "text-decoration-color": [/^#[0-9a-f]{6}$/i],
+        "--word-underline-type": [/^(?:single|words|double|thick|dotted|dottedHeavy|dash|dashedHeavy|dashLong|dashLongHeavy|dotDash|dashDotHeavy|dotDotDash|dashDotDotHeavy|wave|wavyHeavy|wavyDouble)$/],
         "background-color": [/^#[0-9a-f]{6}$/i],
         "text-align": [/^(?:left|center|right|justify)$/],
         "text-indent": [/^-?\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
@@ -740,7 +744,42 @@ function parseRunProperties(rPr, themeFonts = {}, themeColors = {}) {
     styles.$italic = wordToggleEnabled(italic) ? "1" : "0";
     if (styles.$italic === "1") styles["font-style"] = "italic";
   }
-  if (underline) styles.$underline = wordToggleEnabled(underline) ? "1" : "0";
+  if (underline) {
+    const enabled = wordToggleEnabled(underline);
+    const underlineType = String(xmlVal(underline) || "single");
+    const underlineThemeColor = themeColors[firstValue(underline.attribs, ["w:themeColor", "themeColor"])];
+    const underlineColor = underlineThemeColor
+      ? transformDocxThemeColor(underlineThemeColor, firstValue(underline.attribs, ["w:themeTint", "themeTint"]), firstValue(underline.attribs, ["w:themeShade", "themeShade"]))
+      : wordColor(firstValue(underline.attribs, ["w:color", "color"]));
+    if (!enabled) {
+      styles.$underline = "0";
+    } else if (underlineType === "single" && !underlineColor) {
+      styles.$underline = "1";
+    } else {
+      const cssUnderlineStyles = {
+        double: "double",
+        dotted: "dotted",
+        dottedHeavy: "dotted",
+        dotDash: "dotted",
+        dashDotHeavy: "dotted",
+        dotDotDash: "dotted",
+        dashDotDotHeavy: "dotted",
+        dash: "dashed",
+        dashedHeavy: "dashed",
+        dashLong: "dashed",
+        dashLongHeavy: "dashed",
+        wave: "wavy",
+        wavyHeavy: "wavy",
+        wavyDouble: "wavy"
+      };
+      // 中文注解：CSS 负责在线可见效果，自定义属性保留 Word 的精确下划线枚举供再次导出。
+      styles.$underline = "style";
+      styles["text-decoration-line"] = "underline";
+      styles["text-decoration-style"] = cssUnderlineStyles[underlineType] || "solid";
+      styles["--word-underline-type"] = underlineType;
+      if (underlineColor) styles["text-decoration-color"] = underlineColor;
+    }
+  }
   if (strike) styles.$strike = wordToggleEnabled(strike) ? "1" : "0";
   if (highlight) styles.$highlight = highlight;
   if (["superscript", "subscript"].includes(verticalAlign)) styles.$verticalAlign = verticalAlign;
@@ -1235,6 +1274,13 @@ async function docxRunToHtml(runNode, inheritedRunStyles = {}, context = {}, tab
     // 中文注解：同一个 Word run 可同时定义西文和东亚字体，按脚本拆成相邻 span 后在线显示和再次导出才能保留混排。
     if (runStyles.$bold === "0") delete runStyles["font-weight"];
     if (runStyles.$italic === "0") delete runStyles["font-style"];
+    if (["0", "1"].includes(runStyles.$underline)) {
+      // 中文注解：显式关闭或普通单线必须覆盖继承来的高级下划线 CSS，避免字符样式串色。
+      delete runStyles["text-decoration-line"];
+      delete runStyles["text-decoration-style"];
+      delete runStyles["text-decoration-color"];
+      delete runStyles["--word-underline-type"];
+    }
     let html = escapeHtml(segment.text).replace(/\n/g, "<br>");
     if (runStyles.$underline === "1") html = `<u>${html}</u>`;
     if (runStyles.$italic === "1" || runStyles["font-style"] === "italic") html = `<em>${html}</em>`;
@@ -2174,6 +2220,10 @@ function textRunStyleFromNode(node) {
   const font = fontFamilyFromCss(styles["font-family"]);
   const characterSpacing = styles["letter-spacing"] === "normal" ? 0 : cssSignedLengthToTwip(styles["letter-spacing"]);
   const position = styles["vertical-align"] === "baseline" ? 0 : cssBaselinePositionToHalfPoints(styles["vertical-align"]);
+  const underlineTypeMap = { solid: "single", double: "double", dotted: "dotted", dashed: "dash", wavy: "wave" };
+  const nativeUnderlineType = /^(?:single|words|double|thick|dotted|dottedHeavy|dash|dashedHeavy|dashLong|dashLongHeavy|dotDash|dashDotHeavy|dotDotDash|dashDotDotHeavy|wave|wavyHeavy|wavyDouble)$/.test(styles["--word-underline-type"] || "")
+    ? styles["--word-underline-type"]
+    : underlineTypeMap[styles["text-decoration-style"]] || "single";
   if (color) runStyle.color = color;
   if (size) runStyle.size = size;
   if (font) runStyle.font = font;
@@ -2182,6 +2232,10 @@ function textRunStyleFromNode(node) {
   // 中文注解：零值也要进入扁平化标记，用于覆盖外层 span 的字距或基线设置；docx 会在最终文本运行中省略零值。
   if (characterSpacing !== undefined) runStyle.characterSpacing = characterSpacing;
   if (position !== undefined) runStyle.position = position;
+  if (styles["text-decoration-line"] === "underline") {
+    const underlineColor = normalizeDocxColor(styles["text-decoration-color"]);
+    runStyle.underline = { type: nativeUnderlineType, ...(underlineColor ? { color: underlineColor } : {}) };
+  }
   const highlight = normalizeDocxHighlight(node?.attribs?.["data-highlight"]);
   if (highlight) runStyle.highlight = highlight;
   return runStyle;
@@ -2266,7 +2320,7 @@ function textRunsFromNode(node, marks = {}) {
       text,
       bold: marks.bold,
       italics: marks.italics,
-      underline: marks.underline ? {} : undefined,
+      underline: marks.underline === true ? {} : marks.underline,
       strike: marks.strike,
       color: marks.color,
       size: marks.size,
@@ -2299,7 +2353,7 @@ function textRunsFromNode(node, marks = {}) {
     ...nodeRunStyle,
     bold: marks.bold || nodeRunStyle.bold || ["strong", "b"].includes(node.name),
     italics: marks.italics || nodeRunStyle.italics || ["em", "i"].includes(node.name),
-    underline: marks.underline || node.name === "u",
+    underline: nodeRunStyle.underline ?? (node.name === "u" ? true : marks.underline),
     strike: marks.strike || ["s", "strike", "del"].includes(node.name),
     superScript: node.name === "sup" ? true : (node.name === "sub" ? false : marks.superScript),
     subScript: node.name === "sub" ? true : (node.name === "sup" ? false : marks.subScript)

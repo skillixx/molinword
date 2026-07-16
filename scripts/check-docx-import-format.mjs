@@ -124,6 +124,7 @@ async function buildFormattedDocxFixture() {
       <w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:t>Superscript text</w:t></w:r>
       <w:r><w:rPr><w:vertAlign w:val="subscript"/></w:rPr><w:t>Subscript text</w:t></w:r>
       <w:r><w:rPr><w:spacing w:val="40"/><w:position w:val="6"/></w:rPr><w:t>Expanded raised text</w:t></w:r>
+      <w:r><w:rPr><w:u w:val="double" w:color="00AA00"/></w:rPr><w:t>Double green underline</w:t></w:r>
     </w:p>
     <w:p><w:r><w:t>链接前 </w:t></w:r><w:hyperlink r:id="rIdHyperlink1"><w:r><w:rPr><w:u w:val="single"/><w:color w:val="0563C1"/></w:rPr><w:t>OpenAI documentation</w:t></w:r></w:hyperlink><w:r><w:t> 链接后</w:t></w:r></w:p>
     <w:p><w:pPr><w:pStyle w:val="BodyBased"/></w:pPr><w:r><w:t>Inherited spacing</w:t></w:r></w:p>
@@ -430,6 +431,7 @@ assert.match(imported.content, /<mark data-highlight="yellow" style="background-
 assert.match(imported.content, /<sup>Superscript text<\/sup>/);
 assert.match(imported.content, /<sub>Subscript text<\/sub>/);
 assert.match(imported.content, /<span[^>]+style="[^"]*letter-spacing:\s*2pt[^"]*vertical-align:\s*3pt[^"]*"[^>]*>Expanded raised text<\/span>/);
+assert.match(imported.content, /<span[^>]+style="[^"]*text-decoration-line:\s*underline[^"]*text-decoration-style:\s*double[^"]*--word-underline-type:\s*double[^"]*text-decoration-color:\s*#00AA00[^"]*"[^>]*>Double green underline<\/span>/i);
 assert.match(imported.content, /data-paragraph-shading="[^\"]*(?:&quot;fill&quot;|fill)[^\"]*FFF2CC[^\"]*"/);
 assert.match(imported.content, /data-paragraph-borders="[^\"]*(?:&quot;top&quot;|top)[^\"]*FF0000[^\"]*"/);
 assert.match(imported.content, /background-color:\s*#FFF2CC/i);
@@ -591,6 +593,8 @@ assert.match(roundTripXml, /<w:vertAlign w:val="subscript"\/>/);
 const advancedCharacterRoundTripXml = (roundTripXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("Expanded raised text")) || "";
 assert.match(advancedCharacterRoundTripXml, /<w:spacing w:val="40"\/>/);
 assert.match(advancedCharacterRoundTripXml, /<w:position w:val="6"\/>/);
+const advancedUnderlineRoundTripXml = (roundTripXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("Double green underline")) || "";
+assert.match(advancedUnderlineRoundTripXml, /<w:u w:val="double" w:color="00AA00"\/>/);
 const paginationControlledRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Pagination controlled paragraph")) || "";
 assert.match(paginationControlledRoundTripXml, /<w:keepNext\/>/);
 assert.match(paginationControlledRoundTripXml, /<w:keepLines\/>/);
@@ -638,6 +642,8 @@ assert.match(roundTripImported.content, /<mark data-highlight="yellow"[^>]*>High
 assert.match(roundTripImported.content, /<sup>Superscript text<\/sup>/);
 assert.match(roundTripImported.content, /<sub>Subscript text<\/sub>/);
 assert.match(roundTripImported.content, /<span[^>]+style="[^"]*letter-spacing:\s*2pt[^"]*vertical-align:\s*3pt[^"]*"[^>]*>Expanded raised text<\/span>/);
+assert.match(roundTripImported.content, /text-decoration-style:\s*double/);
+assert.match(roundTripImported.content, /text-decoration-color:\s*#00AA00/i);
 assert.match(roundTripImported.content, /<p[^>]+data-keep-next="true"[^>]+data-keep-lines="true"[^>]+data-page-break-before="true"[^>]+data-widow-control="true"[^>]*>[\s\S]*?Pagination controlled paragraph[\s\S]*?<\/p>/);
 assert.match(roundTripImported.content, /<p[^>]+data-widow-control="false"[^>]*>[\s\S]*?Widow control disabled paragraph[\s\S]*?<\/p>/);
 const roundTripImportedTabParagraph = (roundTripImported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || [])

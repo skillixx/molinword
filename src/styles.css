@@ -816,11 +816,23 @@ textarea {
 .format-bar {
   display: flex;
   flex-shrink: 0;
-  flex-wrap: wrap;
+  align-items: center;
+  flex-wrap: nowrap;
   gap: 8px;
-  padding: 12px;
+  box-sizing: border-box;
+  height: 72px;
+  min-height: 72px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 8px 12px;
   border-bottom: 1px solid #dfe5eb;
   background: #f8fafb;
+  scrollbar-width: thin;
+}
+
+/* 中文注解：格式工具固定为单行并允许横向滚动，避免控件增加后挤压或覆盖 A4 编辑区。 */
+.format-bar > * {
+  flex: 0 0 auto;
 }
 
 .view-mode-control {
