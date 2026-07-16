@@ -1539,6 +1539,36 @@ const FootnoteReference = TiptapNode.create({
   }
 });
 
+const EndnoteReference = TiptapNode.create({
+  name: "endnoteReference",
+  group: "inline",
+  inline: true,
+  atom: true,
+  selectable: true,
+  addAttributes() {
+    return {
+      endnoteId: {
+        default: 1,
+        parseHTML: (element) => Math.max(1, Math.min(Math.round(Number(element.getAttribute("data-endnote-id")) || 1), 32767)),
+        renderHTML: (attributes) => ({ "data-endnote-id": Math.max(1, Math.min(Math.round(Number(attributes.endnoteId) || 1), 32767)) })
+      },
+      endnoteText: {
+        default: "",
+        parseHTML: (element) => String(element.getAttribute("data-endnote-text") || "").replace(/\r\n?/g, "\n").trim().slice(0, 4000),
+        renderHTML: (attributes) => ({ "data-endnote-text": String(attributes.endnoteText || "").replace(/\r\n?/g, "\n").trim().slice(0, 4000) })
+      }
+    };
+  },
+  parseHTML() {
+    return [{ tag: "span.endnote-reference[data-endnote-id][data-endnote-text]" }];
+  },
+  // 中文注解：尾注节点与脚注节点保持独立编号空间，分页预览可将尾注正文统一放到文档末尾。
+  renderHTML({ node, HTMLAttributes }) {
+    const id = Math.max(1, Math.min(Math.round(Number(node.attrs.endnoteId) || 1), 32767));
+    return ["span", mergeAttributes(HTMLAttributes, { class: "endnote-reference", title: String(node.attrs.endnoteText || "") }), String(id)];
+  }
+});
+
 const DocxTab = TiptapNode.create({
   name: "docxTab",
   group: "inline",
@@ -2108,7 +2138,21 @@ function aiResultToHtml(text: string) {
 
 function buildExportPreviewHtml(title: string, content: string) {
   // 中文注解：后端导出会把文档标题作为 Word 标题段落写入，这里同步显示，避免预览少一段。
-  return `<h1 class="export-title">${escapeHtml(title || "未命名文档")}</h1>${content || "<p></p>"}`;
+  const endnotes = previewEndnotesFromHtml(content);
+  const endnotesHtml = endnotes.length ? `<h2 class="endnotes-title" data-keep-next="true">尾注</h2>${endnotes.map((endnote) => `<p class="endnote-entry" data-endnote-id="${endnote.id}"><span>${endnote.id}</span>${escapeHtml(endnote.text).replace(/\n/g, "<br>")}</p>`).join("")}` : "";
+  return `<h1 class="export-title">${escapeHtml(title || "未命名文档")}</h1>${content || "<p></p>"}${endnotesHtml}`;
+}
+
+function previewEndnotesFromHtml(html: string) {
+  const container = document.createElement("div");
+  container.innerHTML = html;
+  const endnotes = new Map<number, PreviewFootnote>();
+  container.querySelectorAll<HTMLElement>(".endnote-reference[data-endnote-id][data-endnote-text]").forEach((reference) => {
+    const id = Number(reference.dataset.endnoteId);
+    const text = String(reference.dataset.endnoteText || "").replace(/\r\n?/g, "\n").trim().slice(0, 4000);
+    if (Number.isInteger(id) && id > 0 && id <= 32767 && text && !endnotes.has(id)) endnotes.set(id, { id, text });
+  });
+  return Array.from(endnotes.values());
 }
 
 function previewFootnotesFromHtml(html: string) {
@@ -3245,6 +3289,8 @@ function Editor(props: {
   const [linkUrl, setLinkUrl] = React.useState("https://");
   const [footnoteEditorOpen, setFootnoteEditorOpen] = React.useState(false);
   const [footnoteText, setFootnoteText] = React.useState("");
+  const [endnoteEditorOpen, setEndnoteEditorOpen] = React.useState(false);
+  const [endnoteText, setEndnoteText] = React.useState("");
   const [imageAspectLocked, setImageAspectLocked] = React.useState(true);
   const paginationMeasureRef = React.useRef<HTMLDivElement | null>(null);
   const imageInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -3284,7 +3330,7 @@ function Editor(props: {
   }, [props.pageLayout]);
 
   const editor = useEditor({
-    extensions: [StarterKit.configure({ link: { openOnClick: false, autolink: false, linkOnPaste: true, HTMLAttributes: { target: "_blank", rel: "noopener noreferrer" } } }), DocumentImage.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DoubleStrikeText, FootnoteReference, DocxTab, ListFormatAttributes, OutlineLevelAttributes, ParagraphIndent, PageBreak, ColumnBreak, SectionBreak, DocumentTable, DocumentTableRow, DocumentTableHeader, DocumentTableCell],
+    extensions: [StarterKit.configure({ link: { openOnClick: false, autolink: false, linkOnPaste: true, HTMLAttributes: { target: "_blank", rel: "noopener noreferrer" } } }), DocumentImage.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DoubleStrikeText, FootnoteReference, EndnoteReference, DocxTab, ListFormatAttributes, OutlineLevelAttributes, ParagraphIndent, PageBreak, ColumnBreak, SectionBreak, DocumentTable, DocumentTableRow, DocumentTableHeader, DocumentTableCell],
     content: props.content,
     editorProps: { attributes: { class: "word-editor" } },
     onCreate({ editor }) {
@@ -4185,6 +4231,7 @@ function Editor(props: {
 
   const openFootnoteEditor = () => {
     if (!editor) return;
+    setEndnoteEditorOpen(false);
     const attributes = editor.getAttributes("footnoteReference");
     setFootnoteText(editor.isActive("footnoteReference") ? String(attributes.footnoteText || "") : "");
     setFootnoteEditorOpen(true);
@@ -4218,6 +4265,44 @@ function Editor(props: {
     editor.chain().focus().deleteSelection().run();
     setFootnoteEditorOpen(false);
     setSelectionHint("已删除脚注。");
+  };
+
+  const openEndnoteEditor = () => {
+    if (!editor) return;
+    setFootnoteEditorOpen(false);
+    const attributes = editor.getAttributes("endnoteReference");
+    setEndnoteText(editor.isActive("endnoteReference") ? String(attributes.endnoteText || "") : "");
+    setEndnoteEditorOpen(true);
+  };
+
+  const applyEndnote = () => {
+    if (!editor) return;
+    const text = endnoteText.replace(/\r\n?/g, "\n").trim().slice(0, 4000);
+    if (!text) {
+      setSelectionHint("请输入尾注内容。");
+      return;
+    }
+    if (editor.isActive("endnoteReference")) {
+      editor.chain().focus().updateAttributes("endnoteReference", { endnoteText: text }).run();
+      setSelectionHint("已更新尾注。");
+    } else {
+      let maxId = 0;
+      editor.state.doc.descendants((node) => {
+        if (node.type.name === "endnoteReference") maxId = Math.max(maxId, Number(node.attrs.endnoteId) || 0);
+      });
+      const endnoteId = Math.min(32767, maxId + 1);
+      // 中文注解：尾注编号与正文引用保存在同一原子节点，文末展示和 DOCX 导出始终读取同一份内容。
+      editor.chain().focus().insertContent({ type: "endnoteReference", attrs: { endnoteId, endnoteText: text } }).run();
+      setSelectionHint("已插入尾注。");
+    }
+    setEndnoteEditorOpen(false);
+  };
+
+  const removeEndnote = () => {
+    if (!editor?.isActive("endnoteReference")) return;
+    editor.chain().focus().deleteSelection().run();
+    setEndnoteEditorOpen(false);
+    setSelectionHint("已删除尾注。");
   };
 
   const updateSelectedImageLayout = (mode: "inline" | "wrapLeft" | "wrapRight" | "topAndBottom") => {
@@ -4415,6 +4500,7 @@ function Editor(props: {
               <button aria-label="关闭超链接编辑" onClick={() => setLinkEditorOpen(false)} title="关闭"><X size={16} /></button>
             </div> : null}
             <button aria-label="插入或编辑脚注" className={editor?.isActive("footnoteReference") ? "active-format" : ""} onClick={openFootnoteEditor} title="在当前位置插入脚注，或修改选中的脚注"><FileText size={16} />脚注</button>
+            <button aria-label="插入或编辑尾注" className={editor?.isActive("endnoteReference") ? "active-format" : ""} onClick={openEndnoteEditor} title="在当前位置插入尾注，或修改选中的尾注"><FileText size={16} />尾注</button>
             <button className={editor?.isActive("strike") ? "active-format" : ""} onClick={() => applyStrikeStyle(editor?.isActive("strike") ? "none" : "single", editor?.isActive("strike") ? "无删除线" : "单删除线")} title="删除线"><Strikethrough size={16} /></button>
             <FormatSelect title="设置或清除选中文字的删除线样式" placeholder="删除线样式" options={strikeStyleOptions} icon={<Strikethrough size={16} />} onSelect={applyStrikeStyle} />
             <button aria-label="黄色突出显示" className={editor?.isActive("textHighlight", { color: "yellow" }) ? "active-format" : ""} onClick={() => applyTextHighlight("yellow", "黄色突出显示")} title="黄色突出显示"><Highlighter size={16} /></button>
@@ -4532,6 +4618,14 @@ function Editor(props: {
               <button aria-label="确认脚注" onClick={applyFootnote} title="确认脚注"><Check size={16} /></button>
               {editor?.isActive("footnoteReference") ? <button aria-label="删除脚注" onClick={removeFootnote} title="删除脚注"><Trash2 size={16} /></button> : null}
               <button aria-label="关闭脚注编辑" onClick={() => setFootnoteEditorOpen(false)} title="关闭"><X size={16} /></button>
+            </div>
+          </div> : null}
+          {endnoteEditorOpen ? <div className="footnote-editor endnote-editor">
+            <textarea aria-label="尾注内容" autoFocus maxLength={4000} rows={3} value={endnoteText} onChange={(event) => setEndnoteText(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") applyEndnote(); if (event.key === "Escape") setEndnoteEditorOpen(false); }} />
+            <div className="footnote-editor-actions">
+              <button aria-label="确认尾注" onClick={applyEndnote} title="确认尾注"><Check size={16} /></button>
+              {editor?.isActive("endnoteReference") ? <button aria-label="删除尾注" onClick={removeEndnote} title="删除尾注"><Trash2 size={16} /></button> : null}
+              <button aria-label="关闭尾注编辑" onClick={() => setEndnoteEditorOpen(false)} title="关闭"><X size={16} /></button>
             </div>
           </div> : null}
           {props.aiLoading === "正在生成正文" || paginationPending ? <div className="paper-loading"><LoadingProcess label={paginationPending ? "正在计算分页" : props.aiLoading || "正在处理"} /></div> : null}

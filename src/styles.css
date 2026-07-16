@@ -269,7 +269,8 @@ button:disabled {
   gap: 4px;
 }
 
-.footnote-reference {
+.footnote-reference,
+.endnote-reference {
   display: inline-block;
   min-width: 0.8em;
   margin: 0 1px;
@@ -280,6 +281,31 @@ button:disabled {
   text-align: center;
   vertical-align: super;
   cursor: pointer;
+}
+
+.endnote-reference {
+  color: #4f5f78;
+}
+
+.endnotes-title {
+  margin-top: 18px;
+  padding-top: 8px;
+  border-top: 1px solid #65717c;
+  color: #26323d;
+  font-size: 15px;
+}
+
+.endnote-entry {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 5px;
+  color: #26323d;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.endnote-entry > span {
+  text-align: right;
 }
 
 .image-format-control,
