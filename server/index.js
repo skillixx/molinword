@@ -460,7 +460,7 @@ function sanitizeImportedHtml(value = "") {
       mark: ["data-highlight", "style"],
       a: ["href", "target", "rel"],
       ol: ["style", "data-list-format", "start"],
-      table: ["style", "data-table-width-type", "data-table-width-value", "data-table-grid-width", "data-table-layout", "data-table-alignment", "data-table-indent", "data-table-borders"],
+      table: ["style", "data-table-width-type", "data-table-width-value", "data-table-grid-width", "data-table-layout", "data-table-alignment", "data-table-indent", "data-table-cell-spacing", "data-table-borders"],
       tr: ["style", "data-row-height", "data-row-height-rule", "data-row-cant-split", "data-row-repeat-header"],
       th: ["style", "colspan", "rowspan", "colwidth", "data-docx-cell", "data-cell-margins", "data-cell-vertical-align", "data-cell-text-direction", "data-cell-shading", "data-cell-borders"],
       td: ["style", "colspan", "rowspan", "colwidth", "data-docx-cell", "data-cell-margins", "data-cell-vertical-align", "data-cell-text-direction", "data-cell-shading", "data-cell-borders"],
@@ -524,7 +524,9 @@ function sanitizeImportedHtml(value = "") {
       },
       table: {
         width: [/^\d+(?:\.\d+)?(?:px|%)$/],
-        "table-layout": [/^(?:fixed|auto)$/]
+        "table-layout": [/^(?:fixed|auto)$/],
+        "border-collapse": [/^(?:collapse|separate)$/],
+        "border-spacing": [/^\d+(?:\.\d+)?px$/]
       },
       tr: {
         height: [/^\d+(?:\.\d+)?px$/]
@@ -1584,6 +1586,11 @@ async function parseStyledDocxTable(tableNode, context) {
   const tableIndent = tableIndentNode && (!tableIndentType || tableIndentType === "dxa")
     ? Math.max(-31680, Math.min(31680, Math.round(Number(firstValue(tableIndentNode.attribs, ["w:w", "w"])) || 0)))
     : 0;
+  const tableCellSpacingNode = xmlChild(tableProperties, "w:tblCellSpacing");
+  const tableCellSpacingType = firstValue(tableCellSpacingNode?.attribs, ["w:type", "type"]);
+  const tableCellSpacing = tableCellSpacingNode && (!tableCellSpacingType || tableCellSpacingType === "dxa")
+    ? Math.max(0, Math.min(31680, Math.round(Number(firstValue(tableCellSpacingNode.attribs, ["w:w", "w"])) || 0)))
+    : 0;
   const tableCellMargins = parseDocxCellMargins(xmlChild(tableProperties, "w:tblCellMar"));
   const tableBorders = parseDocxBorders(xmlChild(tableProperties, "w:tblBorders"), context.themeColors || {});
   const gridWidths = xmlChildren(xmlChild(tableNode, "w:tblGrid"), "w:gridCol")
@@ -1687,6 +1694,9 @@ async function parseStyledDocxTable(tableNode, context) {
     : tableAlignment === "right"
       ? "margin-left: auto; margin-right: 0px"
       : `margin-left: ${Math.round(tableIndent * 96 / 1440 * 100) / 100}px; margin-right: auto`;
+  const cellSpacingStyle = tableCellSpacing > 0
+    ? `border-collapse: separate; border-spacing: ${Math.round(tableCellSpacing * 96 / 1440 * 100) / 100}px`
+    : "border-collapse: collapse; border-spacing: 0px";
   const attributes = [
     `data-table-width-type="${tableWidthType}"`,
     `data-table-width-value="${tableWidthValue}"`,
@@ -1694,8 +1704,9 @@ async function parseStyledDocxTable(tableNode, context) {
     `data-table-layout="${tableLayout}"`,
     `data-table-alignment="${tableAlignment}"`,
     `data-table-indent="${tableIndent}"`,
+    `data-table-cell-spacing="${tableCellSpacing}"`,
     ...(Object.keys(tableBorders).length ? [`data-table-borders="${escapeHtml(JSON.stringify(tableBorders))}"`] : []),
-    `style="${widthStyle}; ${alignmentStyle}; table-layout: ${tableLayout === "fixed" ? "fixed" : "auto"}"`
+    `style="${widthStyle}; ${alignmentStyle}; table-layout: ${tableLayout === "fixed" ? "fixed" : "auto"}; ${cellSpacingStyle}"`
   ];
   // 中文注解：tblGrid 是 Word 实际分页使用的列几何，转换为 colwidth 后由编辑器、分页器和再次导出共同使用。
   return `<table ${attributes.join(" ")}><tbody>${renderedRows.join("")}</tbody></table>`;
@@ -2700,6 +2711,10 @@ function tableFromNode(tableNode, listState) {
     alignment: ({ left: AlignmentType.LEFT, center: AlignmentType.CENTER, right: AlignmentType.RIGHT })[tableNode.attribs?.["data-table-alignment"]] || AlignmentType.LEFT,
     indent: Number(tableNode.attribs?.["data-table-indent"])
       ? { size: Math.max(-31680, Math.min(31680, Math.round(Number(tableNode.attribs["data-table-indent"])))), type: WidthType.DXA }
+      : undefined,
+    // 中文注解：单元格间距直接写入 tblCellSpacing，避免用单元格外边距模拟后造成 Word 表宽和分页偏差。
+    cellSpacing: Number(tableNode.attribs?.["data-table-cell-spacing"]) > 0
+      ? { value: Math.max(0, Math.min(31680, Math.round(Number(tableNode.attribs["data-table-cell-spacing"])))), type: WidthType.DXA }
       : undefined,
     borders: docxBordersFromNode(tableNode, "data-table-borders", true),
     rows

@@ -158,7 +158,7 @@ async function buildFormattedDocxFixture() {
       <w:r><w:t>Tab project</w:t><w:tab/><w:t>Tab amount</w:t><w:tab/><w:t>100.00</w:t></w:r>
     </w:p>
     <w:tbl>
-      <w:tblPr><w:tblW w:type="dxa" w:w="6000"/><w:jc w:val="center"/><w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="100" w:type="dxa"/><w:right w:w="200" w:type="dxa"/><w:bottom w:w="300" w:type="dxa"/><w:left w:w="400" w:type="dxa"/></w:tblCellMar><w:tblBorders><w:top w:val="single" w:sz="8" w:color="FF0000"/><w:right w:val="dashed" w:sz="6" w:color="00AA00"/><w:bottom w:val="double" w:sz="12" w:color="0000FF"/><w:left w:val="nil" w:sz="0" w:color="auto"/><w:insideH w:val="dotted" w:sz="4" w:color="888888"/><w:insideV w:val="single" w:sz="4" w:color="000000"/></w:tblBorders></w:tblPr>
+      <w:tblPr><w:tblW w:type="dxa" w:w="6000"/><w:jc w:val="center"/><w:tblLayout w:type="fixed"/><w:tblCellSpacing w:w="120" w:type="dxa"/><w:tblCellMar><w:top w:w="100" w:type="dxa"/><w:right w:w="200" w:type="dxa"/><w:bottom w:w="300" w:type="dxa"/><w:left w:w="400" w:type="dxa"/></w:tblCellMar><w:tblBorders><w:top w:val="single" w:sz="8" w:color="FF0000"/><w:right w:val="dashed" w:sz="6" w:color="00AA00"/><w:bottom w:val="double" w:sz="12" w:color="0000FF"/><w:left w:val="nil" w:sz="0" w:color="auto"/><w:insideH w:val="dotted" w:sz="4" w:color="888888"/><w:insideV w:val="single" w:sz="4" w:color="000000"/></w:tblBorders></w:tblPr>
       <w:tblGrid><w:gridCol w:w="1800"/><w:gridCol w:w="4200"/></w:tblGrid>
       <w:tr><w:trPr><w:tblHeader/><w:cantSplit/><w:trHeight w:val="720" w:hRule="exact"/></w:trPr><w:tc><w:tcPr><w:tcW w:type="dxa" w:w="1800"/><w:tcMar><w:right w:w="600" w:type="dxa"/></w:tcMar><w:vAlign w:val="center"/><w:textDirection w:val="tbRl"/><w:shd w:val="clear" w:fill="D9EAD3"/><w:tcBorders><w:right w:val="double" w:sz="16" w:color="800080"/></w:tcBorders></w:tcPr><w:p><w:r><w:t>Geometry A</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:tcW w:type="dxa" w:w="4200"/><w:textDirection w:val="btLr"/></w:tcPr><w:p><w:r><w:t>Geometry B</w:t></w:r></w:p></w:tc></w:tr>
     </w:tbl>
@@ -510,8 +510,11 @@ assert.match(importedGeometryTable, /data-table-width-value="6000"/);
 assert.match(importedGeometryTable, /data-table-grid-width="6000"/);
 assert.match(importedGeometryTable, /data-table-layout="fixed"/);
 assert.match(importedGeometryTable, /data-table-alignment="center"/);
+assert.match(importedGeometryTable, /data-table-cell-spacing="120"/);
 assert.match(importedGeometryTable, /data-table-borders="[^"]*&quot;top&quot;[^"]*FF0000[^"]*insideVertical[^"]*"/);
 assert.match(importedGeometryTable, /style="(?=[^"]*width:\s*400px)(?=[^"]*margin-left:\s*auto)(?=[^"]*margin-right:\s*auto)(?=[^"]*table-layout:\s*fixed)[^"]*"/);
+assert.match(importedGeometryTable, /border-collapse:\s*separate/);
+assert.match(importedGeometryTable, /border-spacing:\s*8px/);
 assert.match(importedGeometryTable, /colwidth="120"/);
 assert.match(importedGeometryTable, /colwidth="280"/);
 const importedGeometryRow = importedGeometryTable.match(/<tr[^>]*>/)?.[0] || "";
@@ -670,6 +673,7 @@ const geometryRoundTripXml = (roundTripXml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/g) ||
 assert.match(geometryRoundTripXml, /<w:tblW w:type="dxa" w:w="6000"\/>/);
 assert.match(geometryRoundTripXml, /<w:tblLayout w:type="fixed"\/>/);
 assert.match(geometryRoundTripXml, /<w:jc w:val="center"\/>/);
+assert.match(geometryRoundTripXml, /<w:tblCellSpacing(?=[^>]+w:type="dxa")(?=[^>]+w:w="120")[^>]*\/>/);
 const geometryTableBordersRoundTripXml = geometryRoundTripXml.match(/<w:tblBorders>[\s\S]*?<\/w:tblBorders>/)?.[0] || "";
 assert.match(geometryTableBordersRoundTripXml, /<w:top w:val="single" w:color="FF0000" w:sz="8"\/>/);
 assert.match(geometryTableBordersRoundTripXml, /<w:right w:val="dashed" w:color="00AA00" w:sz="6"\/>/);
@@ -729,6 +733,9 @@ assert.match(roundTripImportedTabParagraph, /data-tab-position="1440"[^>]+data-t
 assert.match(roundTripImportedTabParagraph, /data-tab-position="5760"[^>]+data-tab-alignment="right"/);
 const roundTripImportedGeometryTable = (roundTripImported.content.match(/<table(?:\s[^>]*)?>[\s\S]*?<\/table>/g) || []).find((table) => table.includes("Geometry A")) || "";
 assert.match(roundTripImportedGeometryTable, /data-table-alignment="center"/);
+assert.match(roundTripImportedGeometryTable, /data-table-cell-spacing="120"/);
+assert.match(roundTripImportedGeometryTable, /border-collapse:\s*separate/);
+assert.match(roundTripImportedGeometryTable, /border-spacing:\s*8px/);
 assert.match(roundTripImportedGeometryTable, /margin-left:\s*auto/);
 assert.match(roundTripImportedGeometryTable, /margin-right:\s*auto/);
 assert.match(roundTripImportedGeometryTable, /style="(?=[^"]*width:\s*400px)(?=[^"]*margin-left:\s*auto)(?=[^"]*margin-right:\s*auto)(?=[^"]*table-layout:\s*fixed)[^"]*"/);

@@ -470,6 +470,12 @@ try {
     marginLeft: table.style.marginLeft,
     marginRight: table.style.marginRight
   })), { alignment: "left", indent: "567", marginLeft: "37.8px", marginRight: "auto" });
+  await page.locator('label[title="设置当前表格单元格间距"] select').selectOption("120");
+  assert.deepEqual(await sourceTables.last().evaluate((table) => ({
+    spacing: table.getAttribute("data-table-cell-spacing"),
+    borderCollapse: getComputedStyle(table).borderCollapse,
+    borderSpacing: getComputedStyle(table).borderSpacing
+  })), { spacing: "120", borderCollapse: "separate", borderSpacing: "8px" });
 
   await page.evaluate(() => {
     const paragraph = document.querySelector(".word-editor p");
@@ -599,7 +605,7 @@ try {
   assert.match(storedDocument.content, /<p[^>]+data-paragraph-shading="[^\"]*DDEBF7[^\"]*"[^>]+data-paragraph-borders="[^\"]*dashed[^\"]*"[^>]*>[\s\S]*?段落外观工具[\s\S]*?<\/p>/);
   assert.match(storedDocument.content, /data-section-break="nextPage"/);
   assert.match(storedDocument.content, /rowspan="2"/);
-  assert.match(storedDocument.content, /<table(?=[^>]*data-table-alignment="left")(?=[^>]*data-table-indent="567")(?=[^>]*style="[^"]*margin-left:\s*37\.8px)(?=[^>]*style="[^"]*margin-right:\s*auto)[^>]*>[\s\S]*?商务评审/);
+  assert.match(storedDocument.content, /<table(?=[^>]*data-table-alignment="left")(?=[^>]*data-table-indent="567")(?=[^>]*data-table-cell-spacing="120")(?=[^>]*style="[^"]*margin-left:\s*37\.8px)(?=[^>]*style="[^"]*margin-right:\s*auto)(?=[^>]*style="[^"]*border-spacing:\s*8px)[^>]*>[\s\S]*?商务评审/);
   assert.match(storedDocument.content, /第二节横向内容/);
   assert.match(storedDocument.content, /第二节横向页眉/);
   const storedSectionLayoutText = storedDocument.content.match(/data-section-layout="([^"]+)"/)?.[1]
@@ -690,7 +696,7 @@ try {
   assert.equal((reopenedHtml.match(/data-docx-tab="true"/g) || []).length, 4);
   assert.match(reopenedHtml, /<td[^>]+data-cell-margins="[^"]*&quot;top&quot;:180[^"]*"[^>]+data-cell-vertical-align="bottom"[^>]+data-cell-text-direction="btLr"[^>]+data-cell-shading="#FFF2CC"[^>]*>.*商务评审/s);
   assert.match(reopenedHtml, /<td[^>]+data-cell-borders="[^"]*&quot;top&quot;[^"]*dashed[^"]*6B7280[^"]*"[^>]*>.*商务评审/s);
-  assert.match(reopenedHtml, /<table(?=[^>]*data-table-alignment="left")(?=[^>]*data-table-indent="567")(?=[^>]*style="[^"]*margin-left:\s*37\.8px)(?=[^>]*style="[^"]*margin-right:\s*auto)[^>]*>[\s\S]*?商务评审/);
+  assert.match(reopenedHtml, /<table(?=[^>]*data-table-alignment="left")(?=[^>]*data-table-indent="567")(?=[^>]*data-table-cell-spacing="120")(?=[^>]*style="[^"]*margin-left:\s*37\.8px)(?=[^>]*style="[^"]*margin-right:\s*auto)(?=[^>]*style="[^"]*border-spacing:\s*8px)[^>]*>[\s\S]*?商务评审/);
   assert.match(reopenedHtml, /<h4[^>]+data-outline-level="3"[^>]*>[\s\S]*?大纲级别工具[\s\S]*?<\/h4>/);
   const reopenedHeaderRow = reopenedHtml.match(/<tr[^>]+data-row-height="850"[^>]*>/)?.[0] || "";
   assert.match(reopenedHeaderRow, /data-row-height-rule="exact"/);
@@ -740,6 +746,7 @@ try {
   assert.match(geometryTable, /<w:tblLayout w:type="fixed"\/>/);
   assert.match(geometryTable, /<w:jc w:val="left"\/>/);
   assert.match(geometryTable, /<w:tblInd w:type="dxa" w:w="567"\/>/);
+  assert.match(geometryTable, /<w:tblCellSpacing(?=[^>]+w:type="dxa")(?=[^>]+w:w="120")[^>]*\/>/);
   assert.match(geometryTable, /<w:tblGrid><w:gridCol w:w="1800"\/><w:gridCol w:w="5400"\/><\/w:tblGrid>/);
   const businessReviewCellXml = (geometryTable.match(/<w:tc>[\s\S]*?<\/w:tc>/g) || []).find((cell) => cell.includes("商务评审")) || "";
   const businessReviewMarginsXml = businessReviewCellXml.match(/<w:tcMar>[\s\S]*?<\/w:tcMar>/)?.[0] || "";
@@ -853,7 +860,8 @@ try {
   const previewFloatingImage = page.locator('.page-body img[alt="浮动审批标识"]').first();
   await previewFloatingImage.waitFor();
   await page.waitForFunction(() => Array.from(document.querySelectorAll('.page-body img[alt="浮动审批标识"]')).some((image) => getComputedStyle(image).float === "left"));
-  assert.equal(await previewFloatingImage.evaluate((image) => getComputedStyle(image).float), "left");
+  // 中文注解：分页重排会短暂保留旧克隆，应从所有已连接节点中读取最终应用左浮动的图片。
+  assert.equal(await page.evaluate(() => Array.from(document.querySelectorAll('.page-body img[alt="浮动审批标识"]')).map((image) => getComputedStyle(image).float).find((value) => value === "left") || ""), "left");
   const previewParagraphAppearance = page.locator('.page-body p[data-paragraph-shading][data-paragraph-borders]').filter({ hasText: "段落外观工具" }).first();
   await previewParagraphAppearance.waitFor();
   await page.waitForFunction(() => Array.from(document.querySelectorAll(".page-body p")).some((paragraph) => paragraph.textContent?.includes("段落外观工具") && getComputedStyle(paragraph).backgroundColor === "rgb(221, 235, 247)"));
@@ -889,9 +897,11 @@ try {
   }), { borderStyle: "dashed", borderWidth: "1px", borderColor: "rgb(31, 78, 121)", paddingTop: "1.33px" });
   const previewHangingIndent = page.locator('.page-body p[style*="text-indent"]').filter({ hasText: "悬挂缩进工具内容" }).first();
   await previewHangingIndent.waitFor();
-  assert.deepEqual(await previewHangingIndent.evaluate((paragraph) => {
-    const style = getComputedStyle(paragraph);
-    return { marginLeft: style.marginLeft, textIndent: style.textIndent };
+  await page.waitForFunction(() => Array.from(document.querySelectorAll('.page-body p[style*="text-indent"]')).some((paragraph) => paragraph.textContent?.includes("悬挂缩进工具内容") && getComputedStyle(paragraph).textIndent === "-37.8px"));
+  assert.deepEqual(await page.evaluate(() => {
+    const paragraph = Array.from(document.querySelectorAll('.page-body p[style*="text-indent"]')).find((item) => item.textContent?.includes("悬挂缩进工具内容") && getComputedStyle(item).textIndent === "-37.8px");
+    const style = paragraph ? getComputedStyle(paragraph) : null;
+    return { marginLeft: style?.marginLeft || "", textIndent: style?.textIndent || "" };
   }), { marginLeft: "37.8px", textIndent: "-37.8px" });
   const previewSideIndents = page.locator('.page-body p[style*="margin-right"]').filter({ hasText: "段落左右缩进工具内容" }).first();
   await previewSideIndents.waitFor();
@@ -999,6 +1009,9 @@ try {
           previewColumns: widths(preview),
           alignment: preview?.getAttribute("data-table-alignment") || "",
           indent: preview?.getAttribute("data-table-indent") || "",
+          spacing: preview?.getAttribute("data-table-cell-spacing") || "",
+          borderCollapse: preview ? getComputedStyle(preview).borderCollapse : "",
+          borderSpacing: preview ? getComputedStyle(preview).borderSpacing : "",
           marginLeft: preview ? Number.parseFloat(getComputedStyle(preview).marginLeft) : 0,
           marginRight: preview ? Number.parseFloat(getComputedStyle(preview).marginRight) : 0
         };
@@ -1076,12 +1089,16 @@ try {
   assert.ok(result.repeatedHeaderHeights.every((height) => height === "56.67px"), "重复标题行应保留在线设置的固定行高");
   assert.equal(result.previewTabCount, result.sourceTabCount, "分页预览应完整保留在线编辑器中的制表位");
   assert.ok(result.previewTabWidths.every((width) => width >= 2), "分页预览中的制表位应按 Word 位置完成布局");
-  assert.ok(result.tableGeometry.previewWidth >= 480 && result.tableGeometry.previewWidth <= 481);
+  // 中文注解：两列网格宽 480px，separate 模式还包含左右和列间共三个 8px 间距，外框应为 504px。
+  assert.equal(result.tableGeometry.previewWidth, 504, `分页表格几何异常: ${JSON.stringify(result.tableGeometry)}`);
   assert.deepEqual(result.tableGeometry.previewColumns, [120, 360]);
   assert.equal(result.tableGeometry.alignment, "left");
   assert.equal(result.tableGeometry.indent, "567");
+  assert.equal(result.tableGeometry.spacing, "120");
+  assert.equal(result.tableGeometry.borderCollapse, "separate");
+  assert.equal(result.tableGeometry.borderSpacing, "8px");
   assert.ok(Math.abs(result.tableGeometry.marginLeft - 37.8) < 0.2);
-  assert.ok(result.tableGeometry.marginRight > 70);
+  assert.ok(result.tableGeometry.marginRight > 50);
   assert.deepEqual(result.previewBusinessCellFormat, {
     paddingTop: "12px",
     paddingRight: "12px",

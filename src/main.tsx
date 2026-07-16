@@ -855,6 +855,12 @@ const tableIndentOptions = [
   { label: "1.5 厘米", value: "850" },
   { label: "2 厘米", value: "1134" }
 ];
+const tableCellSpacingOptions = [
+  { label: "无间距", value: "0" },
+  { label: "紧凑", value: "75" },
+  { label: "标准", value: "120" },
+  { label: "宽松", value: "180" }
+];
 const tableCellPaddingOptions = [
   { label: "紧凑", value: "72" },
   { label: "标准", value: "108" },
@@ -1178,6 +1184,8 @@ function normalizeDocumentTableStyle(value: unknown) {
     if (name === "width" && /^\d+(?:\.\d+)?(?:px|%)$/.test(styleValue)) styles.push(`width: ${styleValue}`);
     if (name === "table-layout" && /^(?:fixed|auto)$/.test(styleValue)) styles.push(`table-layout: ${styleValue}`);
     if (["margin-left", "margin-right"].includes(name) && /^(?:auto|-?\d+(?:\.\d+)?px)$/.test(styleValue)) styles.push(`${name}: ${styleValue}`);
+    if (name === "border-collapse" && /^(?:collapse|separate)$/.test(styleValue)) styles.push(`border-collapse: ${styleValue}`);
+    if (name === "border-spacing" && /^\d+(?:\.\d+)?px$/.test(styleValue)) styles.push(`border-spacing: ${styleValue}`);
   }
   return styles.length ? styles.join("; ") : null;
 }
@@ -1191,6 +1199,14 @@ function tableStyleWithPosition(value: unknown, alignment: string, indentTwip = 
       ? ["margin-left: auto", "margin-right: 0px"]
       : [`margin-left: ${Math.round(indentTwip * 96 / 1440 * 100) / 100}px`, "margin-right: auto"];
   return [...declarations, ...margins].join("; ");
+}
+
+function tableStyleWithCellSpacing(value: unknown, spacingTwip: number) {
+  const declarations = String(normalizeDocumentTableStyle(value) || "").split(";").map((item) => item.trim()).filter(Boolean)
+    .filter((item) => !/^border-(?:collapse|spacing)\s*:/.test(item));
+  const spacingPx = Math.round(Math.max(0, spacingTwip) * 96 / 1440 * 100) / 100;
+  // 中文注解：Word 的 tblCellSpacing 对应相邻单元格之间的距离，浏览器必须切换为 separate 才能参与真实分页测量。
+  return [...declarations, `border-collapse: ${spacingPx > 0 ? "separate" : "collapse"}`, `border-spacing: ${spacingPx}px`].join("; ");
 }
 
 function normalizeTableCellMargins(value: unknown) {
@@ -1511,6 +1527,7 @@ class DocumentTableView extends TableView {
     // 中文注解：TableView 不会自动刷新自定义 data 属性，分页器直接克隆实时 DOM，因此在节点视图更新时同步对齐语义。
     this.table.dataset.tableAlignment = alignment;
     this.table.dataset.tableIndent = String(Math.max(-31680, Math.min(31680, Math.round(Number(node.attrs.tableIndent) || 0))));
+    this.table.dataset.tableCellSpacing = String(Math.max(0, Math.min(31680, Math.round(Number(node.attrs.tableCellSpacing) || 0))));
   }
 }
 
@@ -1555,6 +1572,11 @@ const DocumentTable = Table.extend({
         default: 0,
         parseHTML: (element) => Math.max(-31680, Math.min(31680, Math.round(Number(element.getAttribute("data-table-indent")) || 0))),
         renderHTML: (attributes) => ({ "data-table-indent": Math.max(-31680, Math.min(31680, Math.round(Number(attributes.tableIndent) || 0))) })
+      },
+      tableCellSpacing: {
+        default: 0,
+        parseHTML: (element) => Math.max(0, Math.min(31680, Math.round(Number(element.getAttribute("data-table-cell-spacing")) || 0))),
+        renderHTML: (attributes) => ({ "data-table-cell-spacing": Math.max(0, Math.min(31680, Math.round(Number(attributes.tableCellSpacing) || 0))) })
       },
       tableBorders: {
         default: null,
@@ -3753,6 +3775,20 @@ function Editor(props: {
     setSelectionHint(applied ? `表格已设置${label}。` : "表格缩进设置失败，请重新选择表格。");
   };
 
+  const updateCurrentTableCellSpacing = (spacing: number, label: string) => {
+    if (!editor?.isActive("table") || !Number.isFinite(spacing)) {
+      setSelectionHint("请先把光标放到需要设置单元格间距的表格中。");
+      return;
+    }
+    const normalizedSpacing = Math.max(0, Math.min(31680, Math.round(spacing)));
+    const current = editor.getAttributes("table");
+    const applied = editor.chain().focus().updateAttributes("table", {
+      tableCellSpacing: normalizedSpacing,
+      style: tableStyleWithCellSpacing(current.style, normalizedSpacing)
+    }).run();
+    setSelectionHint(applied ? `表格已设置${label}。` : "表格单元格间距设置失败，请重新选择表格。");
+  };
+
   const updateCurrentTableRow = (patch: { height?: number; heightRule?: string; cantSplit?: boolean; repeatHeader?: boolean }, label: string) => {
     if (!editor || !editor.isActive("table")) {
       setSelectionHint("请先把光标放到需要设置的表格行中。");
@@ -4226,6 +4262,7 @@ function Editor(props: {
             <button className={editor?.getAttributes("tableRow").rowRepeatHeader ? "active-format" : ""} onClick={() => updateCurrentTableRow({ repeatHeader: !editor?.getAttributes("tableRow").rowRepeatHeader }, "重复标题行")} disabled={!editor?.isActive("table")} title="在后续页面顶部重复当前标题行">重复标题</button>
             <FormatSelect title="设置当前表格对齐方式" placeholder="表格对齐" options={tableAlignmentOptions} disabled={!editor?.isActive("table")} onSelect={(value, label) => updateCurrentTableAlignment(value, label)} />
             <FormatSelect title="设置当前表格左缩进" placeholder="表格缩进" options={tableIndentOptions} disabled={!editor?.isActive("table")} onSelect={(value, label) => updateCurrentTableIndent(Number(value), label)} />
+            <FormatSelect title="设置当前表格单元格间距" placeholder="单元格间距" options={tableCellSpacingOptions} disabled={!editor?.isActive("table")} onSelect={(value, label) => updateCurrentTableCellSpacing(Number(value), label)} />
             <FormatSelect title="设置当前单元格垂直对齐" placeholder="单元格对齐" options={tableCellVerticalAlignOptions} onSelect={(value, label) => updateCurrentTableCell({ verticalAlign: value }, `单元格${label}对齐`)} />
             <FormatSelect title="设置当前单元格文字方向" placeholder="文字方向" options={tableCellTextDirectionOptions} onSelect={(value, label) => updateCurrentTableCell({ textDirection: value }, `单元格文字${label}`)} />
             <FormatSelect title="设置当前单元格内边距" placeholder="单元格边距" options={tableCellPaddingOptions} onSelect={(value, label) => updateCurrentTableCell({ margin: Number(value) }, `${label}单元格边距`)} />
