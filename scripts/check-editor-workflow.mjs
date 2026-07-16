@@ -448,6 +448,12 @@ try {
   await approvalCells.nth(2).click({ modifiers: ["Shift"] });
   await page.getByRole("button", { name: "合并", exact: true }).click();
   assert.match(await editor.innerHTML(), /<td[^>]+rowspan="2"[^>]*>.*商务评审.*归档确认/s);
+  await page.locator('label[title="设置当前表格对齐方式"] select').selectOption("right");
+  assert.deepEqual(await sourceTables.last().evaluate((table) => ({
+    alignment: table.getAttribute("data-table-alignment"),
+    marginLeft: table.style.marginLeft,
+    marginRight: table.style.marginRight
+  })), { alignment: "right", marginLeft: "auto", marginRight: "0px" });
 
   await page.evaluate(() => {
     const paragraph = document.querySelector(".word-editor p");
@@ -576,6 +582,7 @@ try {
   assert.match(storedDocument.content, /<p[^>]+data-paragraph-shading="[^\"]*DDEBF7[^\"]*"[^>]+data-paragraph-borders="[^\"]*dashed[^\"]*"[^>]*>[\s\S]*?段落外观工具[\s\S]*?<\/p>/);
   assert.match(storedDocument.content, /data-section-break="nextPage"/);
   assert.match(storedDocument.content, /rowspan="2"/);
+  assert.match(storedDocument.content, /<table(?=[^>]*data-table-alignment="right")(?=[^>]*style="[^"]*margin-left:\s*auto)(?=[^>]*style="[^"]*margin-right:\s*0px)[^>]*>[\s\S]*?商务评审/);
   assert.match(storedDocument.content, /第二节横向内容/);
   assert.match(storedDocument.content, /第二节横向页眉/);
   const storedSectionLayoutText = storedDocument.content.match(/data-section-layout="([^"]+)"/)?.[1]
@@ -666,6 +673,7 @@ try {
   assert.equal((reopenedHtml.match(/data-docx-tab="true"/g) || []).length, 4);
   assert.match(reopenedHtml, /<td[^>]+data-cell-margins="[^"]*&quot;top&quot;:180[^"]*"[^>]+data-cell-vertical-align="bottom"[^>]+data-cell-shading="#FFF2CC"[^>]*>.*商务评审/s);
   assert.match(reopenedHtml, /<td[^>]+data-cell-borders="[^"]*&quot;top&quot;[^"]*dashed[^"]*6B7280[^"]*"[^>]*>.*商务评审/s);
+  assert.match(reopenedHtml, /<table(?=[^>]*data-table-alignment="right")(?=[^>]*style="[^"]*margin-left:\s*auto)(?=[^>]*style="[^"]*margin-right:\s*0px)[^>]*>[\s\S]*?商务评审/);
   const reopenedHeaderRow = reopenedHtml.match(/<tr[^>]+data-row-height="850"[^>]*>/)?.[0] || "";
   assert.match(reopenedHeaderRow, /data-row-height-rule="exact"/);
   assert.match(reopenedHeaderRow, /data-row-cant-split="true"/);
@@ -712,6 +720,7 @@ try {
   const geometryTable = (documentXml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/g) || []).find((table) => table.includes("商务评审")) || "";
   assert.match(geometryTable, /<w:tblW w:type="dxa" w:w="7200"\/>/);
   assert.match(geometryTable, /<w:tblLayout w:type="fixed"\/>/);
+  assert.match(geometryTable, /<w:jc w:val="right"\/>/);
   assert.match(geometryTable, /<w:tblGrid><w:gridCol w:w="1800"\/><w:gridCol w:w="5400"\/><\/w:tblGrid>/);
   const businessReviewCellXml = (geometryTable.match(/<w:tc>[\s\S]*?<\/w:tc>/g) || []).find((cell) => cell.includes("商务评审")) || "";
   const businessReviewMarginsXml = businessReviewCellXml.match(/<w:tcMar>[\s\S]*?<\/w:tcMar>/)?.[0] || "";
@@ -957,7 +966,10 @@ try {
         const widths = (table) => table ? Array.from(table.querySelectorAll("tr:first-child > th, tr:first-child > td")).map((cell) => Math.round(cell.getBoundingClientRect().width)) : [];
         return {
           previewWidth: preview ? Math.round(preview.getBoundingClientRect().width) : 0,
-          previewColumns: widths(preview)
+          previewColumns: widths(preview),
+          alignment: preview?.getAttribute("data-table-alignment") || "",
+          marginLeft: preview ? Number.parseFloat(getComputedStyle(preview).marginLeft) : 0,
+          marginRight: preview ? Number.parseFloat(getComputedStyle(preview).marginRight) : 0
         };
       })(),
       previewBusinessCellFormat: (() => {
@@ -1034,6 +1046,9 @@ try {
   assert.ok(result.previewTabWidths.every((width) => width >= 2), "分页预览中的制表位应按 Word 位置完成布局");
   assert.ok(result.tableGeometry.previewWidth >= 480 && result.tableGeometry.previewWidth <= 481);
   assert.deepEqual(result.tableGeometry.previewColumns, [120, 360]);
+  assert.equal(result.tableGeometry.alignment, "right");
+  assert.ok(result.tableGeometry.marginLeft > 100);
+  assert.equal(result.tableGeometry.marginRight, 0);
   assert.deepEqual(result.previewBusinessCellFormat, {
     paddingTop: "12px",
     paddingRight: "12px",

@@ -834,6 +834,11 @@ const tableCellVerticalAlignOptions = [
   { label: "居中", value: "center" },
   { label: "底部", value: "bottom" }
 ];
+const tableAlignmentOptions = [
+  { label: "左对齐", value: "left" },
+  { label: "居中", value: "center" },
+  { label: "右对齐", value: "right" }
+];
 const tableCellPaddingOptions = [
   { label: "紧凑", value: "72" },
   { label: "标准", value: "108" },
@@ -1156,8 +1161,20 @@ function normalizeDocumentTableStyle(value: unknown) {
     const styleValue = declaration.slice(separator + 1).trim();
     if (name === "width" && /^\d+(?:\.\d+)?(?:px|%)$/.test(styleValue)) styles.push(`width: ${styleValue}`);
     if (name === "table-layout" && /^(?:fixed|auto)$/.test(styleValue)) styles.push(`table-layout: ${styleValue}`);
+    if (["margin-left", "margin-right"].includes(name) && /^(?:auto|0(?:\.0+)?px)$/.test(styleValue)) styles.push(`${name}: ${styleValue}`);
   }
   return styles.length ? styles.join("; ") : null;
+}
+
+function tableStyleWithAlignment(value: unknown, alignment: string) {
+  const declarations = String(normalizeDocumentTableStyle(value) || "").split(";").map((item) => item.trim()).filter(Boolean)
+    .filter((item) => !/^margin-(?:left|right)\s*:/.test(item));
+  const margins = alignment === "center"
+    ? ["margin-left: auto", "margin-right: auto"]
+    : alignment === "right"
+      ? ["margin-left: auto", "margin-right: 0px"]
+      : ["margin-left: 0px", "margin-right: auto"];
+  return [...declarations, ...margins].join("; ");
 }
 
 function normalizeTableCellMargins(value: unknown) {
@@ -1467,9 +1484,13 @@ class DocumentTableView extends TableView {
 
   private applyDocumentGeometry(node: ProseMirrorNode) {
     const style = normalizeDocumentTableStyle(node.attrs.style);
-    if (!style) return;
-    // 中文注解：Tiptap 的可调整列宽视图会重写 table.width，这里重新应用 Word 原表宽，确保编辑态和分页态一致。
-    this.table.style.cssText = style;
+    if (style) {
+      // 中文注解：Tiptap 的可调整列宽视图会重写 table.width，这里重新应用 Word 原表宽，确保编辑态和分页态一致。
+      this.table.style.cssText = style;
+    }
+    const alignment = ["left", "center", "right"].includes(String(node.attrs.tableAlignment)) ? String(node.attrs.tableAlignment) : "left";
+    // 中文注解：TableView 不会自动刷新自定义 data 属性，分页器直接克隆实时 DOM，因此在节点视图更新时同步对齐语义。
+    this.table.dataset.tableAlignment = alignment;
   }
 }
 
@@ -1504,6 +1525,11 @@ const DocumentTable = Table.extend({
         default: "autofit",
         parseHTML: (element) => element.getAttribute("data-table-layout") === "fixed" ? "fixed" : "autofit",
         renderHTML: (attributes) => ({ "data-table-layout": attributes.tableLayout === "fixed" ? "fixed" : "autofit" })
+      },
+      tableAlignment: {
+        default: "left",
+        parseHTML: (element) => ["left", "center", "right"].includes(element.getAttribute("data-table-alignment") || "") ? element.getAttribute("data-table-alignment") : "left",
+        renderHTML: (attributes) => ({ "data-table-alignment": ["left", "center", "right"].includes(attributes.tableAlignment) ? attributes.tableAlignment : "left" })
       },
       tableBorders: {
         default: null,
@@ -3622,6 +3648,20 @@ function Editor(props: {
     setSelectionHint(applied ? `已设置${label}。` : "当前单元格无法应用该格式。");
   };
 
+  const updateCurrentTableAlignment = (alignment: string, label: string) => {
+    if (!editor?.isActive("table") || !["left", "center", "right"].includes(alignment)) {
+      setSelectionHint("请先把光标放到需要对齐的表格中。");
+      return;
+    }
+    const current = editor.getAttributes("table");
+    // 中文注解：语义属性供 DOCX 导出，左右自动外边距供编辑器和分页预览，必须在同一事务更新。
+    const applied = editor.chain().focus().updateAttributes("table", {
+      tableAlignment: alignment,
+      style: tableStyleWithAlignment(current.style, alignment)
+    }).run();
+    setSelectionHint(applied ? `表格已${label}。` : "表格对齐设置失败，请重新选择表格。");
+  };
+
   const updateCurrentTableRow = (patch: { height?: number; heightRule?: string; cantSplit?: boolean; repeatHeader?: boolean }, label: string) => {
     if (!editor || !editor.isActive("table")) {
       setSelectionHint("请先把光标放到需要设置的表格行中。");
@@ -4092,6 +4132,7 @@ function Editor(props: {
             <FormatSelect title="设置当前表格行高度规则" placeholder="行高规则" options={tableRowHeightRuleOptions} disabled={!editor?.isActive("table")} onSelect={(value, label) => updateCurrentTableRow({ heightRule: value }, `行高${label}`)} />
             <button className={editor?.getAttributes("tableRow").rowCantSplit ? "active-format" : ""} onClick={() => updateCurrentTableRow({ cantSplit: !editor?.getAttributes("tableRow").rowCantSplit }, "禁止跨页断行")} disabled={!editor?.isActive("table")} title="禁止当前表格行跨页拆分">整行同页</button>
             <button className={editor?.getAttributes("tableRow").rowRepeatHeader ? "active-format" : ""} onClick={() => updateCurrentTableRow({ repeatHeader: !editor?.getAttributes("tableRow").rowRepeatHeader }, "重复标题行")} disabled={!editor?.isActive("table")} title="在后续页面顶部重复当前标题行">重复标题</button>
+            <FormatSelect title="设置当前表格对齐方式" placeholder="表格对齐" options={tableAlignmentOptions} disabled={!editor?.isActive("table")} onSelect={(value, label) => updateCurrentTableAlignment(value, label)} />
             <FormatSelect title="设置当前单元格垂直对齐" placeholder="单元格对齐" options={tableCellVerticalAlignOptions} onSelect={(value, label) => updateCurrentTableCell({ verticalAlign: value }, `单元格${label}对齐`)} />
             <FormatSelect title="设置当前单元格内边距" placeholder="单元格边距" options={tableCellPaddingOptions} onSelect={(value, label) => updateCurrentTableCell({ margin: Number(value) }, `${label}单元格边距`)} />
             <FormatSelect title="设置当前单元格底色" placeholder="单元格底色" options={tableCellShadingOptions} onSelect={(value, label) => updateCurrentTableCell({ shading: value === "none" ? null : value }, `单元格${label}`)} />

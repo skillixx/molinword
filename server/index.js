@@ -457,7 +457,7 @@ function sanitizeImportedHtml(value = "") {
       mark: ["data-highlight", "style"],
       a: ["href", "target", "rel"],
       ol: ["style", "data-list-format", "start"],
-      table: ["style", "data-table-width-type", "data-table-width-value", "data-table-grid-width", "data-table-layout", "data-table-borders"],
+      table: ["style", "data-table-width-type", "data-table-width-value", "data-table-grid-width", "data-table-layout", "data-table-alignment", "data-table-borders"],
       tr: ["style", "data-row-height", "data-row-height-rule", "data-row-cant-split", "data-row-repeat-header"],
       th: ["style", "colspan", "rowspan", "colwidth", "data-docx-cell", "data-cell-margins", "data-cell-vertical-align", "data-cell-shading", "data-cell-borders"],
       td: ["style", "colspan", "rowspan", "colwidth", "data-docx-cell", "data-cell-margins", "data-cell-vertical-align", "data-cell-shading", "data-cell-borders"],
@@ -487,8 +487,9 @@ function sanitizeImportedHtml(value = "") {
         "text-indent": [/^-?\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
         "line-height": [/^\d+(?:\.\d+)?(?:px|pt|em|rem|%)?$/],
         "--word-line-rule": [/^(?:auto|exact|atLeast)$/],
-        "margin-left": [/^\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
-        "margin-right": [/^\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
+        // 中文注解：表格居中和右对齐依赖受控的 auto 外边距，清洗时必须保留，否则导入后视觉位置会丢失。
+        "margin-left": [/^auto$/, /^\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
+        "margin-right": [/^auto$/, /^\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
         "margin-top": [/^\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
         "margin-bottom": [/^\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
         "padding-top": [/^\d+(?:\.\d+)?px$/],
@@ -1562,6 +1563,8 @@ async function parseStyledDocxTable(tableNode, context) {
   const tableWidthType = ["dxa", "pct", "auto"].includes(rawWidthType) ? rawWidthType : "auto";
   const tableWidthValue = Math.max(0, Math.round(Number(firstValue(tableWidthNode?.attribs, ["w:w", "w"])) || 0));
   const tableLayout = firstValue(xmlChild(tableProperties, "w:tblLayout")?.attribs, ["w:type", "type"]) === "fixed" ? "fixed" : "autofit";
+  const rawTableAlignment = xmlVal(xmlChild(tableProperties, "w:jc"));
+  const tableAlignment = rawTableAlignment === "center" ? "center" : ["right", "end"].includes(rawTableAlignment) ? "right" : "left";
   const tableCellMargins = parseDocxCellMargins(xmlChild(tableProperties, "w:tblCellMar"));
   const tableBorders = parseDocxBorders(xmlChild(tableProperties, "w:tblBorders"), context.themeColors || {});
   const gridWidths = xmlChildren(xmlChild(tableNode, "w:tblGrid"), "w:gridCol")
@@ -1658,13 +1661,19 @@ async function parseStyledDocxTable(tableNode, context) {
     : (tableWidthType === "dxa" ? tableWidthValue : gridWidth) > 0
       ? `width: ${Math.round((tableWidthType === "dxa" ? tableWidthValue : gridWidth) * 96 / 1440 * 100) / 100}px`
       : "width: 100%";
+  const alignmentStyle = tableAlignment === "center"
+    ? "margin-left: auto; margin-right: auto"
+    : tableAlignment === "right"
+      ? "margin-left: auto; margin-right: 0px"
+      : "margin-left: 0px; margin-right: auto";
   const attributes = [
     `data-table-width-type="${tableWidthType}"`,
     `data-table-width-value="${tableWidthValue}"`,
     `data-table-grid-width="${gridWidth}"`,
     `data-table-layout="${tableLayout}"`,
+    `data-table-alignment="${tableAlignment}"`,
     ...(Object.keys(tableBorders).length ? [`data-table-borders="${escapeHtml(JSON.stringify(tableBorders))}"`] : []),
-    `style="${widthStyle}; table-layout: ${tableLayout === "fixed" ? "fixed" : "auto"}"`
+    `style="${widthStyle}; ${alignmentStyle}; table-layout: ${tableLayout === "fixed" ? "fixed" : "auto"}"`
   ];
   // 中文注解：tblGrid 是 Word 实际分页使用的列几何，转换为 colwidth 后由编辑器、分页器和再次导出共同使用。
   return `<table ${attributes.join(" ")}><tbody>${renderedRows.join("")}</tbody></table>`;
@@ -2662,6 +2671,7 @@ function tableFromNode(tableNode, listState) {
     width,
     columnWidths: resolvedColumnWidths.length ? resolvedColumnWidths : undefined,
     layout: tableNode.attribs?.["data-table-layout"] === "fixed" ? TableLayoutType.FIXED : TableLayoutType.AUTOFIT,
+    alignment: ({ left: AlignmentType.LEFT, center: AlignmentType.CENTER, right: AlignmentType.RIGHT })[tableNode.attribs?.["data-table-alignment"]] || AlignmentType.LEFT,
     borders: docxBordersFromNode(tableNode, "data-table-borders", true),
     rows
   });
