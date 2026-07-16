@@ -317,10 +317,89 @@ button:disabled {
   cursor: pointer;
 }
 
+.revision-insert {
+  padding: 0 1px;
+  border-bottom: 2px solid #23855b;
+  background: #e8f6ee;
+  color: #176a48;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+.revision-delete {
+  padding: 0 1px;
+  background: #fdecec;
+  color: #b4232c;
+  text-decoration: line-through;
+  text-decoration-color: #b4232c;
+  text-decoration-thickness: 2px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
 .document-comments {
   margin-top: 12px;
   padding-top: 12px;
   border-top: 1px solid #dfe5eb;
+}
+
+.document-revisions {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #dfe5eb;
+}
+
+.document-revision {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  margin-bottom: 6px;
+  border-left: 3px solid #23855b;
+}
+
+.document-revision.is-delete {
+  border-left-color: #c43842;
+}
+
+.ai-panel button.document-revision-locator {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  min-height: 0;
+  padding: 7px 8px;
+  border: 0;
+  text-align: left;
+}
+
+.document-revision-locator > span,
+.document-revision-locator > small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-revision-locator > span {
+  color: #26323d;
+  font-size: 12px;
+}
+
+.document-revision-locator > small {
+  color: #687684;
+  font-size: 11px;
+}
+
+.document-revision-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.ai-panel .document-revision-actions button {
+  width: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
 }
 
 .document-comments-title {

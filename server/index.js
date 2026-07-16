@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import express from "express";
-import { AlignmentType, BorderStyle, Column, ColumnBreak as DocxColumnBreak, CommentRangeEnd, CommentRangeStart, CommentReference, Document, EndnoteReferenceRun, ExternalHyperlink, Footer, FootnoteReferenceRun, Header, HeadingLevel, HeightRule, ImageRun, LevelFormat, LineRuleType, NoBreakHyphen, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, SoftHyphen, Tab, Table, TableCell, TableLayoutType, TableRow, TextDirection, TextRun, TextWrappingSide, TextWrappingType, VerticalAlignTable, WidthType } from "docx";
+import { AlignmentType, BorderStyle, Column, ColumnBreak as DocxColumnBreak, CommentRangeEnd, CommentRangeStart, CommentReference, DeletedTextRun, Document, EndnoteReferenceRun, ExternalHyperlink, Footer, FootnoteReferenceRun, Header, HeadingLevel, HeightRule, ImageRun, InsertedTextRun, LevelFormat, LineRuleType, NoBreakHyphen, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, SoftHyphen, Tab, Table, TableCell, TableLayoutType, TableRow, TextDirection, TextRun, TextWrappingSide, TextWrappingType, VerticalAlignTable, WidthType } from "docx";
 import { imageSize } from "image-size";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
@@ -459,7 +459,7 @@ function sanitizeImportedHtml(value = "") {
       h6: ["style", "data-outline-level", "data-indent", "data-bidirectional", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
       p: ["style", "data-outline-level", "data-indent", "data-bidirectional", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
       li: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
-      span: ["style", "class", "data-docx-tab", "data-tab-position", "data-tab-alignment", "data-double-strike", "data-footnote-id", "data-footnote-text", "data-endnote-id", "data-endnote-text", "data-comment-id", "data-comment-text", "data-comment-author", "data-comment-initials", "data-comment-date"],
+      span: ["style", "class", "data-docx-tab", "data-tab-position", "data-tab-alignment", "data-double-strike", "data-footnote-id", "data-footnote-text", "data-endnote-id", "data-endnote-text", "data-comment-id", "data-comment-text", "data-comment-author", "data-comment-initials", "data-comment-date", "data-revision-type", "data-revision-id", "data-revision-author", "data-revision-date"],
       mark: ["data-highlight", "style"],
       a: ["href", "target", "rel"],
       ol: ["style", "data-list-format", "start"],
@@ -1072,7 +1072,7 @@ function docxListInfo(pPr, style, numbering) {
 function docxTextFromRun(runNode) {
   return (runNode.children || [])
     .map((child) => {
-      if (child.type === "tag" && child.name === "w:t") return child.children?.map((textNode) => textNode.data || "").join("") || "";
+      if (child.type === "tag" && ["w:t", "w:delText"].includes(child.name)) return child.children?.map((textNode) => textNode.data || "").join("") || "";
       if (child.type === "tag" && child.name === "w:tab") return "\t";
       if (child.type === "tag" && child.name === "w:softHyphen") return "\u00AD";
       if (child.type === "tag" && child.name === "w:noBreakHyphen") return "\u2011";
@@ -1433,6 +1433,25 @@ function commentMarkStartHtml(comment) {
   return `<span class="comment-mark" data-comment-id="${comment.id}" data-comment-text="${escapeHtml(comment.text)}" data-comment-author="${escapeHtml(comment.author)}" data-comment-initials="${escapeHtml(comment.initials)}"${dateAttribute}>`;
 }
 
+async function docxRevisionToHtml(revisionNode, revisionType, inheritedRunStyles, context, tabState) {
+  const id = normalizeCommentId(firstValue(revisionNode.attribs, ["w:id", "id"]));
+  const author = normalizeCommentField(firstValue(revisionNode.attribs, ["w:author", "author"])) || "审阅者";
+  const date = normalizeCommentDate(firstValue(revisionNode.attribs, ["w:date", "date"]));
+  if (id === null) return "";
+  const parts = [];
+  for (const child of revisionNode.children || []) {
+    if (child.name === "w:r") parts.push(await docxRunToHtml(child, inheritedRunStyles, context, tabState));
+    if (child.name === "w:hyperlink") {
+      for (const run of xmlChildren(child, "w:r")) parts.push(await docxRunToHtml(run, inheritedRunStyles, context, tabState));
+    }
+  }
+  const content = parts.join("");
+  if (!content) return "";
+  const className = revisionType === "delete" ? "revision-delete" : "revision-insert";
+  const dateAttribute = date ? ` data-revision-date="${escapeHtml(date)}"` : "";
+  return `<span class="${className}" data-revision-type="${revisionType}" data-revision-id="${id}" data-revision-author="${escapeHtml(author)}"${dateAttribute}>${content}</span>`;
+}
+
 async function docxRunToHtml(runNode, inheritedRunStyles = {}, context = {}, tabState = { stops: [], index: 0 }) {
   const { zip = null, relationships = new Map(), styleMap = new Map(), themeFonts = {}, themeColors = {}, footnotes = new Map(), endnotes = new Map() } = context;
   const text = docxTextFromRun(runNode);
@@ -1476,7 +1495,7 @@ async function docxRunToHtml(runNode, inheritedRunStyles = {}, context = {}, tab
   // 中文注解：按 run 内真实子节点顺序输出文字、制表位与断点，避免同一 run 的分页符或分栏符被错误移动到文字末尾。
   const contentHtml = (runNode.children || []).map((child) => {
     if (child.type !== "tag") return "";
-    if (child.name === "w:t") return renderText(child.children?.map((textNode) => textNode.data || "").join("") || "");
+    if (["w:t", "w:delText"].includes(child.name)) return renderText(child.children?.map((textNode) => textNode.data || "").join("") || "");
     if (child.name === "w:tab") return docxTabHtml(tabState);
     if (child.name === "w:softHyphen") return renderText("\u00AD");
     if (child.name === "w:noBreakHyphen") return renderText("\u2011");
@@ -1536,6 +1555,10 @@ async function parseStyledDocxParagraph(paragraphNode, context) {
     }
     if (child.name === "w:r") {
       bodyParts.push(await docxRunToHtml(child, inheritedRunStyles, context, tabState));
+      continue;
+    }
+    if (["w:ins", "w:del"].includes(child.name)) {
+      bodyParts.push(await docxRevisionToHtml(child, child.name === "w:del" ? "delete" : "insert", inheritedRunStyles, context, tabState));
       continue;
     }
     if (child.name !== "w:hyperlink") continue;
@@ -2602,8 +2625,75 @@ function paragraphStyleFromNode(node) {
   return paragraphStyle;
 }
 
+function textRunOptionsFromMarks(text, marks = {}) {
+  const specialHyphenChildren = /[\u00AD\u2011]/u.test(text)
+    ? text.split(/([\u00AD\u2011])/u).filter(Boolean).map((part) => part === "\u00AD" ? new SoftHyphen() : part === "\u2011" ? new NoBreakHyphen() : part)
+    : null;
+  return {
+    ...(specialHyphenChildren ? { children: specialHyphenChildren } : { text }),
+    bold: marks.bold,
+    italics: marks.italics,
+    smallCaps: marks.allCaps !== undefined ? undefined : marks.smallCaps,
+    allCaps: marks.allCaps,
+    underline: marks.underline === true ? {} : marks.underline,
+    border: marks.border,
+    strike: marks.doubleStrike ? undefined : marks.strike,
+    doubleStrike: marks.doubleStrike,
+    color: marks.color,
+    size: marks.size,
+    font: marks.font,
+    characterSpacing: marks.characterSpacing,
+    position: marks.position,
+    highlight: marks.highlight,
+    superScript: marks.superScript,
+    subScript: marks.subScript
+  };
+}
+
+function textMarksFromNode(node, marks = {}) {
+  const nodeRunStyle = textRunStyleFromNode(node);
+  const nodeDoubleStrike = node?.attribs?.["data-double-strike"] === "true" || nodeRunStyle.doubleStrike === true;
+  return {
+    ...marks,
+    ...nodeRunStyle,
+    bold: marks.bold || nodeRunStyle.bold || ["strong", "b"].includes(node.name),
+    italics: marks.italics || nodeRunStyle.italics || ["em", "i"].includes(node.name),
+    underline: nodeRunStyle.underline ?? (node.name === "u" ? true : marks.underline),
+    strike: nodeDoubleStrike ? false : (marks.strike || ["s", "strike", "del"].includes(node.name)),
+    doubleStrike: nodeDoubleStrike || marks.doubleStrike,
+    superScript: node.name === "sup" ? true : (node.name === "sub" ? false : marks.superScript),
+    subScript: node.name === "sub" ? true : (node.name === "sup" ? false : marks.subScript)
+  };
+}
+
+function revisionRunsFromNode(node, revision, marks = {}) {
+  if (!node) return [];
+  const RevisionRun = revision.type === "delete" ? DeletedTextRun : InsertedTextRun;
+  const revisionOptions = { id: revision.id, author: revision.author, date: revision.date };
+  if (node.type === "text") {
+    const text = (node.data || "").replace(/\s+/g, " ");
+    return text ? [new RevisionRun({ ...revisionOptions, ...textRunOptionsFromMarks(text, marks) })] : [];
+  }
+  if (node.name === "br") return [new RevisionRun({ ...revisionOptions, break: 1 })];
+  if (node?.attribs?.["data-docx-tab"] === "true") return [new RevisionRun({ ...revisionOptions, children: [new Tab()] })];
+  const nextMarks = textMarksFromNode(node, marks);
+  return (node.children || []).flatMap((child) => revisionRunsFromNode(child, revision, nextMarks));
+}
+
 function textRunsFromNode(node, marks = {}) {
   if (!node) return [];
+  const revisionType = node?.attribs?.["data-revision-type"];
+  const revisionId = normalizeCommentId(node?.attribs?.["data-revision-id"]);
+  if (["insert", "delete"].includes(revisionType) && revisionId !== null) {
+    const revision = {
+      type: revisionType,
+      id: revisionId,
+      author: normalizeCommentField(node.attribs?.["data-revision-author"]) || "在线审阅者",
+      date: normalizeCommentDate(node.attribs?.["data-revision-date"]) || new Date(0).toISOString()
+    };
+    // 中文注解：修订范围内按实际字符样式拆成原生修订 run，新增和删除文字不会降级成普通格式。
+    return (node.children || []).flatMap((child) => revisionRunsFromNode(child, revision, marks));
+  }
   const commentId = normalizeCommentId(node?.attribs?.["data-comment-id"]);
   const commentText = normalizeFootnoteText(node?.attribs?.["data-comment-text"]);
   if (commentId !== null && commentText) {
@@ -2637,30 +2727,8 @@ function textRunsFromNode(node, marks = {}) {
   }
   if (node.type === "text") {
     const text = (node.data || "").replace(/\s+/g, " ");
-    const specialHyphenChildren = /[\u00AD\u2011]/u.test(text)
-      ? text.split(/([\u00AD\u2011])/u).filter(Boolean).map((part) => part === "\u00AD" ? new SoftHyphen() : part === "\u2011" ? new NoBreakHyphen() : part)
-      : null;
-    return text ? [new TextRun({
-      ...(specialHyphenChildren ? { children: specialHyphenChildren } : { text }),
-      // 中文注解：特殊连字符必须写成 Word 原生节点，才能分别保持“可选断行”和“禁止断行”的排版语义。
-      bold: marks.bold,
-      italics: marks.italics,
-      // 中文注解：docx 内部对 smallCaps/caps 使用互斥分支，存在全部大写设置时优先写入 w:caps。
-      smallCaps: marks.allCaps !== undefined ? undefined : marks.smallCaps,
-      allCaps: marks.allCaps,
-      underline: marks.underline === true ? {} : marks.underline,
-      border: marks.border,
-      strike: marks.doubleStrike ? undefined : marks.strike,
-      doubleStrike: marks.doubleStrike,
-      color: marks.color,
-      size: marks.size,
-      font: marks.font,
-      characterSpacing: marks.characterSpacing,
-      position: marks.position,
-      highlight: marks.highlight,
-      superScript: marks.superScript,
-      subScript: marks.subScript
-    })] : [];
+    // 中文注解：特殊连字符与字符格式由同一组选项构造，普通文字和修订文字保持一致。
+    return text ? [new TextRun(textRunOptionsFromMarks(text, marks))] : [];
   }
 
   if (node.name === "img") {
@@ -2677,19 +2745,7 @@ function textRunsFromNode(node, marks = {}) {
     return href && children.length ? [new ExternalHyperlink({ link: href, children })] : children;
   }
 
-  const nodeRunStyle = textRunStyleFromNode(node);
-  const nodeDoubleStrike = node?.attribs?.["data-double-strike"] === "true" || nodeRunStyle.doubleStrike === true;
-  const nextMarks = {
-    ...marks,
-    ...nodeRunStyle,
-    bold: marks.bold || nodeRunStyle.bold || ["strong", "b"].includes(node.name),
-    italics: marks.italics || nodeRunStyle.italics || ["em", "i"].includes(node.name),
-    underline: nodeRunStyle.underline ?? (node.name === "u" ? true : marks.underline),
-    strike: nodeDoubleStrike ? false : (marks.strike || ["s", "strike", "del"].includes(node.name)),
-    doubleStrike: nodeDoubleStrike || marks.doubleStrike,
-    superScript: node.name === "sup" ? true : (node.name === "sub" ? false : marks.superScript),
-    subScript: node.name === "sub" ? true : (node.name === "sup" ? false : marks.subScript)
-  };
+  const nextMarks = textMarksFromNode(node, marks);
 
   return (node.children || []).flatMap((child) => textRunsFromNode(child, nextMarks));
 }

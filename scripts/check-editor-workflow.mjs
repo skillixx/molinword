@@ -41,7 +41,7 @@ const fixtureDocument = {
 };
 // 中文注解：复用现有编辑器回归文档，同时加入链接和浮动图片，覆盖保存、分页与导出的真实节点持久化。
 fixtureDocument.content = `<img src="${tinyPng}" alt="浮动审批标识" style="width:48px;height:48px" data-docx-floating='${JSON.stringify(floatingBodyImage)}' data-docx-wrap="square" data-docx-float-align="right" />${fixtureDocument.content.replace("下标工具", "下标工具 链接工具")}`;
-fixtureDocument.content += "<p>脚注工具</p><p>尾注工具</p><p>批注工具</p>";
+fixtureDocument.content += "<p>脚注工具</p><p>尾注工具</p><p>批注工具</p><p>新增修订工具 删除修订工具 接受新增工具 拒绝删除工具</p>";
 const fixtureTemplate = {
   id: 3,
   name: "商业计划书",
@@ -398,6 +398,33 @@ try {
   await commentListItem.click();
   assert.equal(await page.evaluate(() => window.getSelection()?.toString() || ""), "批注工具");
 
+  await selectEditorText("新增修订工具");
+  await page.getByRole("button", { name: "标记新增修订", exact: true }).click();
+  const sourceInsertRevision = editor.locator('.revision-insert[data-revision-id="1"]');
+  await sourceInsertRevision.waitFor();
+  assert.equal(await sourceInsertRevision.textContent(), "新增修订工具");
+  assert.equal(await sourceInsertRevision.getAttribute("data-revision-author"), "在线审阅者");
+
+  await selectEditorText("删除修订工具");
+  await page.getByRole("button", { name: "标记删除修订", exact: true }).click();
+  const sourceDeleteRevision = editor.locator('.revision-delete[data-revision-id="2"]');
+  await sourceDeleteRevision.waitFor();
+  assert.equal(await sourceDeleteRevision.textContent(), "删除修订工具");
+
+  await selectEditorText("接受新增工具");
+  await page.getByRole("button", { name: "标记新增修订", exact: true }).click();
+  const acceptedRevisionItem = page.locator(".document-revision").filter({ hasText: "接受新增工具" });
+  await acceptedRevisionItem.getByRole("button", { name: /^接受修订 / }).click();
+  assert.equal(await editor.locator("p").filter({ hasText: "接受新增工具" }).count(), 1);
+  assert.equal(await editor.locator('.revision-insert').filter({ hasText: "接受新增工具" }).count(), 0);
+
+  await selectEditorText("拒绝删除工具");
+  await page.getByRole("button", { name: "标记删除修订", exact: true }).click();
+  const rejectedRevisionItem = page.locator(".document-revision").filter({ hasText: "拒绝删除工具" });
+  await rejectedRevisionItem.getByRole("button", { name: /^拒绝修订 / }).click();
+  assert.equal(await editor.locator("p").filter({ hasText: "拒绝删除工具" }).count(), 1);
+  assert.equal(await editor.locator('.revision-delete').filter({ hasText: "拒绝删除工具" }).count(), 0);
+
   const paragraphAppearance = editor.locator("p").filter({ hasText: "段落外观工具" });
   await paragraphAppearance.click();
   // 中文注解：先让 ProseMirror 完成点击选区同步，再打开原生下拉框，模拟真实连续操作并消除事件循环竞态。
@@ -678,6 +705,9 @@ try {
   assert.match(storedDocument.content, /脚注工具[\s\S]*?<span(?=[^>]*class="footnote-reference")(?=[^>]*data-footnote-id="1")(?=[^>]*data-footnote-text="审批依据说明")[^>]*>/);
   assert.match(storedDocument.content, /尾注工具[\s\S]*?<span(?=[^>]*class="endnote-reference")(?=[^>]*data-endnote-id="1")(?=[^>]*data-endnote-text="文末法规来源")[^>]*>/);
   assert.match(storedDocument.content, /<span(?=[^>]*class="comment-mark")(?=[^>]*data-comment-id="1")(?=[^>]*data-comment-text="请补充审批依据")(?=[^>]*data-comment-author="在线审阅者")[^>]*>[\s\S]*?批注工具[\s\S]*?<\/span>/);
+  assert.match(storedDocument.content, /<span(?=[^>]*class="revision-insert")(?=[^>]*data-revision-type="insert")(?=[^>]*data-revision-id="1")(?=[^>]*data-revision-author="在线审阅者")[^>]*>新增修订工具<\/span>/);
+  assert.match(storedDocument.content, /<span(?=[^>]*class="revision-delete")(?=[^>]*data-revision-type="delete")(?=[^>]*data-revision-id="2")(?=[^>]*data-revision-author="在线审阅者")[^>]*>删除修订工具<\/span>/);
+  assert.doesNotMatch(storedDocument.content, /class="revision-(?:insert|delete)"[^>]*>接受新增工具|class="revision-(?:insert|delete)"[^>]*>拒绝删除工具/);
   assert.match(storedDocument.content, /<p[^>]+data-bidirectional="true"[^>]+style="[^"]*direction:\s*rtl[^"]*"[^>]*>[\s\S]*?RTL段落工具内容[\s\S]*?<\/p>/);
   assert.doesNotMatch(storedDocument.content, /<mark[^>]*>清除高亮工具<\/mark>/);
   assert.match(storedDocument.content, /<p[^>]+data-paragraph-shading="[^\"]*DDEBF7[^\"]*"[^>]+data-paragraph-borders="[^\"]*dashed[^\"]*"[^>]*>[\s\S]*?段落外观工具[\s\S]*?<\/p>/);
@@ -779,6 +809,8 @@ try {
   assert.match(reopenedHtml, /脚注工具[\s\S]*?<span(?=[^>]*class="footnote-reference")(?=[^>]*data-footnote-id="1")(?=[^>]*data-footnote-text="审批依据说明")[^>]*>/);
   assert.match(reopenedHtml, /尾注工具[\s\S]*?<span(?=[^>]*class="endnote-reference")(?=[^>]*data-endnote-id="1")(?=[^>]*data-endnote-text="文末法规来源")[^>]*>/);
   assert.match(reopenedHtml, /<span(?=[^>]*class="comment-mark")(?=[^>]*data-comment-id="1")(?=[^>]*data-comment-text="请补充审批依据")(?=[^>]*data-comment-author="在线审阅者")[^>]*>[\s\S]*?批注工具[\s\S]*?<\/span>/);
+  assert.match(reopenedHtml, /<span(?=[^>]*class="revision-insert")(?=[^>]*data-revision-id="1")(?=[^>]*data-revision-author="在线审阅者")[^>]*>新增修订工具<\/span>/);
+  assert.match(reopenedHtml, /<span(?=[^>]*class="revision-delete")(?=[^>]*data-revision-id="2")(?=[^>]*data-revision-author="在线审阅者")[^>]*>删除修订工具<\/span>/);
   assert.match(reopenedHtml, /data-section-break="nextPage"/);
   assert.match(reopenedHtml, /第二节横向内容/);
   assert.match(reopenedHtml, /<div[^>]+data-column-break="true"[^>]*><\/div>/);
@@ -925,6 +957,8 @@ try {
   assert.match(documentXml, /<w:commentRangeStart w:id="1"\/>[\s\S]*批注工具[\s\S]*<w:commentRangeEnd w:id="1"\/>[\s\S]*<w:commentReference w:id="1"\/>/);
   assert.match(documentRelationshipsXml, /relationships\/comments" Target="comments\.xml"/);
   assert.match(commentsXml, /<w:comment(?=[^>]+w:id="1")(?=[^>]+w:author="在线审阅者")(?=[^>]+w:initials="ZX")[^>]*>[\s\S]*请补充审批依据[\s\S]*<\/w:comment>/);
+  assert.match(documentXml, /<w:ins(?=[^>]+w:id="1")(?=[^>]+w:author="在线审阅者")[^>]*>[\s\S]*<w:t[^>]*>新增修订工具<\/w:t>[\s\S]*<\/w:ins>/);
+  assert.match(documentXml, /<w:del(?=[^>]+w:id="2")(?=[^>]+w:author="在线审阅者")[^>]*>[\s\S]*<w:delText[^>]*>删除修订工具<\/w:delText>[\s\S]*<\/w:del>/);
   const appearanceParagraph = (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("段落外观工具")) || "";
   assert.match(appearanceParagraph, /<w:shd[^>]+w:fill="DDEBF7"/);
   for (const side of ["top", "right", "bottom", "left"]) {
@@ -991,6 +1025,12 @@ try {
   await previewCommentMark.waitFor();
   assert.equal(await previewCommentMark.textContent(), "批注工具");
   assert.match(await previewCommentMark.evaluate((mark) => `${getComputedStyle(mark).backgroundColor} ${getComputedStyle(mark).borderBottomStyle}`), /rgb\(255, 244, 199\).*solid/);
+  const previewInsertRevision = page.locator('.page-body .revision-insert[data-revision-id="1"]').first();
+  await previewInsertRevision.waitFor();
+  assert.match(await previewInsertRevision.evaluate((mark) => `${getComputedStyle(mark).color} ${getComputedStyle(mark).borderBottomStyle}`), /rgb\(23, 106, 72\).*solid/);
+  const previewDeleteRevision = page.locator('.page-body .revision-delete[data-revision-id="2"]').first();
+  await previewDeleteRevision.waitFor();
+  assert.match(await previewDeleteRevision.evaluate((mark) => `${getComputedStyle(mark).color} ${getComputedStyle(mark).textDecorationLine}`), /rgb\(180, 35, 44\).*line-through/);
   const previewLink = page.locator('.page-body a[href="https://example.com/office"]').first();
   await previewLink.waitFor();
   await page.waitForFunction(() => Array.from(document.querySelectorAll('.page-body a[href="https://example.com/office"]')).some((link) => getComputedStyle(link).textDecorationLine.includes("underline")));

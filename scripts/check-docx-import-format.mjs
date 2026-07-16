@@ -184,6 +184,7 @@ async function buildFormattedDocxFixture() {
     <w:p><w:r><w:t>Comment before </w:t></w:r><w:commentRangeStart w:id="4"/><w:r><w:t>commented source</w:t></w:r><w:commentRangeEnd w:id="4"/><w:r><w:commentReference w:id="4"/></w:r><w:r><w:t> after</w:t></w:r></w:p>
     <w:p><w:commentRangeStart w:id="5"/><w:r><w:t>Cross comment first paragraph</w:t></w:r></w:p>
     <w:p><w:r><w:t>Cross comment second paragraph</w:t></w:r><w:commentRangeEnd w:id="5"/><w:r><w:commentReference w:id="5"/></w:r></w:p>
+    <w:p><w:r><w:t>Revision source </w:t></w:r><w:ins w:id="6" w:author="Insert Reviewer" w:date="2026-07-16T05:00:00Z"><w:r><w:t>inserted source</w:t></w:r></w:ins><w:r><w:t> </w:t></w:r><w:del w:id="7" w:author="Delete Reviewer" w:date="2026-07-16T05:01:00Z"><w:r><w:delText>deleted source</w:delText></w:r></w:del></w:p>
     <w:p><w:pPr><w:shd w:val="clear" w:color="000000" w:fill="FFF2CC"/><w:pBdr><w:top w:val="single" w:sz="8" w:space="4" w:color="FF0000"/><w:right w:val="dashed" w:sz="6" w:space="3" w:color="00AA00"/><w:bottom w:val="double" w:sz="12" w:space="2" w:color="0000FF"/><w:left w:val="nil" w:sz="0" w:space="0" w:color="000000"/><w:between w:val="dotted" w:sz="4" w:space="1" w:color="888888"/></w:pBdr></w:pPr><w:r><w:t>Paragraph appearance</w:t></w:r></w:p>
     <w:p>
       <w:pPr><w:tabs><w:tab w:val="left" w:pos="1440"/><w:tab w:val="right" w:pos="5760"/></w:tabs></w:pPr>
@@ -545,6 +546,7 @@ assert.match(imported.content, /Footnote source[\s\S]*?<span[^>]+class="footnote
 assert.match(imported.content, /Endnote source[\s\S]*?<span[^>]+class="endnote-reference"[^>]+data-endnote-id="3"[^>]+data-endnote-text="Imported endnote detail"[^>]*>3<\/span>/);
 assert.match(imported.content, /Comment before [\s\S]*?<span[^>]+class="comment-mark"[^>]+data-comment-id="4"[^>]+data-comment-text="Imported review note"[^>]+data-comment-author="Imported Reviewer"[^>]+data-comment-initials="IR"[^>]*>commented source<\/span>[\s\S]*? after/);
 assert.match(imported.content, /<p[^>]*><span[^>]+data-comment-id="5"[^>]+data-comment-text="Cross paragraph review"[^>]*>Cross comment first paragraph<\/span><\/p>[\s\S]*?<p[^>]*><span[^>]+data-comment-id="5"[^>]+data-comment-text="Cross paragraph review"[^>]*>Cross comment second paragraph<\/span><\/p>/);
+assert.match(imported.content, /Revision source [\s\S]*?<span[^>]+class="revision-insert"[^>]+data-revision-type="insert"[^>]+data-revision-id="6"[^>]+data-revision-author="Insert Reviewer"[^>]*>inserted source<\/span>[\s\S]*?<span[^>]+class="revision-delete"[^>]+data-revision-type="delete"[^>]+data-revision-id="7"[^>]+data-revision-author="Delete Reviewer"[^>]*>deleted source<\/span>/);
 const importedTabParagraph = (imported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || [])
   .find((paragraph) => paragraph.includes("Tab project") && paragraph.includes("100.00")) || "";
 assert.match(importedTabParagraph, /data-tab-stops="[^\"]*1440[^\"]*5760[^\"]*"/);
@@ -735,6 +737,8 @@ assert.equal((roundTripXml.match(/<w:commentRangeStart w:id="5"\/>/g) || []).len
 assert.equal((roundTripXml.match(/<w:commentRangeEnd w:id="5"\/>/g) || []).length, 1);
 assert.match(roundTripXml, /<w:commentRangeStart w:id="5"\/>[\s\S]*Cross comment first paragraph[\s\S]*Cross comment second paragraph[\s\S]*<w:commentRangeEnd w:id="5"\/>/);
 assert.match(roundTripCommentsXml, /<w:comment(?=[^>]+w:id="5")(?=[^>]+w:author="Cross Reviewer")(?=[^>]+w:initials="CR")[^>]*>[\s\S]*Cross paragraph review[\s\S]*<\/w:comment>/);
+assert.match(roundTripXml, /<w:ins(?=[^>]+w:id="6")(?=[^>]+w:author="Insert Reviewer")[^>]*>[\s\S]*<w:t[^>]*>inserted source<\/w:t>[\s\S]*<\/w:ins>/);
+assert.match(roundTripXml, /<w:del(?=[^>]+w:id="7")(?=[^>]+w:author="Delete Reviewer")[^>]*>[\s\S]*<w:delText[^>]*>deleted source<\/w:delText>[\s\S]*<\/w:del>/);
 const customOutlineRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Custom outline level 4")) || "";
 const directOutlineRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Direct outline level 8")) || "";
 assert.match(customOutlineRoundTripXml, /<w:outlineLvl w:val="3"\/>/);
@@ -811,6 +815,8 @@ assert.match(roundTripImported.content, /<span(?=[^>]+data-comment-id="4")(?=[^>
 assert.equal((roundTripImported.content.match(/data-comment-id="5"/g) || []).length, 2);
 assert.match(roundTripImported.content, /data-comment-id="5"[^>]+data-comment-text="Cross paragraph review"[^>]*>[\s\S]*?Cross comment first paragraph/);
 assert.match(roundTripImported.content, /data-comment-id="5"[^>]+data-comment-text="Cross paragraph review"[^>]*>[\s\S]*?Cross comment second paragraph/);
+assert.match(roundTripImported.content, /data-revision-type="insert"[^>]+data-revision-id="6"[^>]+data-revision-author="Insert Reviewer"[^>]*>[\s\S]*?inserted source/);
+assert.match(roundTripImported.content, /data-revision-type="delete"[^>]+data-revision-id="7"[^>]+data-revision-author="Delete Reviewer"[^>]*>[\s\S]*?deleted source/);
 assert.match(roundTripImported.content, /<h4[^>]+data-outline-level="3"[^>]*>[\s\S]*?Custom outline level 4/);
 assert.match(roundTripImported.content, /<p[^>]+data-outline-level="7"[^>]*>[\s\S]*?Direct outline level 8/);
 assert.match(roundTripImported.content, /分栏符前[\s\S]*?<\/p><div data-column-break="true" class="column-break-marker"><\/div><p[^>]*>[\s\S]*?分栏符后/);

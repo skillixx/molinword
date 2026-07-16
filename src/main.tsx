@@ -72,6 +72,7 @@ type TextCaseMode = "upper" | "lower" | "title";
 type EditorViewMode = "edit" | "page";
 type PreviewFootnote = { id: number; text: string };
 type EditorComment = { id: number; text: string; author: string; initials: string; date: string; from: number; to: number; excerpt: string };
+type EditorRevision = { id: number; type: "insert" | "delete"; author: string; date: string; from: number; to: number; text: string };
 type ParagraphSpacingProperty = "line-height" | "margin-top" | "margin-bottom" | "margin-left" | "margin-right" | "text-indent" | "--word-line-rule";
 type ParagraphSpacingStyles = Partial<Record<ParagraphSpacingProperty, string>>;
 type ParagraphPaginationAttribute = "keepNext" | "keepLines" | "pageBreakBefore" | "widowControl" | "bidirectional";
@@ -1551,6 +1552,44 @@ const CommentMark = Mark.create({
   }
 });
 
+function createRevisionMark(name: "revisionInsert" | "revisionDelete", revisionType: "insert" | "delete") {
+  const className = revisionType === "delete" ? "revision-delete" : "revision-insert";
+  return Mark.create({
+    name,
+    inclusive: false,
+    excludes: revisionType === "delete" ? "revisionInsert" : "revisionDelete",
+    addAttributes() {
+      return {
+        revisionId: {
+          default: 0,
+          parseHTML: (element) => Math.max(0, Math.min(Math.round(Number(element.getAttribute("data-revision-id")) || 0), 2147483647)),
+          renderHTML: (attributes) => ({ "data-revision-id": Math.max(0, Math.min(Math.round(Number(attributes.revisionId) || 0), 2147483647)) })
+        },
+        revisionAuthor: {
+          default: "审阅者",
+          parseHTML: (element) => String(element.getAttribute("data-revision-author") || "审阅者").trim().slice(0, 200),
+          renderHTML: (attributes) => ({ "data-revision-author": String(attributes.revisionAuthor || "审阅者").trim().slice(0, 200) })
+        },
+        revisionDate: {
+          default: "",
+          parseHTML: (element) => String(element.getAttribute("data-revision-date") || "").trim().slice(0, 40),
+          renderHTML: (attributes) => attributes.revisionDate ? { "data-revision-date": String(attributes.revisionDate).trim().slice(0, 40) } : {}
+        }
+      };
+    },
+    parseHTML() {
+      return [{ tag: `span.${className}[data-revision-type="${revisionType}"][data-revision-id]` }];
+    },
+    // 中文注解：新增与删除修订使用互斥标记，避免同一文字同时导出为 w:ins 和 w:del。
+    renderHTML({ HTMLAttributes }) {
+      return ["span", mergeAttributes(HTMLAttributes, { class: className, "data-revision-type": revisionType, title: `${HTMLAttributes["data-revision-author"] || "审阅者"}的${revisionType === "delete" ? "删除" : "新增"}修订` }), 0];
+    }
+  });
+}
+
+const RevisionInsertMark = createRevisionMark("revisionInsert", "insert");
+const RevisionDeleteMark = createRevisionMark("revisionDelete", "delete");
+
 const FootnoteReference = TiptapNode.create({
   name: "footnoteReference",
   group: "inline",
@@ -2524,6 +2563,29 @@ function collectEditorComments(editor: TiptapEditor) {
   return Array.from(comments.values()).sort((left, right) => left.from - right.from);
 }
 
+function collectEditorRevisions(editor: TiptapEditor) {
+  const revisions = new Map<string, EditorRevision>();
+  editor.state.doc.descendants((node, position) => {
+    if (!node.isText) return;
+    const mark = node.marks.find((item) => ["revisionInsert", "revisionDelete"].includes(item.type.name));
+    if (!mark) return;
+    const type = mark.type.name === "revisionDelete" ? "delete" : "insert";
+    const id = Math.max(0, Math.min(Math.round(Number(mark.attrs.revisionId) || 0), 2147483647));
+    const key = `${type}:${id}`;
+    const existing = revisions.get(key);
+    revisions.set(key, {
+      id,
+      type,
+      author: String(mark.attrs.revisionAuthor || "审阅者"),
+      date: String(mark.attrs.revisionDate || ""),
+      from: Math.min(existing?.from ?? position, position),
+      to: Math.max(existing?.to ?? position + node.nodeSize, position + node.nodeSize),
+      text: `${existing?.text || ""}${node.text || ""}`.trim().slice(0, 200)
+    });
+  });
+  return Array.from(revisions.values()).sort((left, right) => left.from - right.from);
+}
+
 function transformTextCase(text: string, mode: TextCaseMode) {
   if (mode === "upper") return text.toUpperCase();
   if (mode === "lower") return text.toLowerCase();
@@ -3359,6 +3421,7 @@ function Editor(props: {
   const [commentEditorOpen, setCommentEditorOpen] = React.useState(false);
   const [commentText, setCommentText] = React.useState("");
   const [comments, setComments] = React.useState<EditorComment[]>([]);
+  const [revisions, setRevisions] = React.useState<EditorRevision[]>([]);
   const [imageAspectLocked, setImageAspectLocked] = React.useState(true);
   const paginationMeasureRef = React.useRef<HTMLDivElement | null>(null);
   const imageInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -3369,6 +3432,10 @@ function Editor(props: {
 
   const refreshEditorComments = React.useCallback((editor: TiptapEditor) => {
     setComments(collectEditorComments(editor));
+  }, []);
+
+  const refreshEditorRevisions = React.useCallback((editor: TiptapEditor) => {
+    setRevisions(collectEditorRevisions(editor));
   }, []);
 
   const updateOutlineFromEditor = React.useCallback((editor: TiptapEditor) => {
@@ -3402,7 +3469,7 @@ function Editor(props: {
   }, [props.pageLayout]);
 
   const editor = useEditor({
-    extensions: [StarterKit.configure({ link: { openOnClick: false, autolink: false, linkOnPaste: true, HTMLAttributes: { target: "_blank", rel: "noopener noreferrer" } } }), DocumentImage.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DoubleStrikeText, CommentMark, FootnoteReference, EndnoteReference, DocxTab, ListFormatAttributes, OutlineLevelAttributes, ParagraphIndent, PageBreak, ColumnBreak, SectionBreak, DocumentTable, DocumentTableRow, DocumentTableHeader, DocumentTableCell],
+    extensions: [StarterKit.configure({ link: { openOnClick: false, autolink: false, linkOnPaste: true, HTMLAttributes: { target: "_blank", rel: "noopener noreferrer" } } }), DocumentImage.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DoubleStrikeText, CommentMark, RevisionInsertMark, RevisionDeleteMark, FootnoteReference, EndnoteReference, DocxTab, ListFormatAttributes, OutlineLevelAttributes, ParagraphIndent, PageBreak, ColumnBreak, SectionBreak, DocumentTable, DocumentTableRow, DocumentTableHeader, DocumentTableCell],
     content: props.content,
     editorProps: { attributes: { class: "word-editor" } },
     onCreate({ editor }) {
@@ -3410,8 +3477,9 @@ function Editor(props: {
       updateOutlineFromEditor(editor);
       syncActiveSectionFromEditor(editor);
       refreshEditorComments(editor);
+      refreshEditorRevisions(editor);
     },
-    onUpdate({ editor }) { props.setContent(editor.getHTML()); updateOutlineFromEditor(editor); syncActiveSectionFromEditor(editor); refreshEditorComments(editor); },
+    onUpdate({ editor }) { props.setContent(editor.getHTML()); updateOutlineFromEditor(editor); syncActiveSectionFromEditor(editor); refreshEditorComments(editor); refreshEditorRevisions(editor); },
     onSelectionUpdate({ editor }) {
       lastEditorSelectionRef.current = { from: editor.state.selection.from, to: editor.state.selection.to };
       const selectedText = getSelectedText(editor);
@@ -3426,7 +3494,8 @@ function Editor(props: {
     editor.commands.setContent(props.content);
     updateOutlineFromEditor(editor);
     refreshEditorComments(editor);
-  }, [editor, props.content, refreshEditorComments, updateOutlineFromEditor]);
+    refreshEditorRevisions(editor);
+  }, [editor, props.content, refreshEditorComments, refreshEditorRevisions, updateOutlineFromEditor]);
 
   React.useLayoutEffect(() => {
     if (!editor) return;
@@ -4353,6 +4422,40 @@ function Editor(props: {
     setSelectionHint(`已定位批注：${comment.excerpt}`);
   };
 
+  const markSelectionRevision = (type: "insert" | "delete") => {
+    if (!editor || editor.state.selection.empty) {
+      setSelectionHint("请先选中需要标记为修订的文字。");
+      return;
+    }
+    const markName = type === "delete" ? "revisionDelete" : "revisionInsert";
+    const oppositeMarkName = type === "delete" ? "revisionInsert" : "revisionDelete";
+    const revisionId = Math.min(2147483647, revisions.reduce((maxId, revision) => Math.max(maxId, revision.id), 0) + 1);
+    const applied = editor.chain().focus().unsetMark(oppositeMarkName).setMark(markName, {
+      revisionId,
+      revisionAuthor: "在线审阅者",
+      revisionDate: new Date().toISOString()
+    }).run();
+    // 中文注解：在线修订只改变审阅语义，不直接删除文字；接受或拒绝时再按修订类型决定保留内容。
+    setSelectionHint(applied ? `已标记${type === "delete" ? "删除" : "新增"}修订。` : "修订标记失败，请重新选择文字。");
+  };
+
+  const jumpToRevision = (revision: EditorRevision) => {
+    if (!editor) return;
+    editor.chain().focus().setTextSelection({ from: revision.from, to: revision.to }).run();
+    setSelectionHint(`已定位${revision.type === "delete" ? "删除" : "新增"}修订：${revision.text}`);
+  };
+
+  const applyRevisionDecision = (revision: EditorRevision, decision: "accept" | "reject") => {
+    if (!editor) return;
+    const markName = revision.type === "delete" ? "revisionDelete" : "revisionInsert";
+    const shouldDelete = (revision.type === "insert" && decision === "reject") || (revision.type === "delete" && decision === "accept");
+    const chain = editor.chain().focus().setTextSelection({ from: revision.from, to: revision.to });
+    if (shouldDelete) chain.deleteSelection().run();
+    else chain.unsetMark(markName).run();
+    // 中文注解：接受新增与拒绝删除保留正文，拒绝新增与接受删除移除正文，行为与桌面 Word 审阅一致。
+    setSelectionHint(`已${decision === "accept" ? "接受" : "拒绝"}${revision.type === "delete" ? "删除" : "新增"}修订。`);
+  };
+
   const openFootnoteEditor = () => {
     if (!editor) return;
     setEndnoteEditorOpen(false);
@@ -4626,6 +4729,8 @@ function Editor(props: {
               <button aria-label="关闭超链接编辑" onClick={() => setLinkEditorOpen(false)} title="关闭"><X size={16} /></button>
             </div> : null}
             <button aria-label="添加或编辑批注" className={editor?.isActive("commentMark") ? "active-format" : ""} onClick={openCommentEditor} title="为选中文字添加批注，或修改当前批注"><PenLine size={16} />批注</button>
+            <button aria-label="标记新增修订" onClick={() => markSelectionRevision("insert")} disabled={!hasSelection} title="将选中文字标记为新增修订"><Plus size={16} />新增修订</button>
+            <button aria-label="标记删除修订" onClick={() => markSelectionRevision("delete")} disabled={!hasSelection} title="将选中文字标记为删除修订"><Trash2 size={16} />删除修订</button>
             <button aria-label="插入或编辑脚注" className={editor?.isActive("footnoteReference") ? "active-format" : ""} onClick={openFootnoteEditor} title="在当前位置插入脚注，或修改选中的脚注"><FileText size={16} />脚注</button>
             <button aria-label="插入或编辑尾注" className={editor?.isActive("endnoteReference") ? "active-format" : ""} onClick={openEndnoteEditor} title="在当前位置插入尾注，或修改选中的尾注"><FileText size={16} />尾注</button>
             <button className={editor?.isActive("strike") ? "active-format" : ""} onClick={() => applyStrikeStyle(editor?.isActive("strike") ? "none" : "single", editor?.isActive("strike") ? "无删除线" : "单删除线")} title="删除线"><Strikethrough size={16} /></button>
@@ -4822,6 +4927,19 @@ function Editor(props: {
           <div className="document-comments">
             <div className="document-comments-title"><strong>文档批注</strong><span>{comments.length}</span></div>
             {comments.length ? comments.map((comment) => <button className="document-comment" onClick={() => jumpToComment(comment)} title="定位到批注文字" key={comment.id}><span>{comment.excerpt || "批注范围"}</span><strong>{comment.text}</strong><small>{comment.author}{comment.date ? ` · ${new Date(comment.date).toLocaleString("zh-CN")}` : ""}</small></button>) : <div className="document-comments-empty">暂无批注</div>}
+          </div>
+          <div className="document-revisions">
+            <div className="document-comments-title"><strong>修订记录</strong><span>{revisions.length}</span></div>
+            {revisions.length ? revisions.map((revision) => <div className={`document-revision is-${revision.type}`} key={`${revision.type}-${revision.id}`}>
+              <button className="document-revision-locator" onClick={() => jumpToRevision(revision)} title="定位到修订文字">
+                <span>{revision.type === "delete" ? "删除" : "新增"} · {revision.text || "修订范围"}</span>
+                <small>{revision.author}{revision.date ? ` · ${new Date(revision.date).toLocaleString("zh-CN")}` : ""}</small>
+              </button>
+              <div className="document-revision-actions">
+                <button aria-label={`接受修订 ${revision.id}`} onClick={() => applyRevisionDecision(revision, "accept")} title="接受修订"><Check size={15} /></button>
+                <button aria-label={`拒绝修订 ${revision.id}`} onClick={() => applyRevisionDecision(revision, "reject")} title="拒绝修订"><X size={15} /></button>
+              </div>
+            </div>) : <div className="document-comments-empty">暂无修订</div>}
           </div>
           <div className="assistant-note"><strong>{props.aiStatus}</strong><span>AI 密钥仅保存在服务端；墨灵积分只会在动作成功后扣减。</span></div>
         </aside>
