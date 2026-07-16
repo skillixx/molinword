@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import express from "express";
-import { AlignmentType, BorderStyle, Column, ColumnBreak as DocxColumnBreak, Document, ExternalHyperlink, Footer, Header, HeadingLevel, HeightRule, ImageRun, LevelFormat, LineRuleType, NoBreakHyphen, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, SoftHyphen, Tab, Table, TableCell, TableLayoutType, TableRow, TextDirection, TextRun, TextWrappingSide, TextWrappingType, VerticalAlignTable, WidthType } from "docx";
+import { AlignmentType, BorderStyle, Column, ColumnBreak as DocxColumnBreak, Document, ExternalHyperlink, Footer, FootnoteReferenceRun, Header, HeadingLevel, HeightRule, ImageRun, LevelFormat, LineRuleType, NoBreakHyphen, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, SoftHyphen, Tab, Table, TableCell, TableLayoutType, TableRow, TextDirection, TextRun, TextWrappingSide, TextWrappingType, VerticalAlignTable, WidthType } from "docx";
 import { imageSize } from "image-size";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
@@ -459,7 +459,7 @@ function sanitizeImportedHtml(value = "") {
       h6: ["style", "data-outline-level", "data-indent", "data-bidirectional", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
       p: ["style", "data-outline-level", "data-indent", "data-bidirectional", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
       li: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
-      span: ["style", "class", "data-docx-tab", "data-tab-position", "data-tab-alignment", "data-double-strike"],
+      span: ["style", "class", "data-docx-tab", "data-tab-position", "data-tab-alignment", "data-double-strike", "data-footnote-id", "data-footnote-text"],
       mark: ["data-highlight", "style"],
       a: ["href", "target", "rel"],
       ol: ["style", "data-list-format", "start"],
@@ -1366,12 +1366,38 @@ function docxTabHtml(tabState) {
   return `<span class="docx-tab" data-docx-tab="true" data-tab-position="${stop.position}" data-tab-alignment="${stop.alignment}"></span>`;
 }
 
+function normalizeFootnoteId(value) {
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 && id <= 32767 ? id : null;
+}
+
+function normalizeFootnoteText(value = "") {
+  // 中文注解：脚注文本限制为常见办公文档可编辑规模，避免异常属性放大保存与导出负担。
+  return String(value).replace(/\r\n?/g, "\n").trim().slice(0, 4000);
+}
+
+function parseDocxFootnotes(xml = "") {
+  const footnotes = new Map();
+  if (!xml.trim()) return footnotes;
+  const document = parseDocument(xml, { xmlMode: true });
+  for (const footnote of xmlDescendants(document, "w:footnote")) {
+    const id = normalizeFootnoteId(firstValue(footnote.attribs, ["w:id", "id"]));
+    if (!id) continue;
+    const text = normalizeFootnoteText(xmlDescendants(footnote, "w:p").map((paragraph) => (
+      xmlDescendants(paragraph, "w:t").map((textNode) => (textNode.children || []).map((child) => child.data || "").join("")).join("")
+    )).join("\n"));
+    if (text) footnotes.set(id, text);
+  }
+  return footnotes;
+}
+
 async function docxRunToHtml(runNode, inheritedRunStyles = {}, context = {}, tabState = { stops: [], index: 0 }) {
-  const { zip = null, relationships = new Map(), styleMap = new Map(), themeFonts = {}, themeColors = {} } = context;
+  const { zip = null, relationships = new Map(), styleMap = new Map(), themeFonts = {}, themeColors = {}, footnotes = new Map() } = context;
   const text = docxTextFromRun(runNode);
   const imageHtml = zip ? (await docxImagesFromRun(runNode, zip, relationships)).join("") : "";
   const hasBreak = xmlChildren(runNode, "w:br").some((breakNode) => ["page", "column"].includes(firstValue(breakNode.attribs, ["w:type", "type"])));
-  if (!text && !imageHtml && !hasBreak) return "";
+  const hasFootnoteReference = xmlChildren(runNode, "w:footnoteReference").length > 0;
+  if (!text && !imageHtml && !hasBreak && !hasFootnoteReference) return "";
   const runProperties = xmlChild(runNode, "w:rPr");
   const characterStyleId = xmlVal(xmlChild(runProperties, "w:rStyle"));
   const characterStyle = styleMap.get(characterStyleId) || { run: {} };
@@ -1411,6 +1437,12 @@ async function docxRunToHtml(runNode, inheritedRunStyles = {}, context = {}, tab
     if (child.name === "w:tab") return docxTabHtml(tabState);
     if (child.name === "w:softHyphen") return renderText("\u00AD");
     if (child.name === "w:noBreakHyphen") return renderText("\u2011");
+    if (child.name === "w:footnoteReference") {
+      const id = normalizeFootnoteId(firstValue(child.attribs, ["w:id", "id"]));
+      const footnoteText = id ? normalizeFootnoteText(footnotes.get(id)) : "";
+      // 中文注解：在线 HTML 只保存受控编号和纯文本，既可编辑，也能在再次导出时恢复原生脚注关系。
+      return id && footnoteText ? `<span class="footnote-reference" data-footnote-id="${id}" data-footnote-text="${escapeHtml(footnoteText)}">${id}</span>` : "";
+    }
     if (child.name !== "w:br") return "";
     const breakType = firstValue(child.attribs, ["w:type", "type"]);
     if (breakType === "page") return pageBreakHtml();
@@ -1806,10 +1838,12 @@ async function parseStyledDocxToHtml(buffer, sectionLayouts = [], sectionBreakTy
   const themeXml = await zip.file("word/theme/theme1.xml")?.async("string");
   const numberingXml = await zip.file("word/numbering.xml")?.async("string");
   const relsXml = await zip.file("word/_rels/document.xml.rels")?.async("string");
+  const footnotesXml = await zip.file("word/footnotes.xml")?.async("string");
   const styleContext = parseDocxStyles(stylesXml || "", themeXml || "");
   const numbering = parseDocxNumbering(numberingXml || "");
   const relationships = parseDocxRelationships(relsXml || "");
-  const context = { ...styleContext, numbering, zip, relationships };
+  const footnotes = parseDocxFootnotes(footnotesXml || "");
+  const context = { ...styleContext, numbering, zip, relationships, footnotes };
   const document = parseDocument(documentXml, { xmlMode: true });
   const body = xmlDescendants(document, "w:body")[0];
   const chunks = [];
@@ -2494,6 +2528,12 @@ function paragraphStyleFromNode(node) {
 
 function textRunsFromNode(node, marks = {}) {
   if (!node) return [];
+  const footnoteId = normalizeFootnoteId(node?.attribs?.["data-footnote-id"]);
+  const footnoteText = normalizeFootnoteText(node?.attribs?.["data-footnote-text"]);
+  if (footnoteId && footnoteText) {
+    // 中文注解：脚注标记必须导出为原生 w:footnoteReference，显示编号由 Word 自动管理，不能写成普通上标文字。
+    return [new FootnoteReferenceRun(footnoteId)];
+  }
   if (node?.attribs?.["data-docx-tab"] === "true") {
     // 中文注解：在线制表位导出为真正的 w:tab，不能降级为空格，否则后续文字无法按段落制表位对齐。
     return [new TextRun({ children: [new Tab()] })];
@@ -3086,6 +3126,20 @@ function createDocxStyles(templateStyle = {}) {
   };
 }
 
+function collectHtmlFootnotes(content = "") {
+  const document = parseDocument(content, { decodeEntities: true });
+  const footnotes = new Map();
+  for (const node of xmlDescendants(document, "span")) {
+    const id = normalizeFootnoteId(node.attribs?.["data-footnote-id"]);
+    const text = normalizeFootnoteText(node.attribs?.["data-footnote-text"]);
+    if (id && text && !footnotes.has(id)) footnotes.set(id, text);
+  }
+  return Object.fromEntries(Array.from(footnotes, ([id, text]) => [String(id), {
+    // 中文注解：每一行作为脚注部件中的独立段落，保留在线输入的手动分段。
+    children: text.split("\n").map((line) => new Paragraph({ text: line || " ", style: "FootnoteText", spacing: { after: 0 } }))
+  }]));
+}
+
 function createDocxHeaderFooter(pageLayout, templateStyle = {}, forceDefault = false, forceEven = false) {
   const layout = normalizePageLayout(pageLayout);
   const alignmentMap = { left: AlignmentType.LEFT, center: AlignmentType.CENTER, right: AlignmentType.RIGHT };
@@ -3232,6 +3286,7 @@ function createDocxSectionProperties(pageLayout, isFirstSection, breakType = "ne
 
 async function createDocxBuffer({ title, content, templateStyle = null, pageLayout = null }) {
   const contentSections = extractDocxSectionsFromHtml(content, pageLayout);
+  const footnotes = collectHtmlFootnotes(content);
   const orderedListStarts = new Map();
   const contentDocument = parseDocument(content || "", { decodeEntities: true });
   for (const listNode of xmlDescendants(contentDocument, "ol")) {
@@ -3284,6 +3339,7 @@ async function createDocxBuffer({ title, content, templateStyle = null, pageLayo
         })
       ]
     },
+    ...(Object.keys(footnotes).length ? { footnotes } : {}),
     sections: documentSections
   });
 

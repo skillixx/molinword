@@ -236,6 +236,52 @@ button:disabled {
   padding: 0;
 }
 
+.footnote-editor {
+  position: absolute;
+  top: 78px;
+  left: 12px;
+  z-index: 12;
+  display: flex;
+  width: min(420px, calc(100vw - 48px));
+  min-width: 320px;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid #b9c3ce;
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgba(23, 33, 43, 0.16);
+}
+
+.footnote-editor textarea {
+  flex: 1;
+  min-width: 0;
+  resize: vertical;
+  border: 1px solid #cfd6dd;
+  border-radius: 4px;
+  padding: 7px 9px;
+  color: #17212b;
+  font: inherit;
+}
+
+.footnote-editor-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.footnote-reference {
+  display: inline-block;
+  min-width: 0.8em;
+  margin: 0 1px;
+  color: #1f5f55;
+  font-size: 0.72em;
+  font-weight: 600;
+  line-height: 1;
+  text-align: center;
+  vertical-align: super;
+  cursor: pointer;
+}
+
 .image-format-control,
 .image-layout-segments {
   display: inline-flex;
@@ -1272,7 +1318,7 @@ textarea {
 .page-body {
   position: relative;
   z-index: 1;
-  height: var(--page-content-height, 931px);
+  height: var(--page-body-height, var(--page-content-height, 931px));
   box-sizing: border-box;
   padding-top: var(--page-content-padding-top, 0);
   margin: var(--page-margin-top, 96px) var(--page-margin-right, 96px) var(--page-margin-bottom, 96px) var(--page-margin-left, 96px);
@@ -1280,6 +1326,44 @@ textarea {
   grid-template-columns: var(--page-column-template, minmax(0, 1fr));
   align-items: stretch;
   overflow: hidden;
+}
+
+.page-footnotes {
+  position: absolute;
+  z-index: 2;
+  left: var(--page-margin-left, 96px);
+  right: var(--page-margin-right, 96px);
+  bottom: var(--page-margin-bottom, 96px);
+  height: var(--page-footnote-height, 0);
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.page-footnotes,
+.page-footnotes-measure {
+  padding-top: 7px;
+  border-top: 1px solid #65717c;
+  color: #26323d;
+  font-family: var(--document-font-family, "Microsoft YaHei"), sans-serif;
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
+.page-footnote {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 4px;
+  margin-bottom: 3px;
+}
+
+.page-footnote > span {
+  text-align: right;
+  vertical-align: super;
+}
+
+.page-footnote > p {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .page-column {

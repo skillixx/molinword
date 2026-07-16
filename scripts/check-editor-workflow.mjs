@@ -41,6 +41,7 @@ const fixtureDocument = {
 };
 // 中文注解：复用现有编辑器回归文档，同时加入链接和浮动图片，覆盖保存、分页与导出的真实节点持久化。
 fixtureDocument.content = `<img src="${tinyPng}" alt="浮动审批标识" style="width:48px;height:48px" data-docx-floating='${JSON.stringify(floatingBodyImage)}' data-docx-wrap="square" data-docx-float-align="right" />${fixtureDocument.content.replace("下标工具", "下标工具 链接工具")}`;
+fixtureDocument.content += "<p>脚注工具</p>";
 const fixtureTemplate = {
   id: 3,
   name: "商业计划书",
@@ -362,6 +363,16 @@ try {
   await editor.type("第二行");
   assert.match(await manualLineBreakParagraph.innerHTML(), /第一行[\s\S]*?<br[^>]*>[\s\S]*?第二行/);
 
+  const footnoteParagraph = editor.locator("p").filter({ hasText: "脚注工具" });
+  await footnoteParagraph.click();
+  await footnoteParagraph.press("End");
+  await page.getByRole("button", { name: "插入或编辑脚注", exact: true }).click();
+  await page.getByLabel("脚注内容", { exact: true }).fill("审批依据说明");
+  await page.getByRole("button", { name: "确认脚注", exact: true }).click();
+  const sourceFootnoteReference = footnoteParagraph.locator('.footnote-reference[data-footnote-id="1"]');
+  await sourceFootnoteReference.waitFor();
+  assert.equal(await sourceFootnoteReference.getAttribute("data-footnote-text"), "审批依据说明");
+
   const paragraphAppearance = editor.locator("p").filter({ hasText: "段落外观工具" });
   await paragraphAppearance.click();
   // 中文注解：先让 ProseMirror 完成点击选区同步，再打开原生下拉框，模拟真实连续操作并消除事件循环竞态。
@@ -639,6 +650,7 @@ try {
   assert.match(storedDocument.content, /data-double-strike="true"[^>]*>[\s\S]*?双删除线工具/);
   assert.ok(storedDocument.content.includes("特殊连字符工具") && storedDocument.content.includes("\u00AD") && storedDocument.content.includes("\u2011"));
   assert.match(storedDocument.content, /手动换行工具 第一行[\s\S]*?<br[^>]*>[\s\S]*?第二行/);
+  assert.match(storedDocument.content, /脚注工具[\s\S]*?<span(?=[^>]*class="footnote-reference")(?=[^>]*data-footnote-id="1")(?=[^>]*data-footnote-text="审批依据说明")[^>]*>/);
   assert.match(storedDocument.content, /<p[^>]+data-bidirectional="true"[^>]+style="[^"]*direction:\s*rtl[^"]*"[^>]*>[\s\S]*?RTL段落工具内容[\s\S]*?<\/p>/);
   assert.doesNotMatch(storedDocument.content, /<mark[^>]*>清除高亮工具<\/mark>/);
   assert.match(storedDocument.content, /<p[^>]+data-paragraph-shading="[^\"]*DDEBF7[^\"]*"[^>]+data-paragraph-borders="[^\"]*dashed[^\"]*"[^>]*>[\s\S]*?段落外观工具[\s\S]*?<\/p>/);
@@ -737,6 +749,7 @@ try {
   assert.match(reopenedHtml, /<p[^>]+data-bidirectional="true"[^>]+style="[^"]*direction:\s*rtl[^"]*"[^>]*>[\s\S]*?RTL段落工具内容[\s\S]*?<\/p>/);
   assert.ok(reopenedHtml.includes("特殊连字符工具") && reopenedHtml.includes("\u00AD") && reopenedHtml.includes("\u2011"));
   assert.match(reopenedHtml, /手动换行工具 第一行[\s\S]*?<br[^>]*>[\s\S]*?第二行/);
+  assert.match(reopenedHtml, /脚注工具[\s\S]*?<span(?=[^>]*class="footnote-reference")(?=[^>]*data-footnote-id="1")(?=[^>]*data-footnote-text="审批依据说明")[^>]*>/);
   assert.match(reopenedHtml, /data-section-break="nextPage"/);
   assert.match(reopenedHtml, /第二节横向内容/);
   assert.match(reopenedHtml, /<div[^>]+data-column-break="true"[^>]*><\/div>/);
@@ -766,6 +779,7 @@ try {
   const settingsXml = await archive.file("word/settings.xml")?.async("string");
   const headerXmlParts = await Promise.all(archive.file(/^word\/header\d+\.xml$/).map((file) => file.async("string")));
   const footerXmlParts = await Promise.all(archive.file(/^word\/footer\d+\.xml$/).map((file) => file.async("string")));
+  const footnotesXml = await archive.file("word/footnotes.xml")?.async("string") || "";
   const headerMedia = archive.file(/^word\/media\/.+\.png$/);
   assert.ok(documentXml, "导出的 DOCX 应包含 document.xml");
   assert.equal(headerXmlParts.length, 5, "导出的 DOCX 应包含首节三类页眉和第二节默认/偶数页眉");
@@ -871,6 +885,9 @@ try {
   assert.match(specialHyphenExportParagraph, /inter[\s\S]*?<w:softHyphen\/>[\s\S]*?national code[\s\S]*?<w:noBreakHyphen\/>[\s\S]*?2026/);
   const manualLineBreakExportParagraph = (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("手动换行工具") && paragraph.includes("第二行")) || "";
   assert.match(manualLineBreakExportParagraph, /第一行[\s\S]*?<w:br\/>[\s\S]*?第二行/);
+  assert.match(documentXml, /脚注工具[\s\S]*?<w:footnoteReference w:id="1"\/>/);
+  assert.match(documentRelationshipsXml, /relationships\/footnotes" Target="footnotes\.xml"/);
+  assert.match(footnotesXml, /<w:footnote w:id="1">[\s\S]*审批依据说明[\s\S]*<\/w:footnote>/);
   const appearanceParagraph = (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("段落外观工具")) || "";
   assert.match(appearanceParagraph, /<w:shd[^>]+w:fill="DDEBF7"/);
   for (const side of ["top", "right", "bottom", "left"]) {
@@ -910,6 +927,21 @@ try {
   await page.getByRole("button", { name: "分页", exact: true }).click();
   await page.locator(".page-sheet").first().waitFor();
   await page.waitForFunction(() => document.querySelectorAll(".page-sheet").length > 5);
+  await page.waitForFunction(() => Array.from(document.querySelectorAll(".page-footnote")).some((footnote) => footnote.textContent?.includes("审批依据说明")));
+  const footnotePreviewLayout = await page.evaluate(() => {
+    const footnote = Array.from(document.querySelectorAll(".page-footnote")).find((item) => item.textContent?.includes("审批依据说明"));
+    const sheet = footnote?.closest(".page-sheet");
+    const body = sheet?.querySelector(".page-body");
+    const reference = sheet?.querySelector('.footnote-reference[data-footnote-id="1"]');
+    return footnote && sheet && body && reference ? {
+      text: footnote.textContent || "",
+      bodyBottom: body.getBoundingClientRect().bottom,
+      footnoteTop: footnote.closest(".page-footnotes").getBoundingClientRect().top,
+      samePage: true
+    } : null;
+  });
+  assert.ok(footnotePreviewLayout?.text.includes("审批依据说明"), "分页预览应在引用所在页显示脚注正文");
+  assert.ok(footnotePreviewLayout.bodyBottom <= footnotePreviewLayout.footnoteTop + 1, "分页正文应为页底脚注预留空间");
   const previewLink = page.locator('.page-body a[href="https://example.com/office"]').first();
   await previewLink.waitFor();
   await page.waitForFunction(() => Array.from(document.querySelectorAll('.page-body a[href="https://example.com/office"]')).some((link) => getComputedStyle(link).textDecorationLine.includes("underline")));

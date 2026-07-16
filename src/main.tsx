@@ -70,6 +70,7 @@ type AiAction = "continue" | "expand" | "shorten" | "correct" | "polish" | "form
 type AiApplyMode = "replace" | "insert";
 type TextCaseMode = "upper" | "lower" | "title";
 type EditorViewMode = "edit" | "page";
+type PreviewFootnote = { id: number; text: string };
 type ParagraphSpacingProperty = "line-height" | "margin-top" | "margin-bottom" | "margin-left" | "margin-right" | "text-indent" | "--word-line-rule";
 type ParagraphSpacingStyles = Partial<Record<ParagraphSpacingProperty, string>>;
 type ParagraphPaginationAttribute = "keepNext" | "keepLines" | "pageBreakBefore" | "widowControl" | "bidirectional";
@@ -602,7 +603,7 @@ const maxIndentLevel = 6;
 const docxPagePreview = {
   twipToPx: 96 / 1440
 };
-type PreviewPage = { columns: string[][]; sectionIndex: number; sectionPageIndex: number; layout: DocumentPageLayout; usedHeight: number; usedHeights: number[] };
+type PreviewPage = { columns: string[][]; sectionIndex: number; sectionPageIndex: number; layout: DocumentPageLayout; usedHeight: number; usedHeights: number[]; footnotes: PreviewFootnote[]; footnoteHeight: number };
 
 function pageGeometry(layout: DocumentPageLayout) {
   const landscape = layout.orientation === "landscape";
@@ -645,7 +646,7 @@ function pageGeometry(layout: DocumentPageLayout) {
 
 function createPreviewPage(layout: DocumentPageLayout, sectionIndex: number, sectionPageIndex: number): PreviewPage {
   const count = pageGeometry(layout).columnCount;
-  return { columns: Array.from({ length: count }, () => []), sectionIndex, sectionPageIndex, layout, usedHeight: 0, usedHeights: Array.from({ length: count }, () => 0) };
+  return { columns: Array.from({ length: count }, () => []), sectionIndex, sectionPageIndex, layout, usedHeight: 0, usedHeights: Array.from({ length: count }, () => 0), footnotes: [], footnoteHeight: 0 };
 }
 
 function pageBorderCss(border: DocumentPageBorderSide | undefined) {
@@ -654,7 +655,7 @@ function pageBorderCss(border: DocumentPageBorderSide | undefined) {
   return `${Math.round(border.size / 6 * 100) / 100}px ${style} ${border.color}`;
 }
 
-function pageGeometryStyle(layout: DocumentPageLayout, sectionPageIndex = 0, usedHeight = 0): React.CSSProperties {
+function pageGeometryStyle(layout: DocumentPageLayout, sectionPageIndex = 0, usedHeight = 0, footnoteHeight = 0): React.CSSProperties {
   const geometry = pageGeometry(layout);
   const pageBorders = layout.pageBorders;
   const showPageBorder = Boolean(pageBorders) && (pageBorders?.display === "allPages" || (pageBorders?.display === "firstPage" && sectionPageIndex === 0) || (pageBorders?.display === "notFirstPage" && sectionPageIndex > 0));
@@ -663,8 +664,9 @@ function pageGeometryStyle(layout: DocumentPageLayout, sectionPageIndex = 0, use
     const spacePx = (border?.space || 0) * 96 / 72;
     return pageBorders?.offsetFrom === "text" ? Math.max(0, geometry.margins[side] - spacePx) : spacePx;
   };
-  const occupiedHeight = Math.min(geometry.contentHeightPx, Math.max(0, usedHeight));
-  const remainingHeight = Math.max(0, geometry.contentHeightPx - occupiedHeight);
+  const bodyHeight = Math.max(48, geometry.contentHeightPx - Math.max(0, footnoteHeight));
+  const occupiedHeight = Math.min(bodyHeight, Math.max(0, usedHeight));
+  const remainingHeight = Math.max(0, bodyHeight - occupiedHeight);
   const verticalOffset = layout.verticalAlign === "center" ? remainingHeight / 2 : layout.verticalAlign === "bottom" ? remainingHeight : 0;
   return {
     "--page-width": `${geometry.widthPx}px`,
@@ -677,6 +679,8 @@ function pageGeometryStyle(layout: DocumentPageLayout, sectionPageIndex = 0, use
     "--page-footer-distance": `${layout.footerDistance * docxPagePreview.twipToPx}px`,
     "--page-content-width": `${geometry.contentWidthPx}px`,
     "--page-content-height": `${geometry.contentHeightPx}px`,
+    "--page-body-height": `${bodyHeight}px`,
+    "--page-footnote-height": `${Math.max(0, footnoteHeight)}px`,
     "--page-column-count": String(geometry.columnCount),
     "--page-column-gap": `${geometry.columnGapPx}px`,
     "--page-column-template": geometry.columnTemplate,
@@ -1505,6 +1509,36 @@ const DoubleStrikeText = Mark.create({
   }, 0]
 });
 
+const FootnoteReference = TiptapNode.create({
+  name: "footnoteReference",
+  group: "inline",
+  inline: true,
+  atom: true,
+  selectable: true,
+  addAttributes() {
+    return {
+      footnoteId: {
+        default: 1,
+        parseHTML: (element) => Math.max(1, Math.min(Math.round(Number(element.getAttribute("data-footnote-id")) || 1), 32767)),
+        renderHTML: (attributes) => ({ "data-footnote-id": Math.max(1, Math.min(Math.round(Number(attributes.footnoteId) || 1), 32767)) })
+      },
+      footnoteText: {
+        default: "",
+        parseHTML: (element) => String(element.getAttribute("data-footnote-text") || "").replace(/\r\n?/g, "\n").trim().slice(0, 4000),
+        renderHTML: (attributes) => ({ "data-footnote-text": String(attributes.footnoteText || "").replace(/\r\n?/g, "\n").trim().slice(0, 4000) })
+      }
+    };
+  },
+  parseHTML() {
+    return [{ tag: "span.footnote-reference[data-footnote-id][data-footnote-text]" }];
+  },
+  // 中文注解：编辑器保存编号和纯文本语义；正文仅显示引用编号，脚注正文由分页视图在页底统一排版。
+  renderHTML({ node, HTMLAttributes }) {
+    const id = Math.max(1, Math.min(Math.round(Number(node.attrs.footnoteId) || 1), 32767));
+    return ["span", mergeAttributes(HTMLAttributes, { class: "footnote-reference", title: String(node.attrs.footnoteText || "") }), String(id)];
+  }
+});
+
 const DocxTab = TiptapNode.create({
   name: "docxTab",
   group: "inline",
@@ -2075,6 +2109,22 @@ function aiResultToHtml(text: string) {
 function buildExportPreviewHtml(title: string, content: string) {
   // 中文注解：后端导出会把文档标题作为 Word 标题段落写入，这里同步显示，避免预览少一段。
   return `<h1 class="export-title">${escapeHtml(title || "未命名文档")}</h1>${content || "<p></p>"}`;
+}
+
+function previewFootnotesFromHtml(html: string) {
+  const container = document.createElement("div");
+  container.innerHTML = html;
+  const footnotes = new Map<number, PreviewFootnote>();
+  container.querySelectorAll<HTMLElement>(".footnote-reference[data-footnote-id][data-footnote-text]").forEach((reference) => {
+    const id = Number(reference.dataset.footnoteId);
+    const text = String(reference.dataset.footnoteText || "").replace(/\r\n?/g, "\n").trim().slice(0, 4000);
+    if (Number.isInteger(id) && id > 0 && id <= 32767 && text && !footnotes.has(id)) footnotes.set(id, { id, text });
+  });
+  return Array.from(footnotes.values());
+}
+
+function previewFootnotesHtml(footnotes: PreviewFootnote[], className = "page-footnotes-measure") {
+  return `<div class="${className}">${footnotes.map((footnote) => `<div class="page-footnote"><span>${footnote.id}</span><p>${escapeHtml(footnote.text).replace(/\n/g, "<br>")}</p></div>`).join("")}</div>`;
 }
 
 function blockOuterHtml(element: Element) {
@@ -3193,6 +3243,8 @@ function Editor(props: {
   const [paginationPending, setPaginationPending] = React.useState(false);
   const [linkEditorOpen, setLinkEditorOpen] = React.useState(false);
   const [linkUrl, setLinkUrl] = React.useState("https://");
+  const [footnoteEditorOpen, setFootnoteEditorOpen] = React.useState(false);
+  const [footnoteText, setFootnoteText] = React.useState("");
   const [imageAspectLocked, setImageAspectLocked] = React.useState(true);
   const paginationMeasureRef = React.useRef<HTMLDivElement | null>(null);
   const imageInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -3232,7 +3284,7 @@ function Editor(props: {
   }, [props.pageLayout]);
 
   const editor = useEditor({
-    extensions: [StarterKit.configure({ link: { openOnClick: false, autolink: false, linkOnPaste: true, HTMLAttributes: { target: "_blank", rel: "noopener noreferrer" } } }), DocumentImage.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DoubleStrikeText, DocxTab, ListFormatAttributes, OutlineLevelAttributes, ParagraphIndent, PageBreak, ColumnBreak, SectionBreak, DocumentTable, DocumentTableRow, DocumentTableHeader, DocumentTableCell],
+    extensions: [StarterKit.configure({ link: { openOnClick: false, autolink: false, linkOnPaste: true, HTMLAttributes: { target: "_blank", rel: "noopener noreferrer" } } }), DocumentImage.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DoubleStrikeText, FootnoteReference, DocxTab, ListFormatAttributes, OutlineLevelAttributes, ParagraphIndent, PageBreak, ColumnBreak, SectionBreak, DocumentTable, DocumentTableRow, DocumentTableHeader, DocumentTableCell],
     content: props.content,
     editorProps: { attributes: { class: "word-editor" } },
     onCreate({ editor }) {
@@ -3367,8 +3419,32 @@ function Editor(props: {
       }
       return lineTops.length;
     };
+    const mergeFootnotes = (current: PreviewFootnote[], additions: PreviewFootnote[]) => {
+      const merged = new Map(current.map((footnote) => [footnote.id, footnote]));
+      additions.forEach((footnote) => { if (!merged.has(footnote.id)) merged.set(footnote.id, footnote); });
+      return Array.from(merged.values());
+    };
+    const measureFootnotes = (footnotes: PreviewFootnote[]) => {
+      if (!footnotes.length) return 0;
+      measureElement.style.width = `${currentGeometry.contentWidthPx}px`;
+      measureElement.innerHTML = previewFootnotesHtml(footnotes);
+      return Math.ceil(measuredBlockHeight(measureElement.firstElementChild));
+    };
+    const pageBodyHeightForHtml = (html = "") => {
+      const page = nextPages[nextPages.length - 1];
+      const footnotes = mergeFootnotes(page.footnotes, previewFootnotesFromHtml(html));
+      return Math.max(48, columnContentHeight - measureFootnotes(footnotes));
+    };
+    const availableHeightForHtml = (html = "") => Math.max(0, pageBodyHeightForHtml(html) - currentHeight);
+    const candidateFitsCurrentPage = (html: string, height: number) => {
+      const bodyHeight = pageBodyHeightForHtml(html);
+      const page = nextPages[nextPages.length - 1];
+      return currentHeight + height <= bodyHeight && page.usedHeights.every((usedHeight) => usedHeight <= bodyHeight);
+    };
     const appendHtml = (html: string, height = measureHtml(html)) => {
       const page = nextPages[nextPages.length - 1];
+      page.footnotes = mergeFootnotes(page.footnotes, previewFootnotesFromHtml(html));
+      page.footnoteHeight = measureFootnotes(page.footnotes);
       page.columns[currentColumnIndex].push(html);
       currentHeight += height;
       page.usedHeights[currentColumnIndex] = currentHeight;
@@ -3380,14 +3456,13 @@ function Editor(props: {
       if (!item || text.length <= 1) return false;
       let textStart = 0;
       while (textStart < text.length) {
-        const availableHeight = columnContentHeight - currentHeight;
         let low = textStart + 1;
         let high = text.length;
         let bestTextEnd = textStart;
         while (low <= high) {
           const middle = Math.floor((low + high) / 2);
           const candidateHtml = listItemFragmentHtml(list, itemIndex, textStart, middle, textStart > 0, middle === text.length);
-          if (measureHtml(candidateHtml) <= availableHeight) {
+          if (measureHtml(candidateHtml) <= availableHeightForHtml(candidateHtml)) {
             bestTextEnd = middle;
             low = middle + 1;
           } else {
@@ -3418,7 +3493,6 @@ function Editor(props: {
       let starts = texts.map(() => 0);
 
       while (starts.some((start, index) => start < texts[index].length)) {
-        const availableHeight = columnContentHeight - currentHeight;
         let low = 1;
         let high = 1000;
         let bestEnds: number[] | null = null;
@@ -3429,7 +3503,7 @@ function Editor(props: {
             return remaining > 0 ? start + Math.max(1, Math.floor(remaining * fraction / 1000)) : start;
           });
           const candidateHtml = tableRowFragmentHtml(table, rowIndex, starts, candidateEnds, starts.some((start) => start > 0), candidateEnds.every((end, index) => end >= texts[index].length));
-          if (measureHtml(candidateHtml) <= availableHeight) {
+          if (measureHtml(candidateHtml) <= availableHeightForHtml(candidateHtml)) {
             bestEnds = candidateEnds;
             low = fraction + 1;
           } else {
@@ -3479,6 +3553,8 @@ function Editor(props: {
 
       const blockHtml = blockOuterHtml(child);
       const blockHeight = measureHtml(blockHtml);
+      const candidateBodyHeight = pageBodyHeightForHtml(blockHtml);
+      if (currentPageHasContent() && nextPages[nextPages.length - 1].usedHeights.some((usedHeight) => usedHeight > candidateBodyHeight)) openNextPage();
       if (child instanceof HTMLElement && child.dataset.keepNext === "true" && currentHeight > 0) {
         const nextBlock = sourceBlocks[childIndex + 1];
         const canKeepWithNext = nextBlock instanceof HTMLElement
@@ -3486,13 +3562,15 @@ function Editor(props: {
           && !nextBlock.dataset.sectionBreak
           && nextBlock.dataset.pageBreakBefore !== "true";
         if (canKeepWithNext) {
-          const nextHeight = measureHtml(blockOuterHtml(nextBlock));
+          const nextHtml = blockOuterHtml(nextBlock);
+          const nextHeight = measureHtml(nextHtml);
           const groupHeight = blockHeight + nextHeight;
-          if (groupHeight <= columnContentHeight && currentHeight + groupHeight > columnContentHeight) advanceFlowSlot();
+          const groupBodyHeight = pageBodyHeightForHtml(`${blockHtml}${nextHtml}`);
+          if (groupHeight <= groupBodyHeight && currentHeight + groupHeight > groupBodyHeight) advanceFlowSlot();
         }
       }
-      if (currentHeight + blockHeight > columnContentHeight) {
-        if (child instanceof HTMLElement && child.dataset.keepLines === "true" && blockHeight <= columnContentHeight) {
+      if (!candidateFitsCurrentPage(blockHtml, blockHeight)) {
+        if (child instanceof HTMLElement && child.dataset.keepLines === "true" && blockHeight <= pageBodyHeightForHtml(blockHtml)) {
           // 中文注解：段中不分页优先把完整段落移到下一页；只有单段本身超过整页时才允许兜底拆分。
           advanceFlowSlot();
           appendHtml(blockHtml, blockHeight);
@@ -3502,14 +3580,13 @@ function Editor(props: {
         if (itemCount > 1) {
           let start = 0;
           while (start < itemCount) {
-            const availableHeight = columnContentHeight - currentHeight;
             let low = start + 1;
             let high = itemCount;
             let bestEnd = start;
             while (low <= high) {
               const middle = Math.floor((low + high) / 2);
               const candidateHtml = structuredBlockFragmentHtml(child, start, middle, middle === itemCount);
-              if (measureHtml(candidateHtml) <= availableHeight) {
+              if (measureHtml(candidateHtml) <= availableHeightForHtml(candidateHtml)) {
                 bestEnd = middle;
                 low = middle + 1;
               } else {
@@ -3549,10 +3626,10 @@ function Editor(props: {
         if (isSplittableTextBlock && text.length > 1) {
           let start = 0;
           while (start < text.length) {
-            let availableHeight = columnContentHeight - currentHeight;
+            let availableHeight = availableHeightForHtml();
             if (availableHeight < 24 && currentHeight > 0) {
               advanceFlowSlot();
-              availableHeight = columnContentHeight;
+              availableHeight = availableHeightForHtml();
             }
 
             let low = start + 1;
@@ -3562,7 +3639,7 @@ function Editor(props: {
               const middle = Math.floor((low + high) / 2);
               const candidateHtml = textBlockFragmentHtml(splitChild, start, middle, start > 0, middle === text.length);
               const candidateHeight = measureHtml(candidateHtml);
-              if (candidateHeight <= availableHeight) {
+              if (candidateHeight <= availableHeightForHtml(candidateHtml)) {
                 bestEnd = middle;
                 low = middle + 1;
               } else {
@@ -4106,6 +4183,43 @@ function Editor(props: {
     setSelectionHint("已取消超链接。");
   };
 
+  const openFootnoteEditor = () => {
+    if (!editor) return;
+    const attributes = editor.getAttributes("footnoteReference");
+    setFootnoteText(editor.isActive("footnoteReference") ? String(attributes.footnoteText || "") : "");
+    setFootnoteEditorOpen(true);
+  };
+
+  const applyFootnote = () => {
+    if (!editor) return;
+    const text = footnoteText.replace(/\r\n?/g, "\n").trim().slice(0, 4000);
+    if (!text) {
+      setSelectionHint("请输入脚注内容。");
+      return;
+    }
+    if (editor.isActive("footnoteReference")) {
+      editor.chain().focus().updateAttributes("footnoteReference", { footnoteText: text }).run();
+      setSelectionHint("已更新脚注。");
+    } else {
+      let maxId = 0;
+      editor.state.doc.descendants((node) => {
+        if (node.type.name === "footnoteReference") maxId = Math.max(maxId, Number(node.attrs.footnoteId) || 0);
+      });
+      const footnoteId = Math.min(32767, maxId + 1);
+      // 中文注解：编号只作为稳定导出键，显示与 Word 脚注正文都由同一个原子节点驱动，避免正文编号和页底文本分离。
+      editor.chain().focus().insertContent({ type: "footnoteReference", attrs: { footnoteId, footnoteText: text } }).run();
+      setSelectionHint("已插入脚注。");
+    }
+    setFootnoteEditorOpen(false);
+  };
+
+  const removeFootnote = () => {
+    if (!editor?.isActive("footnoteReference")) return;
+    editor.chain().focus().deleteSelection().run();
+    setFootnoteEditorOpen(false);
+    setSelectionHint("已删除脚注。");
+  };
+
   const updateSelectedImageLayout = (mode: "inline" | "wrapLeft" | "wrapRight" | "topAndBottom") => {
     if (!editor?.isActive("image")) return;
     if (mode === "inline") {
@@ -4300,6 +4414,7 @@ function Editor(props: {
               <button aria-label="确认超链接" onClick={applyHyperlink} title="确认超链接"><Check size={16} /></button>
               <button aria-label="关闭超链接编辑" onClick={() => setLinkEditorOpen(false)} title="关闭"><X size={16} /></button>
             </div> : null}
+            <button aria-label="插入或编辑脚注" className={editor?.isActive("footnoteReference") ? "active-format" : ""} onClick={openFootnoteEditor} title="在当前位置插入脚注，或修改选中的脚注"><FileText size={16} />脚注</button>
             <button className={editor?.isActive("strike") ? "active-format" : ""} onClick={() => applyStrikeStyle(editor?.isActive("strike") ? "none" : "single", editor?.isActive("strike") ? "无删除线" : "单删除线")} title="删除线"><Strikethrough size={16} /></button>
             <FormatSelect title="设置或清除选中文字的删除线样式" placeholder="删除线样式" options={strikeStyleOptions} icon={<Strikethrough size={16} />} onSelect={applyStrikeStyle} />
             <button aria-label="黄色突出显示" className={editor?.isActive("textHighlight", { color: "yellow" }) ? "active-format" : ""} onClick={() => applyTextHighlight("yellow", "黄色突出显示")} title="黄色突出显示"><Highlighter size={16} /></button>
@@ -4411,6 +4526,14 @@ function Editor(props: {
             <button onClick={clearSelectionFormat} title="清除当前选区格式"><Eraser size={16} />清除格式</button>
             </> : null}
           </div>
+          {footnoteEditorOpen ? <div className="footnote-editor">
+            <textarea aria-label="脚注内容" autoFocus maxLength={4000} rows={3} value={footnoteText} onChange={(event) => setFootnoteText(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") applyFootnote(); if (event.key === "Escape") setFootnoteEditorOpen(false); }} />
+            <div className="footnote-editor-actions">
+              <button aria-label="确认脚注" onClick={applyFootnote} title="确认脚注"><Check size={16} /></button>
+              {editor?.isActive("footnoteReference") ? <button aria-label="删除脚注" onClick={removeFootnote} title="删除脚注"><Trash2 size={16} /></button> : null}
+              <button aria-label="关闭脚注编辑" onClick={() => setFootnoteEditorOpen(false)} title="关闭"><X size={16} /></button>
+            </div>
+          </div> : null}
           {props.aiLoading === "正在生成正文" || paginationPending ? <div className="paper-loading"><LoadingProcess label={paginationPending ? "正在计算分页" : props.aiLoading || "正在处理"} /></div> : null}
           <div className="editor-scroll" style={documentPreviewStyle(props.selectedTemplate)}>
             <div className={viewMode === "edit" ? "editor-source" : "editor-source is-hidden"}>
@@ -4423,7 +4546,7 @@ function Editor(props: {
               <div className="paged-preview" aria-label="分页预览">
                 {previewPages.map((page, index) => {
                   const pageVariant = pageVariantForPage(page.layout, index, page.sectionPageIndex);
-                  return <article className="page-sheet" data-section-index={page.sectionIndex} data-section-page-index={page.sectionPageIndex} style={pageGeometryStyle(page.layout, page.sectionPageIndex, page.usedHeight)} key={index}>
+                  return <article className="page-sheet" data-section-index={page.sectionIndex} data-section-page-index={page.sectionPageIndex} style={pageGeometryStyle(page.layout, page.sectionPageIndex, page.usedHeight, page.footnoteHeight)} key={index}>
                     {pageVariant.headerText || pageVariant.headerImages.length || pageVariant.headerPageNumberTemplate ? <div className="page-header multiline" style={pageTextCssStyle(pageVariant.headerStyle)}>
                       <PagePartContent text={pageVariant.headerText} images={pageVariant.headerImages} pageNumberTemplate={pageVariant.headerPageNumberTemplate} pageNumberSeparate={pageVariant.headerPageNumberSeparate} pageNumber={previewDisplayPageNumbers[index]} pageCount={previewPages.length} pageNumberFormat={page.layout.pageNumberFormat} />
                     </div> : null}
@@ -4435,6 +4558,9 @@ function Editor(props: {
                         ...(columnIndex < page.columns.length - 1 ? [<div className="page-column-separator" aria-hidden="true" style={{ gridColumn: columnIndex * 2 + 2 }} key={`separator-${index}-${columnIndex}`} />] : [])
                       ])}
                     </div>
+                    {page.footnotes.length ? <div className="page-footnotes" aria-label="本页脚注">
+                      {page.footnotes.map((footnote) => <div className="page-footnote" data-footnote-id={footnote.id} key={footnote.id}><span>{footnote.id}</span><p>{footnote.text.split("\n").map((line, lineIndex) => <React.Fragment key={lineIndex}>{lineIndex > 0 ? <br /> : null}{line}</React.Fragment>)}</p></div>)}
+                    </div> : null}
                     {pageVariant.footerText || pageVariant.footerImages.length || pageVariant.footerPageNumberTemplate ? <div className="page-footer multiline" style={pageTextCssStyle(pageVariant.footerStyle)}>
                       <PagePartContent text={pageVariant.footerText} images={pageVariant.footerImages} pageNumberTemplate={pageVariant.footerPageNumberTemplate} pageNumberSeparate={pageVariant.footerPageNumberSeparate} pageNumber={previewDisplayPageNumbers[index]} pageCount={previewPages.length} pageNumberFormat={page.layout.pageNumberFormat} />
                     </div> : null}

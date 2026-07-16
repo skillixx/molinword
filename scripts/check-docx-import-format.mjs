@@ -20,6 +20,7 @@ async function buildFormattedDocxFixture() {
   <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
   <Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
   <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
+  <Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>
 </Types>`
   );
   zip.folder("_rels").file(
@@ -37,8 +38,15 @@ async function buildFormattedDocxFixture() {
   <Relationship Id="rIdHeader1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>
   <Relationship Id="rIdFooter1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>
   <Relationship Id="rIdHyperlink1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://platform.openai.com/docs" TargetMode="External"/>
+  <Relationship Id="rIdFootnotes1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/>
 </Relationships>`
   );
+  zip.folder("word").file("footnotes.xml", `<?xml version="1.0" encoding="UTF-8"?>
+<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>
+  <w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>
+  <w:footnote w:id="2"><w:p><w:r><w:footnoteRef/><w:t xml:space="preserve"> Imported footnote detail</w:t></w:r></w:p></w:footnote>
+</w:footnotes>`);
   zip.folder("word").file("header1.xml", `<?xml version="1.0" encoding="UTF-8"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:eastAsia="Microsoft YaHei"/><w:sz w:val="24"/><w:color w:val="1F4E79"/><w:b/><w:i/></w:rPr><w:t>导入页眉</w:t></w:r></w:p></w:hdr>`);
   zip.folder("word").file("footer1.xml", `<?xml version="1.0" encoding="UTF-8"?><w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia="SimSun"/><w:sz w:val="21"/><w:color w:val="C00000"/></w:rPr><w:t>导入页脚 · 第 </w:t><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="end"/><w:t> 页 / 共 </w:t><w:fldChar w:fldCharType="begin"/><w:instrText>NUMPAGES</w:instrText><w:fldChar w:fldCharType="end"/><w:t> 页</w:t></w:r></w:p></w:ftr>`);
   zip.folder("word").folder("media").file("image1.png", tinyPngBase64, { base64: true });
@@ -156,6 +164,7 @@ async function buildFormattedDocxFixture() {
     <w:p><w:pPr><w:bidi/></w:pPr><w:r><w:t>RTL paragraph source</w:t></w:r></w:p>
     <w:p><w:r><w:t>inter</w:t><w:softHyphen/><w:t>national code</w:t><w:noBreakHyphen/><w:t>2026</w:t></w:r></w:p>
     <w:p><w:r><w:t>Manual line one</w:t><w:br/><w:t>Manual line two</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Footnote source</w:t><w:footnoteReference w:id="2"/></w:r></w:p>
     <w:p><w:pPr><w:shd w:val="clear" w:color="000000" w:fill="FFF2CC"/><w:pBdr><w:top w:val="single" w:sz="8" w:space="4" w:color="FF0000"/><w:right w:val="dashed" w:sz="6" w:space="3" w:color="00AA00"/><w:bottom w:val="double" w:sz="12" w:space="2" w:color="0000FF"/><w:left w:val="nil" w:sz="0" w:space="0" w:color="000000"/><w:between w:val="dotted" w:sz="4" w:space="1" w:color="888888"/></w:pBdr></w:pPr><w:r><w:t>Paragraph appearance</w:t></w:r></w:p>
     <w:p>
       <w:pPr><w:tabs><w:tab w:val="left" w:pos="1440"/><w:tab w:val="right" w:pos="5760"/></w:tabs></w:pPr>
@@ -513,6 +522,7 @@ const importedSpecialHyphenParagraph = (imported.content.match(/<p(?:\s[^>]*)?>[
 assert.equal(importedSpecialHyphenParagraph.replace(/<[^>]+>/g, ""), "inter\u00ADnational code\u20112026");
 const importedManualLineBreakParagraph = (imported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || []).find((paragraph) => paragraph.includes("Manual line one") && paragraph.includes("Manual line two")) || "";
 assert.match(importedManualLineBreakParagraph, /Manual line one[\s\S]*?<br\s*\/?\s*>[\s\S]*?Manual line two/);
+assert.match(imported.content, /Footnote source[\s\S]*?<span[^>]+class="footnote-reference"[^>]+data-footnote-id="2"[^>]+data-footnote-text="Imported footnote detail"[^>]*>2<\/span>/);
 const importedTabParagraph = (imported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || [])
   .find((paragraph) => paragraph.includes("Tab project") && paragraph.includes("100.00")) || "";
 assert.match(importedTabParagraph, /data-tab-stops="[^\"]*1440[^\"]*5760[^\"]*"/);
@@ -645,6 +655,7 @@ assert.match(roundTripColumnsXml, /<w:vAlign w:val="center"\/>/);
 const roundTripZip = await JSZip.loadAsync(roundTripBuffer);
 const roundTripXml = await roundTripZip.file("word/document.xml")?.async("string") || "";
 const roundTripNumberingXml = await roundTripZip.file("word/numbering.xml")?.async("string") || "";
+const roundTripFootnotesXml = await roundTripZip.file("word/footnotes.xml")?.async("string") || "";
 const decoratedRoundTripXml = (roundTripXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || [])
   .find((run) => run.includes(">斜体下划线删除线文本</w:t>")) || "";
 assert.match(decoratedRoundTripXml, /<w:i\/>/);
@@ -690,6 +701,8 @@ assert.match(specialHyphenRoundTripXml, /inter[\s\S]*?<w:softHyphen\/>[\s\S]*?na
 const manualLineBreakRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Manual line one") && paragraph.includes("Manual line two")) || "";
 // 中文注解：导入的手动换行需在再次导出时继续保持同一段落内的 w:br。
 assert.match(manualLineBreakRoundTripXml, /Manual line one[\s\S]*?<w:br\/>[\s\S]*?Manual line two/);
+assert.match(roundTripXml, /Footnote source[\s\S]*?<w:footnoteReference w:id="2"\/>/);
+assert.match(roundTripFootnotesXml, /<w:footnote w:id="2">[\s\S]*Imported footnote detail[\s\S]*<\/w:footnote>/);
 const customOutlineRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Custom outline level 4")) || "";
 const directOutlineRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Direct outline level 8")) || "";
 assert.match(customOutlineRoundTripXml, /<w:outlineLvl w:val="3"\/>/);
@@ -760,6 +773,7 @@ assert.equal(roundTripSpecialHyphenParagraph.replace(/<[^>]+>/g, ""), "inter\u00
 assert.match(roundTripImported.content, /<span[^>]+data-double-strike="true"[^>]+style="[^"]*text-decoration-line:\s*line-through[^"]*text-decoration-style:\s*double[^"]*"[^>]*>Double strike source<\/span>/);
 const roundTripManualLineBreakParagraph = (roundTripImported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || []).find((paragraph) => paragraph.includes("Manual line one") && paragraph.includes("Manual line two")) || "";
 assert.match(roundTripManualLineBreakParagraph, /Manual line one[\s\S]*?<br\s*\/?\s*>[\s\S]*?Manual line two/);
+assert.match(roundTripImported.content, /Footnote source[\s\S]*?data-footnote-id="2"[^>]+data-footnote-text="Imported footnote detail"/);
 assert.match(roundTripImported.content, /<h4[^>]+data-outline-level="3"[^>]*>[\s\S]*?Custom outline level 4/);
 assert.match(roundTripImported.content, /<p[^>]+data-outline-level="7"[^>]*>[\s\S]*?Direct outline level 8/);
 assert.match(roundTripImported.content, /分栏符前[\s\S]*?<\/p><div data-column-break="true" class="column-break-marker"><\/div><p[^>]*>[\s\S]*?分栏符后/);
