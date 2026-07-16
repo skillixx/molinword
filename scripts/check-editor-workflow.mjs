@@ -454,6 +454,10 @@ try {
   await page.getByLabel("当前节页脚距纸边", { exact: true }).fill("1.48");
   await page.getByLabel("当前节分栏数", { exact: true }).selectOption("2");
   await page.getByLabel("当前节栏间距", { exact: true }).fill("0.8");
+  await page.getByLabel("当前节分栏布局", { exact: true }).selectOption("custom");
+  await page.getByLabel("当前节第1栏宽度", { exact: true }).fill("5.29");
+  await page.getByLabel("当前节第1栏后间距", { exact: true }).fill("0.8");
+  await page.getByLabel("当前节第2栏宽度", { exact: true }).fill("18.53");
   await page.getByLabel("当前节分栏分隔线", { exact: true }).check();
   await page.getByLabel("当前节页面垂直对齐", { exact: true }).selectOption("center");
   await page.getByLabel("当前节页面边框样式", { exact: true }).selectOption("double");
@@ -518,7 +522,13 @@ try {
   assert.equal(storedSectionLayout.footerDistance, 839);
   assert.equal(storedSectionLayout.pageNumberFormat, "upperRoman");
   assert.equal(storedSectionLayout.pageNumberStart, 3);
-  assert.deepEqual(storedSectionLayout.columns, { count: 2, space: 454, separate: true });
+  assert.deepEqual(storedSectionLayout.columns, {
+    count: 2,
+    space: 454,
+    separate: true,
+    equalWidth: false,
+    items: [{ width: 2999, space: 454 }, { width: 10505, space: 0 }]
+  });
   assert.equal(storedSectionLayout.verticalAlign, "center");
   assert.deepEqual(storedSectionLayout.pageBorders, {
     display: "firstPage",
@@ -610,7 +620,8 @@ try {
   assert.match(documentXml, /<w:pgMar[^>]+w:header="482"[^>]+w:footer="839"/);
   assert.match(documentXml, /<w:pgNumType[^>]+w:start="3"[^>]*w:fmt="upperRoman"/);
   const exportedLandscapeSection = (documentXml.match(/<w:sectPr>[\s\S]*?<\/w:sectPr>/g) || []).find((section) => /w:orient="landscape"/.test(section)) || "";
-  assert.match(exportedLandscapeSection, /<w:cols[^>]+w:space="454"[^>]+w:num="2"[^>]+w:sep="true"[^>]+w:equalWidth="true"/);
+  assert.match(exportedLandscapeSection, /<w:cols[^>]+w:num="2"[^>]+w:sep="true"[^>]+w:equalWidth="false"/);
+  assert.match(exportedLandscapeSection, /<w:col w:w="2999" w:space="454"\/><w:col w:w="10505"\/>/);
   assert.match(exportedLandscapeSection, /<w:pgBorders[^>]+w:display="firstPage"[^>]+w:offsetFrom="page"[^>]+w:zOrder="front"/);
   assert.match(exportedLandscapeSection, /<w:top w:val="double" w:color="1F4E79" w:sz="12" w:space="24"\/>/);
   assert.match(exportedLandscapeSection, /<w:vAlign w:val="center"\/>/);
@@ -699,7 +710,10 @@ try {
   await page.waitForFunction(() => document.querySelectorAll(".page-sheet").length > 5);
   const previewLink = page.locator('.page-body a[href="https://example.com/office"]').first();
   await previewLink.waitFor();
-  assert.equal(await previewLink.evaluate((link) => getComputedStyle(link).textDecorationLine), "underline");
+  assert.match(await previewLink.evaluate((link) => {
+    const style = getComputedStyle(link);
+    return `${style.textDecorationLine} ${style.textDecoration}`;
+  }), /underline/);
   const previewFloatingImage = page.locator('.page-body img[alt="浮动审批标识"]').first();
   await previewFloatingImage.waitFor();
   assert.equal(await previewFloatingImage.evaluate((image) => getComputedStyle(image).float), "left");
@@ -726,16 +740,21 @@ try {
       pageCount: pages.length,
       overflowPages: pages.map((page, index) => {
         const body = page.querySelector(".page-body");
-        const availableHeight = Number.parseFloat(getComputedStyle(page).getPropertyValue("--page-content-height"));
-        return body && body.scrollHeight > availableHeight + 1 ? index + 1 : null;
+        const overflowingColumn = Array.from(body?.querySelectorAll(".page-column") || []).some((column) => column.scrollHeight > column.clientHeight + 1);
+        return overflowingColumn ? index + 1 : null;
       }).filter(Boolean),
       sectionIndexes: pages.map((page) => Number(page.getAttribute("data-section-index") || 0)),
       pageSizes: pages.map((page) => ({ width: Math.round(page.getBoundingClientRect().width), height: Math.round(page.getBoundingClientRect().height) })),
       secondSectionColumns: (() => {
         const page = pages.find((item) => item.getAttribute("data-section-index") === "1");
         const body = page?.querySelector(".page-body");
-        const style = body ? getComputedStyle(body) : null;
-        return style ? { count: style.columnCount, gap: Number.parseFloat(style.columnGap), ruleStyle: style.columnRuleStyle } : null;
+        const columns = Array.from(body?.querySelectorAll(".page-column") || []);
+        const separator = body?.querySelector(".page-column-separator");
+        return body ? {
+          widths: columns.map((column) => Math.round(column.getBoundingClientRect().width * 100) / 100),
+          separatorStyle: separator ? getComputedStyle(separator).borderLeftStyle : "none",
+          separatorLeft: separator ? Math.round(separator.getBoundingClientRect().left * 100) / 100 : 0
+        } : null;
       })(),
       secondSectionPageFrame: (() => {
         const page = pages.find((item) => item.getAttribute("data-section-index") === "1");
@@ -800,7 +819,7 @@ try {
         } : null;
       })(),
       paginationControlStartsPage: Array.from(document.querySelectorAll(".page-sheet")).some((page) => {
-        const blocks = Array.from(page.querySelectorAll(":scope > .page-body > .page-block"));
+        const blocks = Array.from(page.querySelectorAll(":scope > .page-body > .page-column > .page-block"));
         return blocks[0]?.textContent?.includes("分页控制段落") && !page.textContent?.includes("分页控制前置段落");
       }),
       paginationControlKeepsNext: Array.from(document.querySelectorAll(".page-sheet")).some((page) => page.textContent?.includes("分页控制段落") && page.textContent?.includes("分页控制后续段落")),
@@ -878,9 +897,10 @@ try {
   const secondSectionFirstPage = result.sectionIndexes.indexOf(1);
   assert.ok(secondSectionFirstPage > 0);
   assert.deepEqual(result.pageSizes[secondSectionFirstPage], { width: 1123, height: 794 });
-  assert.equal(result.secondSectionColumns?.count, "2");
-  assert.ok(Math.abs((result.secondSectionColumns?.gap || 0) - 30.27) < 0.1);
-  assert.equal(result.secondSectionColumns?.ruleStyle, "solid");
+  assert.equal(result.secondSectionColumns?.widths.length, 2);
+  assert.ok(Math.abs((result.secondSectionColumns?.widths[0] || 0) - 199.93) < 0.2);
+  assert.ok(Math.abs((result.secondSectionColumns?.widths[1] || 0) - 700.33) < 0.2);
+  assert.equal(result.secondSectionColumns?.separatorStyle, "solid");
   assert.deepEqual({
     borderStyle: result.secondSectionPageFrame?.borderStyle,
     borderWidth: result.secondSectionPageFrame?.borderWidth,

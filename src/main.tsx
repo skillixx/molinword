@@ -198,7 +198,8 @@ type DocumentPageVariant = {
   pageNumberPosition: "header" | "footer";
 };
 type DocumentPageMargins = { top: number; right: number; bottom: number; left: number };
-type DocumentPageColumns = { count: number; space: number; separate: boolean };
+type DocumentPageColumn = { width: number; space: number };
+type DocumentPageColumns = { count: number; space: number; separate: boolean; equalWidth?: false; items?: DocumentPageColumn[] };
 type DocumentPageBorderSide = { style: string; size: number; color: string; space: number };
 type DocumentPageBorders = {
   display: "allPages" | "firstPage" | "notFirstPage";
@@ -378,8 +379,31 @@ function normalizeDocumentPageLayout(value: Partial<DocumentPageLayout> | null |
   [margins.left, margins.right] = fitPair(margins.left, margins.right, pageWidth - 720);
   [margins.top, margins.bottom] = fitPair(margins.top, margins.bottom, pageHeight - 720);
   const availableWidth = Math.max(720, pageWidth - margins.left - margins.right);
-  const maximumColumnSpace = columnCount > 1 ? Math.max(0, Math.floor((availableWidth - columnCount * 720) / (columnCount - 1))) : columnSpace;
-  const columns = { count: columnCount, space: Math.min(columnSpace, maximumColumnSpace), separate: columnCount > 1 && Boolean(value?.columns?.separate) };
+  const rawColumnItems = Array.isArray(value?.columns?.items) ? value.columns.items : [];
+  let columns: DocumentPageColumns;
+  if (columnCount > 1 && value?.columns?.equalWidth === false && rawColumnItems.length >= columnCount) {
+    const items = rawColumnItems.slice(0, columnCount).map((item, index) => ({
+      width: Math.max(1, Math.min(20000, Math.round(Number(item?.width) || 1))),
+      space: index === columnCount - 1 ? 0 : Math.max(0, Math.min(7200, Math.round(Number(item?.space) || 0)))
+    }));
+    const gapTotal = items.slice(0, -1).reduce((total, item) => total + item.space, 0);
+    const maximumGapTotal = Math.max(0, availableWidth - columnCount * 360);
+    if (gapTotal > maximumGapTotal && gapTotal > 0) {
+      const gapScale = maximumGapTotal / gapTotal;
+      items.forEach((item, index) => { item.space = index === columnCount - 1 ? 0 : Math.round(item.space * gapScale); });
+    }
+    const normalizedGapTotal = items.slice(0, -1).reduce((total, item) => total + item.space, 0);
+    const widthBudget = Math.max(columnCount, availableWidth - normalizedGapTotal);
+    const widthTotal = items.reduce((total, item) => total + item.width, 0);
+    if (widthTotal > widthBudget) {
+      const widthScale = widthBudget / widthTotal;
+      items.forEach((item) => { item.width = Math.max(1, Math.round(item.width * widthScale)); });
+    }
+    columns = { count: columnCount, space: items[0]?.space || 0, separate: Boolean(value?.columns?.separate), equalWidth: false, items };
+  } else {
+    const maximumColumnSpace = columnCount > 1 ? Math.max(0, Math.floor((availableWidth - columnCount * 720) / (columnCount - 1))) : columnSpace;
+    columns = { count: columnCount, space: Math.min(columnSpace, maximumColumnSpace), separate: columnCount > 1 && Boolean(value?.columns?.separate) };
+  }
   const verticalAlignValues: DocumentPageLayout["verticalAlign"][] = ["top", "center", "bottom", "both"];
   return {
     ...normalizeDocumentPageVariant(value),
@@ -558,7 +582,7 @@ const docxPagePreview = {
   heightPx: 1123,
   twipToPx: 96 / 1440
 };
-type PreviewPage = { blocks: string[]; sectionIndex: number; sectionPageIndex: number; layout: DocumentPageLayout; usedHeight: number };
+type PreviewPage = { columns: string[][]; sectionIndex: number; sectionPageIndex: number; layout: DocumentPageLayout; usedHeight: number; usedHeights: number[] };
 
 function pageGeometry(layout: DocumentPageLayout) {
   const landscape = layout.orientation === "landscape";
@@ -572,17 +596,34 @@ function pageGeometry(layout: DocumentPageLayout) {
   };
   const contentWidthPx = Math.max(96, widthPx - margins.left - margins.right);
   const columnCount = Math.max(1, layout.columns.count);
-  const columnGapPx = layout.columns.space * docxPagePreview.twipToPx;
+  const customColumns = layout.columns.equalWidth === false && Array.isArray(layout.columns.items) && layout.columns.items.length >= columnCount;
+  const equalColumnGapPx = layout.columns.space * docxPagePreview.twipToPx;
+  const equalColumnWidthPx = Math.max(48, (contentWidthPx - equalColumnGapPx * (columnCount - 1)) / columnCount);
+  const columnWidthsPx = customColumns
+    ? layout.columns.items!.slice(0, columnCount).map((item) => item.width * docxPagePreview.twipToPx)
+    : Array.from({ length: columnCount }, () => equalColumnWidthPx);
+  const columnGapsPx = customColumns
+    ? layout.columns.items!.slice(0, -1).map((item) => item.space * docxPagePreview.twipToPx)
+    : Array.from({ length: Math.max(0, columnCount - 1) }, () => equalColumnGapPx);
+  const columnTemplate = columnWidthsPx.flatMap((width, index) => index < columnGapsPx.length ? [`${width}px`, `${columnGapsPx[index]}px`] : [`${width}px`]).join(" ");
   return {
     widthPx,
     heightPx,
     margins,
     contentWidthPx,
     columnCount,
-    columnGapPx,
-    columnWidthPx: Math.max(48, (contentWidthPx - columnGapPx * (columnCount - 1)) / columnCount),
+    columnGapPx: equalColumnGapPx,
+    columnWidthPx: columnWidthsPx[0] || contentWidthPx,
+    columnWidthsPx,
+    columnGapsPx,
+    columnTemplate,
     contentHeightPx: Math.max(96, heightPx - margins.top - margins.bottom)
   };
+}
+
+function createPreviewPage(layout: DocumentPageLayout, sectionIndex: number, sectionPageIndex: number): PreviewPage {
+  const count = pageGeometry(layout).columnCount;
+  return { columns: Array.from({ length: count }, () => []), sectionIndex, sectionPageIndex, layout, usedHeight: 0, usedHeights: Array.from({ length: count }, () => 0) };
 }
 
 function pageBorderCss(border: DocumentPageBorderSide | undefined) {
@@ -616,6 +657,7 @@ function pageGeometryStyle(layout: DocumentPageLayout, sectionPageIndex = 0, use
     "--page-content-height": `${geometry.contentHeightPx}px`,
     "--page-column-count": String(geometry.columnCount),
     "--page-column-gap": `${geometry.columnGapPx}px`,
+    "--page-column-template": geometry.columnTemplate,
     "--page-column-rule": layout.columns.separate && geometry.columnCount > 1 ? "1px solid #87929d" : "none",
     "--page-content-padding-top": `${Math.round(verticalOffset * 100) / 100}px`,
     "--page-border-top": showPageBorder ? pageBorderCss(pageBorders?.top) : "none",
@@ -634,9 +676,31 @@ function twipToCentimeter(value: number) {
   return Math.round((value * 2.54 / 1440) * 100) / 100;
 }
 
+function createCustomPageColumns(layout: DocumentPageLayout, count = layout.columns.count): DocumentPageColumns {
+  const normalizedCount = Math.max(2, Math.min(8, Math.round(count)));
+  const pageWidth = layout.orientation === "landscape" ? a4PageTwip.height : a4PageTwip.width;
+  const availableWidth = Math.max(720, pageWidth - layout.margins.left - layout.margins.right);
+  const gap = Math.min(layout.columns.space, Math.max(0, Math.floor((availableWidth - normalizedCount * 360) / (normalizedCount - 1))));
+  const width = Math.max(1, Math.floor((availableWidth - gap * (normalizedCount - 1)) / normalizedCount));
+  // 中文注解：切换到自定义分栏时从当前等宽结果起步，用户再逐栏微调，避免版式突然跳变。
+  return {
+    count: normalizedCount,
+    space: gap,
+    separate: layout.columns.separate,
+    equalWidth: false,
+    items: Array.from({ length: normalizedCount }, (_, index) => ({ width, space: index === normalizedCount - 1 ? 0 : gap }))
+  };
+}
+
 function centimeterToTwip(value: string, fallback: number) {
   const centimeters = Number(value);
   return Number.isFinite(centimeters) ? Math.max(0, Math.min(Math.round(centimeters / 2.54 * 1440), 7200)) : fallback;
+}
+
+function columnWidthCentimeterToTwip(value: string, fallback: number) {
+  const centimeters = Number(value);
+  // 中文注解：横向 A4 的单栏可能超过 12.7 厘米，栏宽不能复用页边距的 7200 twip 上限。
+  return Number.isFinite(centimeters) ? Math.max(1, Math.min(Math.round(centimeters / 2.54 * 1440), 20000)) : fallback;
 }
 const textColorOptions = [
   { label: "黑", value: "#17212B" },
@@ -2803,7 +2867,12 @@ function Editor(props: {
   const [hasSelection, setHasSelection] = React.useState(false);
   const [manualSavePending, setManualSavePending] = React.useState(false);
   const [viewMode, setViewMode] = React.useState<EditorViewMode>("edit");
-  const [previewPages, setPreviewPages] = React.useState<PreviewPage[]>([{ blocks: [buildExportPreviewHtml(props.currentTitle, props.content)], sectionIndex: 0, sectionPageIndex: 0, layout: normalizeDocumentPageLayout(props.pageLayout), usedHeight: 0 }]);
+  const [previewPages, setPreviewPages] = React.useState<PreviewPage[]>(() => {
+    const layout = normalizeDocumentPageLayout(props.pageLayout);
+    const page = createPreviewPage(layout, 0, 0);
+    page.columns[0].push(buildExportPreviewHtml(props.currentTitle, props.content));
+    return [page];
+  });
   const [activeSectionIndex, setActiveSectionIndex] = React.useState(0);
   const [activeSectionLayout, setActiveSectionLayout] = React.useState<DocumentPageLayout>(() => normalizeDocumentPageLayout(props.pageLayout));
   const [sectionCount, setSectionCount] = React.useState(1);
@@ -2918,18 +2987,29 @@ function Editor(props: {
       return;
     }
     const sourceBlocks = Array.from(measureElement.children).map((child) => child.cloneNode(true) as HTMLElement);
-    let pageContentHeight = currentGeometry.contentHeightPx * currentGeometry.columnCount;
+    let columnContentHeight = currentGeometry.contentHeightPx;
     let currentSectionIndex = 0;
     let currentSectionPageIndex = 0;
-    const nextPages: PreviewPage[] = [{ blocks: [], sectionIndex: 0, sectionPageIndex: 0, layout: currentLayout, usedHeight: 0 }];
+    const nextPages: PreviewPage[] = [createPreviewPage(currentLayout, 0, 0)];
+    let currentColumnIndex = 0;
     let currentHeight = 0;
 
+    const currentPageHasContent = () => nextPages[nextPages.length - 1].columns.some((column) => column.length > 0);
     const openNextPage = (preserveBlankPage = false) => {
-      if (preserveBlankPage || nextPages[nextPages.length - 1].blocks.length) {
+      if (preserveBlankPage || currentPageHasContent()) {
         currentSectionPageIndex += 1;
-        nextPages.push({ blocks: [], sectionIndex: currentSectionIndex, sectionPageIndex: currentSectionPageIndex, layout: currentLayout, usedHeight: 0 });
+        nextPages.push(createPreviewPage(currentLayout, currentSectionIndex, currentSectionPageIndex));
       }
+      currentColumnIndex = 0;
       currentHeight = 0;
+    };
+    const advanceFlowSlot = () => {
+      if (currentColumnIndex < currentGeometry.columnCount - 1) {
+        currentColumnIndex += 1;
+        currentHeight = 0;
+      } else {
+        openNextPage();
+      }
     };
     const openNextSection = (layoutValue: string, breakTypeValue: string) => {
       const breakType = normalizeSectionBreakType(breakTypeValue);
@@ -2940,20 +3020,21 @@ function Editor(props: {
       }
       currentLayout = parseSectionPageLayout(layoutValue, currentLayout);
       currentGeometry = pageGeometry(currentLayout);
-      pageContentHeight = currentGeometry.contentHeightPx * currentGeometry.columnCount;
+      columnContentHeight = currentGeometry.contentHeightPx;
       currentSectionIndex += 1;
       currentSectionPageIndex = 0;
-      nextPages.push({ blocks: [], sectionIndex: currentSectionIndex, sectionPageIndex: 0, layout: currentLayout, usedHeight: 0 });
+      nextPages.push(createPreviewPage(currentLayout, currentSectionIndex, 0));
+      currentColumnIndex = 0;
       currentHeight = 0;
     };
     const measureHtml = (html: string) => {
-      measureElement.style.width = `${currentGeometry.columnWidthPx}px`;
+      measureElement.style.width = `${currentGeometry.columnWidthsPx[currentColumnIndex] || currentGeometry.columnWidthPx}px`;
       measureElement.innerHTML = html;
       layoutDocxTabs(measureElement);
       return measuredBlockHeight(measureElement.firstElementChild);
     };
     const measureTextLineCount = (html: string) => {
-      measureElement.style.width = `${currentGeometry.columnWidthPx}px`;
+      measureElement.style.width = `${currentGeometry.columnWidthsPx[currentColumnIndex] || currentGeometry.columnWidthPx}px`;
       measureElement.innerHTML = html;
       layoutDocxTabs(measureElement);
       const element = measureElement.firstElementChild;
@@ -2968,9 +3049,11 @@ function Editor(props: {
       return lineTops.length;
     };
     const appendHtml = (html: string, height = measureHtml(html)) => {
-      nextPages[nextPages.length - 1].blocks.push(html);
+      const page = nextPages[nextPages.length - 1];
+      page.columns[currentColumnIndex].push(html);
       currentHeight += height;
-      nextPages[nextPages.length - 1].usedHeight = currentHeight;
+      page.usedHeights[currentColumnIndex] = currentHeight;
+      page.usedHeight = Math.max(...page.usedHeights);
     };
     const appendOversizedListItem = (list: HTMLElement, itemIndex: number) => {
       const item = Array.from(list.children).filter((child) => child.matches("li"))[itemIndex];
@@ -2978,7 +3061,7 @@ function Editor(props: {
       if (!item || text.length <= 1) return false;
       let textStart = 0;
       while (textStart < text.length) {
-        const availableHeight = pageContentHeight - currentHeight;
+        const availableHeight = columnContentHeight - currentHeight;
         let low = textStart + 1;
         let high = text.length;
         let bestTextEnd = textStart;
@@ -3000,7 +3083,7 @@ function Editor(props: {
         const fragmentHtml = listItemFragmentHtml(list, itemIndex, textStart, bestTextEnd, textStart > 0, bestTextEnd === text.length);
         appendHtml(fragmentHtml);
         textStart = bestTextEnd;
-        if (textStart < text.length) openNextPage();
+        if (textStart < text.length) advanceFlowSlot();
       }
       return true;
     };
@@ -3016,7 +3099,7 @@ function Editor(props: {
       let starts = texts.map(() => 0);
 
       while (starts.some((start, index) => start < texts[index].length)) {
-        const availableHeight = pageContentHeight - currentHeight;
+        const availableHeight = columnContentHeight - currentHeight;
         let low = 1;
         let high = 1000;
         let bestEnds: number[] | null = null;
@@ -3043,7 +3126,7 @@ function Editor(props: {
         const fragmentHtml = tableRowFragmentHtml(table, rowIndex, starts, bestEnds, starts.some((start) => start > 0), isFinal);
         appendHtml(fragmentHtml);
         starts = bestEnds;
-        if (!isFinal) openNextPage();
+        if (!isFinal) advanceFlowSlot();
       }
       return true;
     };
@@ -3060,7 +3143,7 @@ function Editor(props: {
         return;
       }
 
-      if (child instanceof HTMLElement && child.dataset.pageBreakBefore === "true" && currentHeight > 0) {
+      if (child instanceof HTMLElement && child.dataset.pageBreakBefore === "true" && currentPageHasContent()) {
         // 中文注解：段前分页只在当前页已有内容时换页，避免段落本来就在页首时额外制造空白页。
         openNextPage();
       }
@@ -3076,13 +3159,13 @@ function Editor(props: {
         if (canKeepWithNext) {
           const nextHeight = measureHtml(blockOuterHtml(nextBlock));
           const groupHeight = blockHeight + nextHeight;
-          if (groupHeight <= pageContentHeight && currentHeight + groupHeight > pageContentHeight) openNextPage();
+          if (groupHeight <= columnContentHeight && currentHeight + groupHeight > columnContentHeight) advanceFlowSlot();
         }
       }
-      if (currentHeight + blockHeight > pageContentHeight) {
-        if (child instanceof HTMLElement && child.dataset.keepLines === "true" && blockHeight <= pageContentHeight) {
+      if (currentHeight + blockHeight > columnContentHeight) {
+        if (child instanceof HTMLElement && child.dataset.keepLines === "true" && blockHeight <= columnContentHeight) {
           // 中文注解：段中不分页优先把完整段落移到下一页；只有单段本身超过整页时才允许兜底拆分。
-          openNextPage();
+          advanceFlowSlot();
           appendHtml(blockHtml, blockHeight);
           return;
         }
@@ -3090,7 +3173,7 @@ function Editor(props: {
         if (itemCount > 1) {
           let start = 0;
           while (start < itemCount) {
-            const availableHeight = pageContentHeight - currentHeight;
+            const availableHeight = columnContentHeight - currentHeight;
             let low = start + 1;
             let high = itemCount;
             let bestEnd = start;
@@ -3107,16 +3190,16 @@ function Editor(props: {
             if (bestEnd === start) {
               if (child.matches("ol, ul") && appendOversizedListItem(child, start)) {
                 start += 1;
-                if (start < itemCount) openNextPage();
+                if (start < itemCount) advanceFlowSlot();
                 continue;
               }
               if (child.matches("table") && appendOversizedTableRow(child, start)) {
                 start += 1;
-                if (start < itemCount) openNextPage();
+                if (start < itemCount) advanceFlowSlot();
                 continue;
               }
               if (currentHeight > 0) {
-                openNextPage();
+                advanceFlowSlot();
                 continue;
               }
               bestEnd = start + 1;
@@ -3124,7 +3207,7 @@ function Editor(props: {
             const fragmentHtml = structuredBlockFragmentHtml(child, start, bestEnd, bestEnd === itemCount);
             appendHtml(fragmentHtml);
             start = bestEnd;
-            if (start < itemCount) openNextPage();
+            if (start < itemCount) advanceFlowSlot();
           }
           return;
         }
@@ -3137,10 +3220,10 @@ function Editor(props: {
         if (isSplittableTextBlock && text.length > 1) {
           let start = 0;
           while (start < text.length) {
-            let availableHeight = pageContentHeight - currentHeight;
+            let availableHeight = columnContentHeight - currentHeight;
             if (availableHeight < 24 && currentHeight > 0) {
-              openNextPage();
-              availableHeight = pageContentHeight;
+              advanceFlowSlot();
+              availableHeight = columnContentHeight;
             }
 
             let low = start + 1;
@@ -3160,7 +3243,7 @@ function Editor(props: {
 
             if (bestEnd === start) {
               if (currentHeight > 0) {
-                openNextPage();
+                advanceFlowSlot();
                 continue;
               }
               bestEnd = Math.min(start + 1, text.length);
@@ -3186,18 +3269,18 @@ function Editor(props: {
               const currentFragmentHtml = textBlockFragmentHtml(splitChild, start, bestEnd, start > 0, false);
               if (measureTextLineCount(currentFragmentHtml) < 2 && currentHeight > 0) {
                 // 中文注解：页尾空间只能容纳一行时，把整个段落片段移到下一页，避免孤立首行。
-                openNextPage();
+                advanceFlowSlot();
                 continue;
               }
             }
             const fragmentHtml = textBlockFragmentHtml(splitChild, start, bestEnd, start > 0, bestEnd === text.length);
             appendHtml(fragmentHtml);
             start = bestEnd;
-            if (start < text.length) openNextPage();
+            if (start < text.length) advanceFlowSlot();
           }
           return;
         }
-        openNextPage();
+        advanceFlowSlot();
       }
       appendHtml(blockHtml, blockHeight);
     });
@@ -3649,9 +3732,21 @@ function Editor(props: {
                     <label>页脚距纸边（厘米）<input type="number" aria-label="当前节页脚距纸边" min="0" max="12.7" step="0.1" value={twipToCentimeter(activeSectionLayout.footerDistance)} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, footerDistance: centimeterToTwip(event.target.value, current.footerDistance) }))} /></label>
                   </div>
                   <div className="page-margin-grid">
-                    <label>分栏<select aria-label="当前节分栏数" value={activeSectionLayout.columns.count} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, columns: { ...current.columns, count: Number(event.target.value) } }))}>{Array.from({ length: 8 }, (_, index) => <option key={index + 1} value={index + 1}>{index + 1} 栏</option>)}</select></label>
-                    <label>栏间距（厘米）<input type="number" aria-label="当前节栏间距" min="0" max="12.7" step="0.1" value={twipToCentimeter(activeSectionLayout.columns.space)} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, columns: { ...current.columns, space: centimeterToTwip(event.target.value, current.columns.space) } }))} /></label>
+                    <label>分栏<select aria-label="当前节分栏数" value={activeSectionLayout.columns.count} onChange={(event) => updateCurrentSectionLayout((current) => {
+                      const count = Number(event.target.value);
+                      return { ...current, columns: current.columns.equalWidth === false && count > 1 ? createCustomPageColumns(current, count) : { count, space: current.columns.space, separate: current.columns.separate } };
+                    })}>{Array.from({ length: 8 }, (_, index) => <option key={index + 1} value={index + 1}>{index + 1} 栏</option>)}</select></label>
+                    <label>栏宽方式<select aria-label="当前节分栏布局" disabled={activeSectionLayout.columns.count <= 1} value={activeSectionLayout.columns.equalWidth === false ? "custom" : "equal"} onChange={(event) => updateCurrentSectionLayout((current) => ({
+                      ...current,
+                      columns: event.target.value === "custom" ? createCustomPageColumns(current) : { count: current.columns.count, space: current.columns.space, separate: current.columns.separate }
+                    }))}><option value="equal">等宽</option><option value="custom">自定义</option></select></label>
                   </div>
+                  {activeSectionLayout.columns.equalWidth === false && activeSectionLayout.columns.items ? <div className="custom-column-grid">
+                    {activeSectionLayout.columns.items.map((item, index) => <React.Fragment key={index}>
+                      <label>第 {index + 1} 栏宽度（厘米）<input type="number" aria-label={`当前节第${index + 1}栏宽度`} min="0.1" max="30" step="0.1" value={twipToCentimeter(item.width)} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, columns: { ...current.columns, items: current.columns.items?.map((column, columnIndex) => columnIndex === index ? { ...column, width: columnWidthCentimeterToTwip(event.target.value, column.width) } : column) } }))} /></label>
+                      {index < activeSectionLayout.columns.count - 1 ? <label>第 {index + 1} 栏后间距（厘米）<input type="number" aria-label={`当前节第${index + 1}栏后间距`} min="0" max="12.7" step="0.1" value={twipToCentimeter(item.space)} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, columns: { ...current.columns, items: current.columns.items?.map((column, columnIndex) => columnIndex === index ? { ...column, space: centimeterToTwip(event.target.value, column.space) } : column) } }))} /></label> : <span />}
+                    </React.Fragment>)}
+                  </div> : <label>栏间距（厘米）<input type="number" aria-label="当前节栏间距" min="0" max="12.7" step="0.1" value={twipToCentimeter(activeSectionLayout.columns.space)} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, columns: { ...current.columns, space: centimeterToTwip(event.target.value, current.columns.space) } }))} /></label>}
                   <label className="page-number-toggle"><input type="checkbox" aria-label="当前节分栏分隔线" checked={activeSectionLayout.columns.separate} disabled={activeSectionLayout.columns.count <= 1} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, columns: { ...current.columns, separate: event.target.checked } }))} />分隔线</label>
                   <div className="page-margin-grid">
                     <label>页面垂直对齐<select aria-label="当前节页面垂直对齐" value={activeSectionLayout.verticalAlign} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, verticalAlign: event.target.value as DocumentPageLayout["verticalAlign"] }))}><option value="top">顶端</option><option value="center">居中</option><option value="bottom">底端</option><option value="both" disabled={activeSectionLayout.columns.count > 1}>两端对齐</option></select></label>
@@ -3805,7 +3900,12 @@ function Editor(props: {
                       <PagePartContent text={pageVariant.headerText} images={pageVariant.headerImages} pageNumberTemplate={pageVariant.headerPageNumberTemplate} pageNumberSeparate={pageVariant.headerPageNumberSeparate} pageNumber={previewDisplayPageNumbers[index]} pageCount={previewPages.length} pageNumberFormat={page.layout.pageNumberFormat} />
                     </div> : null}
                     <div className={`page-body${page.layout.verticalAlign === "both" && page.layout.columns.count === 1 ? " page-vertical-both" : ""}`}>
-                      {page.blocks.map((html, blockIndex) => <div className="page-block" key={`${index}-${blockIndex}`} dangerouslySetInnerHTML={{ __html: html }} />)}
+                      {page.columns.flatMap((column, columnIndex) => [
+                        <div className="page-column" data-column-index={columnIndex} style={{ gridColumn: columnIndex * 2 + 1 }} key={`column-${index}-${columnIndex}`}>
+                          {column.map((html, blockIndex) => <div className="page-block" key={`${index}-${columnIndex}-${blockIndex}`} dangerouslySetInnerHTML={{ __html: html }} />)}
+                        </div>,
+                        ...(columnIndex < page.columns.length - 1 ? [<div className="page-column-separator" aria-hidden="true" style={{ gridColumn: columnIndex * 2 + 2 }} key={`separator-${index}-${columnIndex}`} />] : [])
+                      ])}
                     </div>
                     {pageVariant.footerText || pageVariant.footerImages.length || pageVariant.footerPageNumberTemplate ? <div className="page-footer multiline" style={pageTextCssStyle(pageVariant.footerStyle)}>
                       <PagePartContent text={pageVariant.footerText} images={pageVariant.footerImages} pageNumberTemplate={pageVariant.footerPageNumberTemplate} pageNumberSeparate={pageVariant.footerPageNumberSeparate} pageNumber={previewDisplayPageNumbers[index]} pageCount={previewPages.length} pageNumberFormat={page.layout.pageNumberFormat} />

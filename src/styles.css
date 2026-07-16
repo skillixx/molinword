@@ -998,6 +998,12 @@ textarea {
   gap: 8px;
 }
 
+.custom-column-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
 .page-text-format-controls {
   display: grid;
   grid-template-columns: 34px 34px minmax(0, 1fr) 72px 48px;
@@ -1252,21 +1258,33 @@ textarea {
   box-sizing: border-box;
   padding-top: var(--page-content-padding-top, 0);
   margin: var(--page-margin-top, 96px) var(--page-margin-right, 96px) var(--page-margin-bottom, 96px) var(--page-margin-left, 96px);
-  column-count: var(--page-column-count, 1);
-  column-gap: var(--page-column-gap, 48px);
-  column-rule: var(--page-column-rule, none);
-  column-fill: auto;
+  display: grid;
+  grid-template-columns: var(--page-column-template, minmax(0, 1fr));
+  align-items: stretch;
   overflow: hidden;
 }
 
-.page-body.page-vertical-both {
+.page-column {
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.page-column-separator {
+  width: 0;
+  height: 100%;
+  justify-self: center;
+  border-left: var(--page-column-rule, none);
+}
+
+.page-body.page-vertical-both .page-column {
   /* 中文注解：Word 的页面两端对齐会把单栏页面中的内容块分布到正文区两端。 */
   display: flex;
   flex-direction: column;
   justify-content: space-between;
 }
 
-.page-body > .page-block {
+.page-column > .page-block {
   break-inside: auto;
 }
 

@@ -210,9 +210,19 @@ unequalColumnsZip.file("word/document.xml", unequalColumnsXml.replace(
 ));
 const unequalColumnsBuffer = await unequalColumnsZip.generateAsync({ type: "nodebuffer" });
 const unequalColumnsImported = await parseImportedDocument({ originalname: "unequal-columns.docx", buffer: unequalColumnsBuffer, mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: unequalColumnsBuffer.length });
-assert.deepEqual(unequalColumnsImported.pageLayout.columns, { count: 2, space: 720, separate: true });
-// 中文注解：不等宽栏暂按等宽预览时必须明确告警，不能静默宣称与 Word 完全一致。
-assert.match(unequalColumnsImported.warnings.join(" "), /不等宽自定义分栏/);
+assert.deepEqual(unequalColumnsImported.pageLayout.columns, {
+  count: 2,
+  space: 720,
+  separate: true,
+  equalWidth: false,
+  items: [{ width: 3000, space: 720 }, { width: 5000, space: 0 }]
+});
+assert.doesNotMatch(unequalColumnsImported.warnings.join(" "), /不等宽自定义分栏/);
+const unequalColumnsRoundTrip = await createDocxBuffer({ title: "Unequal columns", content: unequalColumnsImported.content, pageLayout: unequalColumnsImported.pageLayout });
+const unequalColumnsRoundTripZip = await JSZip.loadAsync(unequalColumnsRoundTrip);
+const unequalColumnsRoundTripXml = await unequalColumnsRoundTripZip.file("word/document.xml")?.async("string") || "";
+assert.match(unequalColumnsRoundTripXml, /<w:cols[^>]+w:num="2"[^>]+w:sep="true"[^>]+w:equalWidth="false"/);
+assert.match(unequalColumnsRoundTripXml, /<w:col w:w="3000" w:space="720"\/><w:col w:w="5000"\/>/);
 
 const inheritedStyleZip = await JSZip.loadAsync(buffer);
 const inheritedStylesXml = await inheritedStyleZip.file("word/styles.xml")?.async("string") || "";
@@ -684,6 +694,7 @@ const importedSecondSectionLayout = {
   oddEvenDifferent: false,
   evenPage: { headerText: "", footerText: "", pageNumberEnabled: false },
   orientation: "landscape",
+  columns: { count: 1, space: 720, separate: false },
   margins: { top: 720, right: 900, bottom: 720, left: 900 }
 };
 const importedSectionAttribute = JSON.stringify(importedSecondSectionLayout)
@@ -699,6 +710,7 @@ const multiSectionBuffer = await createDocxBuffer({
     footerText: "Imported portrait footer",
     pageNumberEnabled: false,
     orientation: "portrait",
+    columns: { count: 2, space: 720, separate: true, equalWidth: false, items: [{ width: 3000, space: 720 }, { width: 5000, space: 0 }] },
     margins: { top: 1440, right: 1440, bottom: 1440, left: 1440 }
   }
 });
@@ -711,7 +723,10 @@ const multiSectionImported = await parseImportedDocument({
 // 中文注解：导入多节 DOCX 时节边界必须回到可编辑正文，首节和后续节的方向、页边距及页眉页脚才能再次导出。
 assert.match(multiSectionImported.content, /data-section-break="nextPage"/);
 assert.equal(multiSectionImported.pageLayout.orientation, "portrait");
+assert.equal(multiSectionImported.pageLayout.columns.equalWidth, false);
 assert.deepEqual(multiSectionImported.pageLayout.margins, { top: 1440, right: 1440, bottom: 1440, left: 1440 });
+const importedSecondSectionAttribute = multiSectionImported.content.match(/data-section-layout="([^"]+)"/)?.[1].replaceAll("&quot;", '"').replaceAll("&amp;", "&") || "{}";
+assert.deepEqual(JSON.parse(importedSecondSectionAttribute).columns, { count: 1, space: 720, separate: false });
 assert.doesNotMatch(multiSectionImported.warnings.join(" "), /后续分节.*暂未恢复/);
 const multiSectionRoundTripBuffer = await createDocxBuffer({
   title: "Multi section import",
