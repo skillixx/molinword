@@ -32,7 +32,7 @@ const fixtureDocument = {
   tone: "正式",
   templateId: 3,
   outline: ["超长结构分页"],
-  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具 字符间距工具 下划线样式工具 all Caps Format small Caps Format</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table data-table-width-type="dxa" data-table-width-value="7200" data-table-grid-width="7200" data-table-layout="fixed" style="width:480px;table-layout:fixed"><tbody><tr><th colwidth="120">审批阶段</th><th colwidth="360">状态</th></tr><tr><td colwidth="120">商务评审</td><td colwidth="360">通过</td></tr><tr><td colwidth="120">归档确认</td><td colwidth="360">完成</td></tr></tbody></table><p>段落外观工具</p><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p><p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab workflow<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p><p>Tab keyboard</p><p>${widowText}</p>`,
+  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具 字符间距工具 下划线样式工具 all Caps Format small Caps Format <mark data-highlight="yellow" style="background-color:#FFFF00">清除高亮工具</mark></p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table data-table-width-type="dxa" data-table-width-value="7200" data-table-grid-width="7200" data-table-layout="fixed" style="width:480px;table-layout:fixed"><tbody><tr><th colwidth="120">审批阶段</th><th colwidth="360">状态</th></tr><tr><td colwidth="120">商务评审</td><td colwidth="360">通过</td></tr><tr><td colwidth="120">归档确认</td><td colwidth="360">完成</td></tr></tbody></table><p>段落外观工具</p><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p><p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab workflow<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p><p>Tab keyboard</p><p>${widowText}</p>`,
   // 中文注解：模拟升级前数据库里的旧页面设置，确保真实历史文档开启高级页眉时不会崩溃。
   pageLayout: { headerText: "", footerText: "", pageNumberEnabled: false },
   status: "draft",
@@ -249,6 +249,10 @@ try {
   // 中文注解：真实选择三个独立文本并点击工具栏，证明高级字符格式可编辑，而不只是被动展示导入结果。
   await selectEditorText("突出显示工具");
   await page.getByRole("button", { name: "黄色突出显示", exact: true }).click();
+  await selectEditorText("突出显示工具");
+  await page.getByLabel("突出显示", { exact: true }).selectOption("darkCyan");
+  await selectEditorText("清除高亮工具");
+  await page.getByLabel("突出显示", { exact: true }).selectOption("none");
   await selectEditorText("上标工具");
   await page.getByRole("button", { name: "上标", exact: true }).click();
   await selectEditorText("下标工具");
@@ -263,7 +267,9 @@ try {
   await selectEditorText("small Caps Format");
   await page.getByLabel("字母格式", { exact: true }).selectOption("small-caps");
   const advancedFormatHtml = await editor.innerHTML();
-  assert.match(advancedFormatHtml, /<mark[^>]+data-highlight="yellow"[^>]*>突出显示工具<\/mark>/);
+  assert.match(advancedFormatHtml, /<mark[^>]+data-highlight="darkCyan"[^>]*>突出显示工具<\/mark>/);
+  assert.doesNotMatch(advancedFormatHtml, /<mark[^>]*>清除高亮工具<\/mark>/);
+  assert.ok(advancedFormatHtml.includes("清除高亮工具"));
   assert.match(advancedFormatHtml, /<sup>上标工具<\/sup>/);
   assert.match(advancedFormatHtml, /<sub>下标工具<\/sub>/);
   assert.match(advancedFormatHtml, /<span[^>]+style="[^"]*letter-spacing:\s*2pt[^"]*vertical-align:\s*3pt[^"]*"[^>]*>字符间距工具<\/span>/);
@@ -537,6 +543,8 @@ try {
   assert.match(storedDocument.content, /--word-underline-type:\s*double/);
   assert.match(storedDocument.content, /text-transform:\s*uppercase/);
   assert.match(storedDocument.content, /font-variant-caps:\s*small-caps/);
+  assert.match(storedDocument.content, /data-highlight="darkCyan"/);
+  assert.doesNotMatch(storedDocument.content, /<mark[^>]*>清除高亮工具<\/mark>/);
   assert.match(storedDocument.content, /<p[^>]+data-paragraph-shading="[^\"]*DDEBF7[^\"]*"[^>]+data-paragraph-borders="[^\"]*dashed[^\"]*"[^>]*>[\s\S]*?段落外观工具[\s\S]*?<\/p>/);
   assert.match(storedDocument.content, /data-section-break="nextPage"/);
   assert.match(storedDocument.content, /rowspan="2"/);
@@ -693,7 +701,10 @@ try {
   assert.match(longTableHeaderRow, /<w:tblHeader\/>/);
   assert.match(longTableHeaderRow, /<w:cantSplit\/>/);
   assert.match(longTableHeaderRow, /<w:trHeight w:val="850" w:hRule="exact"\/>/);
-  assert.match(documentXml, /<w:highlight w:val="yellow"\/>/);
+  const darkCyanHighlightRun = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("突出显示工具")) || "";
+  const clearedHighlightRun = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("清除高亮工具")) || "";
+  assert.match(darkCyanHighlightRun, /<w:highlight w:val="darkCyan"\/>/);
+  assert.doesNotMatch(clearedHighlightRun, /<w:highlight/);
   assert.match(documentXml, /<w:vertAlign w:val="superscript"\/>/);
   assert.match(documentXml, /<w:vertAlign w:val="subscript"\/>/);
   const advancedCharacterRun = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("字符间距工具")) || "";
@@ -796,6 +807,9 @@ try {
   await previewSmallCaps.waitFor();
   assert.equal(await previewAllCaps.evaluate((span) => getComputedStyle(span).textTransform), "uppercase");
   assert.equal(await previewSmallCaps.evaluate((span) => getComputedStyle(span).fontVariantCaps), "small-caps");
+  const previewDarkCyanHighlight = page.locator('.page-body mark[data-highlight="darkCyan"]').filter({ hasText: "突出显示工具" }).first();
+  await previewDarkCyanHighlight.waitFor();
+  assert.equal(await previewDarkCyanHighlight.evaluate((mark) => getComputedStyle(mark).backgroundColor), "rgb(0, 128, 128)");
 
   const result = await page.evaluate(() => {
     const pages = Array.from(document.querySelectorAll(".page-sheet"));

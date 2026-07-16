@@ -13,6 +13,7 @@ const content = `
     <em>斜体文字</em>
     <s>删除线文字</s>
     <mark data-highlight="yellow" style="background-color:#FFFF00">突出显示文字</mark>
+    <mark data-highlight="darkCyan" style="background-color:#008080">深青色突出显示</mark>
     <sup>上标文字</sup>
     <sub>下标文字</sub>
     <span style="letter-spacing:2pt;vertical-align:3pt">Advanced character spacing</span>
@@ -177,6 +178,8 @@ assert.match(documentXml, /<w:u(?:\s+w:val="single")?\/>/);
 assert.match(documentXml, /<w:i\/>/);
 assert.match(documentXml, /<w:strike\/>/);
 assert.match(documentXml, /<w:highlight w:val="yellow"\/>/);
+const darkCyanHighlightXml = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("深青色突出显示")) || "";
+assert.match(darkCyanHighlightXml, /<w:highlight w:val="darkCyan"\/>/);
 assert.match(documentXml, /<w:vertAlign w:val="superscript"\/>/);
 assert.match(documentXml, /<w:vertAlign w:val="subscript"\/>/);
 assert.match(documentXml, /<w:ind[^>]+w:firstLine="480"\/>/);

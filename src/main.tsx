@@ -1307,6 +1307,25 @@ const highlightColors: Record<string, string> = {
   black: "#000000",
   white: "#FFFFFF"
 };
+const highlightColorOptions = [
+  { label: "清除高亮", value: "none" },
+  { label: "黄色", value: "yellow" },
+  { label: "绿色", value: "green" },
+  { label: "青色", value: "cyan" },
+  { label: "洋红", value: "magenta" },
+  { label: "红色", value: "red" },
+  { label: "蓝色", value: "blue" },
+  { label: "深黄色", value: "darkYellow" },
+  { label: "深绿色", value: "darkGreen" },
+  { label: "深青色", value: "darkCyan" },
+  { label: "深蓝色", value: "darkBlue" },
+  { label: "深洋红", value: "darkMagenta" },
+  { label: "深红色", value: "darkRed" },
+  { label: "浅灰色", value: "lightGray" },
+  { label: "深灰色", value: "darkGray" },
+  { label: "黑色", value: "black" },
+  { label: "白色", value: "white" }
+];
 
 const TextHighlight = Mark.create({
   name: "textHighlight",
@@ -3414,6 +3433,18 @@ function Editor(props: {
     setSelectionHint(applied ? `已应用${label}。` : "请先选中文本，或把光标放到要继续输入的位置。");
   };
 
+  const applyTextHighlight = (color: string, label: string) => {
+    if (!editor) return;
+    const lastSelection = lastEditorSelectionRef.current;
+    const chain = editor.chain();
+    // 中文注解：原生颜色下拉框会夺走焦点，仅在当前选区折叠时恢复用户最后选中的文字。
+    if (editor.state.selection.empty && lastSelection && lastSelection.from !== lastSelection.to) chain.setTextSelection(lastSelection);
+    const applied = color === "none"
+      ? chain.focus().unsetMark("textHighlight").run()
+      : chain.focus().setMark("textHighlight", { color }).run();
+    setSelectionHint(applied ? `已${color === "none" ? "清除" : "设置"}${label}。` : "请先选中文本，或把光标放到要继续输入的位置。");
+  };
+
   const applyDocumentTextStyle = (style: string) => {
     if (!editor) return;
     const chain = editor.chain().focus();
@@ -3891,7 +3922,8 @@ function Editor(props: {
               <button aria-label="关闭超链接编辑" onClick={() => setLinkEditorOpen(false)} title="关闭"><X size={16} /></button>
             </div> : null}
             <button className={editor?.isActive("strike") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleStrike().run()} title="删除线"><Strikethrough size={16} /></button>
-            <button aria-label="黄色突出显示" className={editor?.isActive("textHighlight") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleMark("textHighlight", { color: "yellow" }).run()} title="黄色突出显示"><Highlighter size={16} /></button>
+            <button aria-label="黄色突出显示" className={editor?.isActive("textHighlight", { color: "yellow" }) ? "active-format" : ""} onClick={() => applyTextHighlight("yellow", "黄色突出显示")} title="黄色突出显示"><Highlighter size={16} /></button>
+            <FormatSelect title="设置或清除选中文字的 Word 突出显示颜色" placeholder="突出显示" options={highlightColorOptions} onSelect={(value, label) => applyTextHighlight(value, label)} />
             <button aria-label="上标" className={editor?.isActive("superscriptText") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleMark("superscriptText").run()} title="上标"><Superscript size={16} /></button>
             <button aria-label="下标" className={editor?.isActive("subscriptText") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleMark("subscriptText").run()} title="下标"><Subscript size={16} /></button>
             <label className="format-select" title="设置选中文字字体">

@@ -121,6 +121,7 @@ async function buildFormattedDocxFixture() {
         <w:t>斜体下划线删除线文本</w:t>
       </w:r>
       <w:r><w:rPr><w:highlight w:val="yellow"/></w:rPr><w:t>Highlighted text</w:t></w:r>
+      <w:r><w:rPr><w:highlight w:val="darkCyan"/></w:rPr><w:t>Dark cyan highlight</w:t></w:r>
       <w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:t>Superscript text</w:t></w:r>
       <w:r><w:rPr><w:vertAlign w:val="subscript"/></w:rPr><w:t>Subscript text</w:t></w:r>
       <w:r><w:rPr><w:spacing w:val="40"/><w:position w:val="6"/></w:rPr><w:t>Expanded raised text</w:t></w:r>
@@ -430,6 +431,7 @@ assert.match(imported.content, /color:\s*#C00000/i);
 assert.match(imported.content, /<strong>/);
 assert.match(imported.content, /<s><em><u>斜体下划线删除线文本<\/u><\/em><\/s>/);
 assert.match(imported.content, /<mark data-highlight="yellow" style="background-color:\s*#FFFF00">Highlighted text<\/mark>/);
+assert.match(imported.content, /<mark data-highlight="darkCyan" style="background-color:\s*#008080">Dark cyan highlight<\/mark>/);
 assert.match(imported.content, /<sup>Superscript text<\/sup>/);
 assert.match(imported.content, /<sub>Subscript text<\/sub>/);
 assert.match(imported.content, /<span[^>]+style="[^"]*letter-spacing:\s*2pt[^"]*vertical-align:\s*3pt[^"]*"[^>]*>Expanded raised text<\/span>/);
@@ -592,6 +594,8 @@ assert.match(roundTripXml, /<w:vMerge w:val="restart"\/>/);
 assert.match(roundTripXml, /<w:vMerge w:val="continue"\/>/);
 // 中文注解：高级字符格式必须在导入后再次导出为 Word 原生属性，不能只停留为浏览器视觉样式。
 assert.match(roundTripXml, /<w:highlight w:val="yellow"\/>/);
+const darkCyanHighlightRoundTripXml = (roundTripXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("Dark cyan highlight")) || "";
+assert.match(darkCyanHighlightRoundTripXml, /<w:highlight w:val="darkCyan"\/>/);
 assert.match(roundTripXml, /<w:vertAlign w:val="superscript"\/>/);
 assert.match(roundTripXml, /<w:vertAlign w:val="subscript"\/>/);
 const advancedCharacterRoundTripXml = (roundTripXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("Expanded raised text")) || "";
@@ -647,6 +651,7 @@ const roundTripImported = await parseImportedDocument({
 // 中文注解：docx 会写出 b=false 等显式关闭标记，再导入时不能把未加粗文本误判成粗体。
 assert.match(roundTripImported.content, /<s><em><u>斜体下划线删除线文本<\/u><\/em><\/s>/);
 assert.match(roundTripImported.content, /<mark data-highlight="yellow"[^>]*>Highlighted text<\/mark>/);
+assert.match(roundTripImported.content, /<mark data-highlight="darkCyan"[^>]*>Dark cyan highlight<\/mark>/);
 assert.match(roundTripImported.content, /<sup>Superscript text<\/sup>/);
 assert.match(roundTripImported.content, /<sub>Subscript text<\/sub>/);
 assert.match(roundTripImported.content, /<span[^>]+style="[^"]*letter-spacing:\s*2pt[^"]*vertical-align:\s*3pt[^"]*"[^>]*>Expanded raised text<\/span>/);
