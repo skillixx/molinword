@@ -536,6 +536,7 @@ try {
   await page.getByLabel("当前节纸张规格", { exact: true }).selectOption("legal");
   await page.getByLabel("当前节上边距", { exact: true }).fill("1.27");
   await page.getByLabel("当前节下边距", { exact: true }).fill("1.27");
+  await page.getByLabel("当前节装订线", { exact: true }).fill("1");
   await page.getByLabel("当前节页眉距纸边", { exact: true }).fill("0.85");
   await page.getByLabel("当前节页脚距纸边", { exact: true }).fill("1.48");
   await page.getByLabel("当前节分栏数", { exact: true }).selectOption("2");
@@ -628,6 +629,7 @@ try {
   assert.equal(storedSectionLayout.footerDistance, 839);
   assert.equal(storedSectionLayout.pageNumberFormat, "upperRoman");
   assert.equal(storedSectionLayout.pageNumberStart, 3);
+  assert.equal(storedSectionLayout.gutter, 567);
   assert.deepEqual(storedSectionLayout.columns, {
     count: 2,
     space: 454,
@@ -731,6 +733,7 @@ try {
   assert.match(documentXml, /<w:pgNumType[^>]+w:start="3"[^>]*w:fmt="upperRoman"/);
   const exportedLandscapeSection = (documentXml.match(/<w:sectPr>[\s\S]*?<\/w:sectPr>/g) || []).find((section) => /w:orient="landscape"/.test(section)) || "";
   assert.match(exportedLandscapeSection, /<w:pgSz[^>]+w:w="20160"[^>]+w:h="12240"[^>]+w:orient="landscape"/);
+  assert.match(exportedLandscapeSection, /<w:pgMar[^>]+w:gutter="567"/);
   assert.match(exportedLandscapeSection, /<w:cols[^>]+w:num="2"[^>]+w:sep="true"[^>]+w:equalWidth="false"/);
   assert.match(exportedLandscapeSection, /<w:col w:w="2999" w:space="454"\/><w:col w:w="10505"\/>/);
   assert.match(exportedLandscapeSection, /<w:pgBorders[^>]+w:display="firstPage"[^>]+w:offsetFrom="page"[^>]+w:zOrder="front"/);
@@ -853,10 +856,11 @@ try {
   await page.waitForFunction(() => document.querySelectorAll(".page-sheet").length > 5);
   const previewLink = page.locator('.page-body a[href="https://example.com/office"]').first();
   await previewLink.waitFor();
-  assert.match(await previewLink.evaluate((link) => {
+  await page.waitForFunction(() => Array.from(document.querySelectorAll('.page-body a[href="https://example.com/office"]')).some((link) => getComputedStyle(link).textDecorationLine.includes("underline")));
+  assert.match(await page.evaluate(() => Array.from(document.querySelectorAll('.page-body a[href="https://example.com/office"]')).map((link) => {
     const style = getComputedStyle(link);
     return `${style.textDecorationLine} ${style.textDecoration}`;
-  }), /underline/);
+  }).find((value) => value.includes("underline")) || ""), /underline/);
   const previewFloatingImage = page.locator('.page-body img[alt="浮动审批标识"]').first();
   await previewFloatingImage.waitFor();
   await page.waitForFunction(() => Array.from(document.querySelectorAll('.page-body img[alt="浮动审批标识"]')).some((image) => getComputedStyle(image).float === "left"));
@@ -865,9 +869,10 @@ try {
   const previewParagraphAppearance = page.locator('.page-body p[data-paragraph-shading][data-paragraph-borders]').filter({ hasText: "段落外观工具" }).first();
   await previewParagraphAppearance.waitFor();
   await page.waitForFunction(() => Array.from(document.querySelectorAll(".page-body p")).some((paragraph) => paragraph.textContent?.includes("段落外观工具") && getComputedStyle(paragraph).backgroundColor === "rgb(221, 235, 247)"));
-  assert.deepEqual(await previewParagraphAppearance.evaluate((paragraph) => {
-    const style = getComputedStyle(paragraph);
-    return { backgroundColor: style.backgroundColor, borderTopStyle: style.borderTopStyle, borderTopWidth: style.borderTopWidth, paddingTop: style.paddingTop };
+  assert.deepEqual(await page.evaluate(() => {
+    const paragraph = Array.from(document.querySelectorAll(".page-body p")).find((item) => item.textContent?.includes("段落外观工具") && getComputedStyle(item).backgroundColor === "rgb(221, 235, 247)");
+    const style = paragraph ? getComputedStyle(paragraph) : null;
+    return { backgroundColor: style?.backgroundColor || "", borderTopStyle: style?.borderTopStyle || "", borderTopWidth: style?.borderTopWidth || "", paddingTop: style?.paddingTop || "" };
   }), { backgroundColor: "rgb(221, 235, 247)", borderTopStyle: "dashed", borderTopWidth: "1px", paddingTop: "4px" });
   // 中文注解：分页预览重排期间可能短暂保留旧克隆，按格式属性定位最终稳定的字符节点。
   const previewAdvancedCharacter = page.locator('.page-body span[style*="letter-spacing"][style*="vertical-align"]').filter({ hasText: "字符间距工具" }).first();
@@ -885,15 +890,19 @@ try {
   assert.ok(Math.abs(previewAdvancedStyle.verticalAlign - (3 * 96 / 72)) < 0.05);
   const previewAdvancedUnderline = page.locator(".page-body span").filter({ hasText: "下划线样式工具" }).first();
   await previewAdvancedUnderline.waitFor();
-  assert.deepEqual(await previewAdvancedUnderline.evaluate((span) => {
-    const style = getComputedStyle(span);
-    return { line: style.textDecorationLine, style: style.textDecorationStyle };
+  await page.waitForFunction(() => Array.from(document.querySelectorAll(".page-body span")).some((span) => span.textContent?.includes("下划线样式工具") && getComputedStyle(span).textDecorationStyle === "double"));
+  assert.deepEqual(await page.evaluate(() => {
+    const span = Array.from(document.querySelectorAll(".page-body span")).find((item) => item.textContent?.includes("下划线样式工具") && getComputedStyle(item).textDecorationStyle === "double");
+    const style = span ? getComputedStyle(span) : null;
+    return { line: style?.textDecorationLine || "", style: style?.textDecorationStyle || "" };
   }), { line: "underline", style: "double" });
   const previewTextBorder = page.locator('.page-body span[style*="--word-text-border"]').filter({ hasText: "字符边框工具" }).first();
   await previewTextBorder.waitFor();
-  assert.deepEqual(await previewTextBorder.evaluate((span) => {
-    const style = getComputedStyle(span);
-    return { borderStyle: style.borderTopStyle, borderWidth: style.borderTopWidth, borderColor: style.borderTopColor, paddingTop: style.paddingTop };
+  await page.waitForFunction(() => Array.from(document.querySelectorAll('.page-body span[style*="--word-text-border"]')).some((span) => span.textContent?.includes("字符边框工具") && getComputedStyle(span).borderTopStyle === "dashed"));
+  assert.deepEqual(await page.evaluate(() => {
+    const span = Array.from(document.querySelectorAll('.page-body span[style*="--word-text-border"]')).find((item) => item.textContent?.includes("字符边框工具") && getComputedStyle(item).borderTopStyle === "dashed");
+    const style = span ? getComputedStyle(span) : null;
+    return { borderStyle: style?.borderTopStyle || "", borderWidth: style?.borderTopWidth || "", borderColor: style?.borderTopColor || "", paddingTop: style?.paddingTop || "" };
   }), { borderStyle: "dashed", borderWidth: "1px", borderColor: "rgb(31, 78, 121)", paddingTop: "1.33px" });
   const previewHangingIndent = page.locator('.page-body p[style*="text-indent"]').filter({ hasText: "悬挂缩进工具内容" }).first();
   await previewHangingIndent.waitFor();
@@ -905,9 +914,11 @@ try {
   }), { marginLeft: "37.8px", textIndent: "-37.8px" });
   const previewSideIndents = page.locator('.page-body p[style*="margin-right"]').filter({ hasText: "段落左右缩进工具内容" }).first();
   await previewSideIndents.waitFor();
-  const previewSideIndentStyle = await previewSideIndents.evaluate((paragraph) => {
-    const style = getComputedStyle(paragraph);
-    return { marginLeft: Number.parseFloat(style.marginLeft), marginRight: Number.parseFloat(style.marginRight) };
+  await page.waitForFunction(() => Array.from(document.querySelectorAll('.page-body p[style*="margin-right"]')).some((paragraph) => paragraph.textContent?.includes("段落左右缩进工具内容") && Number.parseFloat(getComputedStyle(paragraph).marginLeft) > 0));
+  const previewSideIndentStyle = await page.evaluate(() => {
+    const paragraph = Array.from(document.querySelectorAll('.page-body p[style*="margin-right"]')).find((item) => item.textContent?.includes("段落左右缩进工具内容") && Number.parseFloat(getComputedStyle(item).marginLeft) > 0);
+    const style = paragraph ? getComputedStyle(paragraph) : null;
+    return { marginLeft: Number.parseFloat(style?.marginLeft || ""), marginRight: Number.parseFloat(style?.marginRight || "") };
   });
   assert.ok(Math.abs(previewSideIndentStyle.marginLeft - 37.8) < 0.05);
   assert.ok(Math.abs(previewSideIndentStyle.marginRight - (14.17 * 96 / 72)) < 0.05);
@@ -949,6 +960,7 @@ try {
       }).filter(Boolean),
       sectionIndexes: pages.map((page) => Number(page.getAttribute("data-section-index") || 0)),
       pageSizes: pages.map((page) => ({ width: Math.round(page.getBoundingClientRect().width), height: Math.round(page.getBoundingClientRect().height) })),
+      pageMarginLefts: pages.map((page) => Number.parseFloat(getComputedStyle(page).getPropertyValue("--page-margin-left"))),
       secondSectionColumns: (() => {
         const page = pages.find((item) => item.getAttribute("data-section-index") === "1");
         const body = page?.querySelector(".page-body");
@@ -1122,6 +1134,7 @@ try {
   const secondSectionFirstPage = result.sectionIndexes.indexOf(1);
   assert.ok(secondSectionFirstPage > 0);
   assert.deepEqual(result.pageSizes[secondSectionFirstPage], { width: 1344, height: 816 });
+  assert.ok(Math.abs(result.pageMarginLefts[secondSectionFirstPage] - 133.8) < 0.1, "第二节有效左边距应包含 1 厘米装订线");
   assert.equal(result.secondSectionColumns?.widths.length, 2);
   assert.ok(Math.abs((result.secondSectionColumns?.widths[0] || 0) - 199.93) < 0.2);
   assert.ok(Math.abs((result.secondSectionColumns?.widths[1] || 0) - 700.33) < 0.2);

@@ -72,6 +72,7 @@ const buffer = await createDocxBuffer({
     evenPage: { headerText: "偶数页眉", footerText: "偶数页脚", pageNumberEnabled: true },
     headerDistance: 480,
     footerDistance: 840,
+    gutter: 360,
     paperSize: { width: 12240, height: 15840 },
     columns: {
       count: 2,
@@ -200,8 +201,9 @@ assert.match(documentXml, /<w:br w:type="page"\/>/);
 assert.match(documentXml, /<w:pgSz[^>]+w:w="12240"[^>]+w:h="15840"/);
 assert.match(documentXml, /<w:pgMar[^>]+w:top="1440"[^>]+w:right="1440"[^>]+w:bottom="1440"[^>]+w:left="1440"/);
 assert.match(documentXml, /<w:pgMar[^>]+w:header="480"[^>]+w:footer="840"/);
+assert.match(documentXml, /<w:pgMar[^>]+w:gutter="360"/);
 assert.match(documentXml, /<w:cols[^>]+w:num="2"[^>]+w:sep="true"[^>]+w:equalWidth="false"/);
-assert.match(documentXml, /<w:col w:w="3000" w:space="720"\/><w:col w:w="5306"\/>/);
+assert.match(documentXml, /<w:col w:w="2991" w:space="720"\/><w:col w:w="5289"\/>/);
 assert.match(documentXml, /<w:pgBorders[^>]+w:display="notFirstPage"[^>]+w:offsetFrom="text"[^>]+w:zOrder="back"/);
 assert.match(documentXml, /<w:top w:val="dashed" w:color="C00000" w:sz="8" w:space="12"\/>/);
 assert.match(documentXml, /<w:vAlign w:val="bottom"\/>/);

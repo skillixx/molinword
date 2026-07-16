@@ -213,7 +213,7 @@ async function buildFormattedDocxFixture() {
       </w:r>
     </w:p>
     <w:p><w:r><w:t>图片前文字</w:t></w:r><w:r><w:drawing><wp:anchor distT="95250" distR="190500" distB="285750" distL="381000" relativeHeight="7" behindDoc="0" locked="1" layoutInCell="1" allowOverlap="0"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:align>right</wp:align></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>190500</wp:posOffset></wp:positionV><wp:extent cx="952500" cy="952500"/><wp:wrapSquare wrapText="bothSides"/><wp:docPr id="2" name="混排图标" descr="混排图标"/><a:graphic><a:graphicData><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:blipFill><a:blip r:embed="rIdImage1"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r><w:r><w:t>图片后文字</w:t></w:r></w:p>
-    <w:sectPr><w:headerReference w:type="default" r:id="rIdHeader1"/><w:footerReference w:type="default" r:id="rIdFooter1"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="360" w:footer="900"/><w:pgBorders w:display="firstPage" w:offsetFrom="page" w:zOrder="front"><w:top w:val="double" w:sz="12" w:space="24" w:color="1F4E79"/><w:right w:val="double" w:sz="12" w:space="24" w:color="1F4E79"/><w:bottom w:val="double" w:sz="12" w:space="24" w:color="1F4E79"/><w:left w:val="double" w:sz="12" w:space="24" w:color="1F4E79"/></w:pgBorders><w:cols w:num="2" w:space="720" w:sep="1"/><w:vAlign w:val="center"/></w:sectPr>
+    <w:sectPr><w:headerReference w:type="default" r:id="rIdHeader1"/><w:footerReference w:type="default" r:id="rIdFooter1"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="360" w:footer="900" w:gutter="720"/><w:pgBorders w:display="firstPage" w:offsetFrom="page" w:zOrder="front"><w:top w:val="double" w:sz="12" w:space="24" w:color="1F4E79"/><w:right w:val="double" w:sz="12" w:space="24" w:color="1F4E79"/><w:bottom w:val="double" w:sz="12" w:space="24" w:color="1F4E79"/><w:left w:val="double" w:sz="12" w:space="24" w:color="1F4E79"/></w:pgBorders><w:cols w:num="2" w:space="720" w:sep="1"/><w:vAlign w:val="center"/></w:sectPr>
   </w:body>
 </w:document>`
   );
@@ -241,14 +241,14 @@ assert.deepEqual(unequalColumnsImported.pageLayout.columns, {
   space: 720,
   separate: true,
   equalWidth: false,
-  items: [{ width: 3000, space: 720 }, { width: 5000, space: 0 }]
+  items: [{ width: 2845, space: 720 }, { width: 4741, space: 0 }]
 });
 assert.doesNotMatch(unequalColumnsImported.warnings.join(" "), /不等宽自定义分栏/);
 const unequalColumnsRoundTrip = await createDocxBuffer({ title: "Unequal columns", content: unequalColumnsImported.content, pageLayout: unequalColumnsImported.pageLayout });
 const unequalColumnsRoundTripZip = await JSZip.loadAsync(unequalColumnsRoundTrip);
 const unequalColumnsRoundTripXml = await unequalColumnsRoundTripZip.file("word/document.xml")?.async("string") || "";
 assert.match(unequalColumnsRoundTripXml, /<w:cols[^>]+w:num="2"[^>]+w:sep="true"[^>]+w:equalWidth="false"/);
-assert.match(unequalColumnsRoundTripXml, /<w:col w:w="3000" w:space="720"\/><w:col w:w="5000"\/>/);
+assert.match(unequalColumnsRoundTripXml, /<w:col w:w="2845" w:space="720"\/><w:col w:w="4741"\/>/);
 
 const letterPaperZip = await JSZip.loadAsync(buffer);
 const letterPaperXml = await letterPaperZip.file("word/document.xml")?.async("string") || "";
@@ -601,6 +601,7 @@ assert.deepEqual(imported.pageLayout, {
     bottom: { style: "double", size: 12, color: "#1F4E79", space: 24 },
     left: { style: "double", size: 12, color: "#1F4E79", space: 24 }
   },
+  gutter: 720,
   margins: { top: 1440, right: 1440, bottom: 1440, left: 1440 }
 });
 

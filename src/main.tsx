@@ -226,6 +226,7 @@ type DocumentPageLayout = DocumentPageVariant & {
   columns: DocumentPageColumns;
   verticalAlign: "top" | "center" | "bottom" | "both";
   pageBorders: DocumentPageBorders | null;
+  gutter?: number;
   margins: DocumentPageMargins;
 };
 const defaultDocumentPageTextStyle: DocumentPageTextStyle = { alignment: "center", fontFamily: "Microsoft YaHei", fontSizePt: 9, color: "#6B7280", bold: false, italic: false };
@@ -393,7 +394,10 @@ function normalizeDocumentPageLayout(value: Partial<DocumentPageLayout> | null |
   // 中文注解：前后端使用同一联合约束，为当前纸张正文保留至少 0.5 英寸。
   [margins.left, margins.right] = fitPair(margins.left, margins.right, pageWidth - 720);
   [margins.top, margins.bottom] = fitPair(margins.top, margins.bottom, pageHeight - 720);
-  const availableWidth = Math.max(720, pageWidth - margins.left - margins.right);
+  const rawGutter = Number(value?.gutter);
+  const normalizedGutter = Number.isFinite(rawGutter) ? Math.max(0, Math.min(Math.round(rawGutter), 7200)) : 0;
+  const gutter = Math.min(normalizedGutter, Math.max(0, pageWidth - margins.left - margins.right - 720));
+  const availableWidth = Math.max(720, pageWidth - margins.left - margins.right - gutter);
   const rawColumnItems = Array.isArray(value?.columns?.items) ? value.columns.items : [];
   let columns: DocumentPageColumns;
   if (columnCount > 1 && value?.columns?.equalWidth === false && rawColumnItems.length >= columnCount) {
@@ -435,6 +439,7 @@ function normalizeDocumentPageLayout(value: Partial<DocumentPageLayout> | null |
     columns,
     verticalAlign: verticalAlignValues.includes(value?.verticalAlign as DocumentPageLayout["verticalAlign"]) ? value!.verticalAlign! : "top",
     pageBorders: normalizeDocumentPageBorders(value?.pageBorders),
+    ...(gutter > 0 ? { gutter } : {}),
     margins
   };
 }
@@ -607,7 +612,8 @@ function pageGeometry(layout: DocumentPageLayout) {
     top: layout.margins.top * docxPagePreview.twipToPx,
     right: layout.margins.right * docxPagePreview.twipToPx,
     bottom: layout.margins.bottom * docxPagePreview.twipToPx,
-    left: layout.margins.left * docxPagePreview.twipToPx
+    // 中文注解：Word 默认把装订线加到左侧正文起点，但语义上的左边距仍单独保存和显示。
+    left: (layout.margins.left + (layout.gutter || 0)) * docxPagePreview.twipToPx
   };
   const contentWidthPx = Math.max(96, widthPx - margins.left - margins.right);
   const columnCount = Math.max(1, layout.columns.count);
@@ -4125,6 +4131,9 @@ function Editor(props: {
                       const labels = { top: "上", bottom: "下", left: "左", right: "右" };
                       return <label key={side}>{labels[side]}边距（厘米）<input type="number" aria-label={`当前节${labels[side]}边距`} min="0" max="12.7" step="0.1" value={twipToCentimeter(activeSectionLayout.margins[side])} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, margins: { ...current.margins, [side]: centimeterToTwip(event.target.value, current.margins[side]) } }))} /></label>;
                     })}
+                  </div>
+                  <div className="page-margin-grid">
+                    <label>装订线（厘米）<input type="number" aria-label="当前节装订线" min="0" max="12.7" step="0.1" value={twipToCentimeter(activeSectionLayout.gutter || 0)} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, gutter: centimeterToTwip(event.target.value, current.gutter || 0) }))} /></label>
                   </div>
                   <div className="page-margin-grid">
                     <label>页眉距纸边（厘米）<input type="number" aria-label="当前节页眉距纸边" min="0" max="12.7" step="0.1" value={twipToCentimeter(activeSectionLayout.headerDistance)} onChange={(event) => updateCurrentSectionLayout((current) => ({ ...current, headerDistance: centimeterToTwip(event.target.value, current.headerDistance) }))} /></label>
