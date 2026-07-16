@@ -36,6 +36,17 @@ function orderedListFormatDefinition(value = "") {
   const format = normalizeOrderedListFormat(value);
   return orderedListFormatDefinitions.find((item) => item.format === format) || orderedListFormatDefinitions[0];
 }
+
+function normalizeOrderedListStart(value) {
+  const start = Number(value);
+  return Number.isInteger(start) && start >= 1 && start <= 32767 ? start : 1;
+}
+
+function orderedListReference(format, start = 1) {
+  const definition = orderedListFormatDefinition(format);
+  const normalizedStart = normalizeOrderedListStart(start);
+  return normalizedStart === 1 ? definition.reference : `${definition.reference}-start-${normalizedStart}`;
+}
 const defaultPageTextStyle = Object.freeze({ alignment: "center", fontFamily: "Microsoft YaHei", fontSizePt: 9, color: "#6B7280", bold: false, italic: false });
 const defaultPageNumberTemplate = "第 {PAGE} 页 / 共 {NUMPAGES} 页";
 const supportedPageImageMimeTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
@@ -445,7 +456,7 @@ function sanitizeImportedHtml(value = "") {
       span: ["style", "class", "data-docx-tab", "data-tab-position", "data-tab-alignment"],
       mark: ["data-highlight", "style"],
       a: ["href", "target", "rel"],
-      ol: ["style", "data-list-format"],
+      ol: ["style", "data-list-format", "start"],
       table: ["style", "data-table-width-type", "data-table-width-value", "data-table-grid-width", "data-table-layout", "data-table-borders"],
       tr: ["style", "data-row-height", "data-row-height-rule", "data-row-cant-split", "data-row-repeat-header"],
       th: ["style", "colspan", "rowspan", "colwidth", "data-docx-cell", "data-cell-margins", "data-cell-vertical-align", "data-cell-shading", "data-cell-borders"],
@@ -976,7 +987,10 @@ function parseDocxNumbering(numberingXml = "") {
     const levels = new Map();
     for (const levelNode of xmlChildren(abstractNode, "w:lvl")) {
       const level = Number(firstValue(levelNode.attribs, ["w:ilvl", "ilvl"]) || 0);
-      levels.set(level, xmlVal(xmlChild(levelNode, "w:numFmt")) || "decimal");
+      levels.set(level, {
+        format: xmlVal(xmlChild(levelNode, "w:numFmt")) || "decimal",
+        start: normalizeOrderedListStart(xmlVal(xmlChild(levelNode, "w:start")))
+      });
     }
     abstractLevels.set(abstractId, levels);
   }
@@ -988,8 +1002,16 @@ function parseDocxNumbering(numberingXml = "") {
     const levels = new Map(abstractLevels.get(abstractId));
     for (const overrideNode of xmlChildren(numberNode, "w:lvlOverride")) {
       const level = Number(firstValue(overrideNode.attribs, ["w:ilvl", "ilvl"]) || 0);
-      const overrideFormat = xmlVal(xmlChild(xmlChild(overrideNode, "w:lvl"), "w:numFmt"));
-      if (overrideFormat) levels.set(level, overrideFormat);
+      const nestedLevel = xmlChild(overrideNode, "w:lvl");
+      const current = levels.get(level) || { format: "decimal", start: 1 };
+      const overrideFormat = xmlVal(xmlChild(nestedLevel, "w:numFmt"));
+      const nestedStart = xmlVal(xmlChild(nestedLevel, "w:start"));
+      const startOverride = xmlVal(xmlChild(overrideNode, "w:startOverride"));
+      levels.set(level, {
+        format: overrideFormat || current.format,
+        // 中文注解：具体编号实例的 startOverride 优先级高于抽象层级和内嵌 lvl，保证续表、拆分章节的起始序号不被重置。
+        start: normalizeOrderedListStart(startOverride || nestedStart || current.start)
+      });
     }
     // 中文注解：真实 Word 文件可能通过 lvlOverride 改写某一级编号格式，具体 numId 必须优先采用覆盖值。
     numbering.set(numberId, levels);
@@ -1003,10 +1025,17 @@ function docxListInfo(pPr, style, numbering) {
   if (!numPr && !/list|列表/i.test(styleText)) return null;
   const level = Math.max(0, Math.min(Number(xmlVal(xmlChild(numPr, "w:ilvl")) || 0), 5));
   const numberId = xmlVal(xmlChild(numPr, "w:numId"));
-  const numberFormat = numbering.get(numberId)?.get(level);
+  const numberLevel = numbering.get(numberId)?.get(level);
+  const numberFormat = numberLevel?.format;
   // 中文注解：Word 中除 bullet/none 外的编号格式都属于有序列表，包含中文数字、字母和罗马数字。
   const ordered = numberFormat ? !["bullet", "none"].includes(numberFormat) : /number|编号/i.test(styleText);
-  return { level, ordered, numberId, numberFormat: ordered ? normalizeOrderedListFormat(numberFormat) : "bullet" };
+  return {
+    level,
+    ordered,
+    numberId,
+    numberFormat: ordered ? normalizeOrderedListFormat(numberFormat) : "bullet",
+    numberStart: ordered ? normalizeOrderedListStart(numberLevel?.start) : 1
+  };
 }
 
 function docxTextFromRun(runNode) {
@@ -1404,7 +1433,8 @@ async function parseStyledDocxParagraph(paragraphNode, context) {
     ordered: Boolean(list?.ordered),
     listLevel: list?.level || 0,
     listNumberId: list?.numberId || "",
-    listFormat: list?.numberFormat || "decimal"
+    listFormat: list?.numberFormat || "decimal",
+    listStart: list?.numberStart || 1
   };
 }
 
@@ -1648,7 +1678,8 @@ function renderDocxListItems(items) {
   const openingTag = (item) => {
     if (!item.ordered) return "<ul>";
     const definition = orderedListFormatDefinition(item.listFormat);
-    return `<ol data-list-format="${definition.format}" style="list-style-type: ${definition.css}">`;
+    const startAttribute = item.listStart === 1 ? "" : ` start="${item.listStart}"`;
+    return `<ol${startAttribute} data-list-format="${definition.format}" style="list-style-type: ${definition.css}">`;
   };
 
   for (const item of items) {
@@ -1656,7 +1687,7 @@ function renderDocxListItems(items) {
     const level = Math.min(item.listLevel, openLists.length);
     if (!openLists.length || level === openLists.length) {
       html += `${openingTag(item)}<li>${item.listItem}`;
-      openLists.push({ tag, numberId: item.listNumberId, format: item.listFormat });
+      openLists.push({ tag, numberId: item.listNumberId, format: item.listFormat, start: item.listStart });
       continue;
     }
 
@@ -1667,7 +1698,7 @@ function renderDocxListItems(items) {
     } else {
       // 中文注解：相同类型但 numId 不同代表 Word 中的新编号实例，必须拆开列表以保留“重新从 1 开始”。
       html += `</li></${openLists.pop().tag}>${openingTag(item)}<li>${item.listItem}`;
-      openLists.push({ tag, numberId: item.listNumberId, format: item.listFormat });
+      openLists.push({ tag, numberId: item.listNumberId, format: item.listFormat, start: item.listStart });
     }
   }
 
@@ -2523,7 +2554,7 @@ function paragraphFromNode(node, listContext = null) {
   if (tagName === "li") {
     const level = Math.max(0, Math.min(listContext?.level || 0, 5));
     const listOptions = listContext?.type === "ol"
-      ? { numbering: { reference: orderedListFormatDefinition(listContext.format).reference, level, instance: listContext.instance } }
+      ? { numbering: { reference: orderedListReference(listContext.format, listContext.start), level, instance: listContext.instance } }
       : { bullet: { level } };
     // 中文注解：按 HTML 的 ol/ul 类型和嵌套深度写入 Word 原生列表，在线编号不会在导出后变成圆点。
     return new Paragraph({
@@ -2560,8 +2591,9 @@ function appendListParagraphs(listNode, blocks, level, orderedInstance) {
   // 中文注解：列表项和嵌套列表分别导出为 Word 段落，递归深度直接映射到 ilvl。
   const listType = listNode.name;
   const listFormat = listType === "ol" ? normalizeOrderedListFormat(listNode.attribs?.["data-list-format"]) : "bullet";
+  const listStart = listType === "ol" ? normalizeOrderedListStart(listNode.attribs?.start) : 1;
   for (const listItem of (listNode.children || []).filter((child) => child.name === "li")) {
-    const paragraph = paragraphFromNode(listItem, { type: listType, level, instance: orderedInstance, format: listFormat });
+    const paragraph = paragraphFromNode(listItem, { type: listType, level, instance: orderedInstance, format: listFormat, start: listStart });
     if (paragraph) blocks.push(paragraph);
     for (const nestedList of (listItem.children || []).filter(isHtmlListNode)) {
       appendListParagraphs(nestedList, blocks, Math.min(level + 1, 5), orderedInstance);
@@ -3088,6 +3120,17 @@ function createDocxSectionProperties(pageLayout, isFirstSection, breakType = "ne
 
 async function createDocxBuffer({ title, content, templateStyle = null, pageLayout = null }) {
   const contentSections = extractDocxSectionsFromHtml(content, pageLayout);
+  const orderedListStarts = new Map();
+  const contentDocument = parseDocument(content || "", { decodeEntities: true });
+  for (const listNode of xmlDescendants(contentDocument, "ol")) {
+    const format = normalizeOrderedListFormat(listNode.attribs?.["data-list-format"]);
+    const start = normalizeOrderedListStart(listNode.attribs?.start);
+    orderedListStarts.set(`${format}:${start}`, { format, start });
+  }
+  // 中文注解：默认定义兼容新建列表，额外定义只按文档实际出现的起始值生成，避免编号配置无限膨胀。
+  for (const definition of orderedListFormatDefinitions) {
+    orderedListStarts.set(`${definition.format}:1`, { format: definition.format, start: 1 });
+  }
   const evenAndOddHeadersEnabled = contentSections.some((section) => section.pageLayout.oddEvenDifferent);
   const documentSections = contentSections.map((section, index) => {
     // 中文注解：Word 的奇偶页开关是文档级；开启后每节都显式写偶数页部件，防止关闭差异的节继承前节偶数页内容。
@@ -3112,17 +3155,21 @@ async function createDocxBuffer({ title, content, templateStyle = null, pageLayo
     styles: createDocxStyles(templateStyle || {}),
     numbering: {
       config: [
-        ...orderedListFormatDefinitions.map((definition) => ({
-          reference: definition.reference,
-          // 中文注解：每种常用编号格式都预置六级定义，在线 ol 语义可直接恢复为原生 w:numFmt。
-          levels: Array.from({ length: 6 }, (_, level) => ({
-            level,
-            format: definition.docx,
-            text: `%${level + 1}.`,
-            alignment: AlignmentType.LEFT,
-            style: { paragraph: { indent: { left: 720 * (level + 1), hanging: 360 } } }
-          }))
-        }))
+        ...Array.from(orderedListStarts.values()).map(({ format, start }) => {
+          const definition = orderedListFormatDefinition(format);
+          return {
+            reference: orderedListReference(format, start),
+            // 中文注解：每种常用编号格式都预置六级定义，在线 ol 语义可直接恢复为原生 w:numFmt。
+            levels: Array.from({ length: 6 }, (_, level) => ({
+              level,
+              format: definition.docx,
+              text: `%${level + 1}.`,
+              start,
+              alignment: AlignmentType.LEFT,
+              style: { paragraph: { indent: { left: 720 * (level + 1), hanging: 360 } } }
+            }))
+          };
+        })
       ]
     },
     sections: documentSections

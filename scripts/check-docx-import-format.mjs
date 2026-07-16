@@ -53,6 +53,9 @@ async function buildFormattedDocxFixture() {
   <w:abstractNum w:abstractNumId="11">
     <w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/></w:lvl>
   </w:abstractNum>
+  <w:abstractNum w:abstractNumId="12">
+    <w:lvl w:ilvl="0"><w:start w:val="5"/><w:numFmt w:val="upperRoman"/></w:lvl>
+  </w:abstractNum>
   <w:num w:numId="7"><w:abstractNumId w:val="10"/></w:num>
   <w:num w:numId="8"><w:abstractNumId w:val="11"/></w:num>
   <w:num w:numId="9">
@@ -60,6 +63,10 @@ async function buildFormattedDocxFixture() {
     <w:lvlOverride w:ilvl="0"><w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/></w:lvl></w:lvlOverride>
   </w:num>
   <w:num w:numId="10"><w:abstractNumId w:val="10"/></w:num>
+  <w:num w:numId="11">
+    <w:abstractNumId w:val="12"/>
+    <w:lvlOverride w:ilvl="0"><w:startOverride w:val="7"/></w:lvlOverride>
+  </w:num>
 </w:numbering>`
   );
   zip.folder("word").file(
@@ -179,6 +186,8 @@ async function buildFormattedDocxFixture() {
     <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="8"/></w:numPr></w:pPr><w:r><w:t>Bullet item</w:t></w:r></w:p>
     <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="9"/></w:numPr></w:pPr><w:r><w:t>Override ordered item</w:t></w:r></w:p>
     <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="10"/></w:numPr></w:pPr><w:r><w:t>Restart ordered item</w:t></w:r></w:p>
+    <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="11"/></w:numPr></w:pPr><w:r><w:t>Started Roman item 1</w:t></w:r></w:p>
+    <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="11"/></w:numPr></w:pPr><w:r><w:t>Started Roman item 2</w:t></w:r></w:p>
     <w:p>
       <w:r>
         <w:drawing>
@@ -532,6 +541,8 @@ assert.match(imported.content, /<img[^>]+style="[^"]*width:\s*602px;\s*height:\s
 assert.match(imported.content, /<ol data-list-format="decimal" style="list-style-type:\s*decimal"><li>Ordered item 1<ol data-list-format="lowerLetter" style="list-style-type:\s*lower-alpha"><li>Nested ordered item<\/li><\/ol><\/li><li>Ordered item 2<\/li><\/ol>/);
 assert.match(imported.content, /<ul><li>Bullet item<\/li><\/ul>/);
 assert.match(imported.content, /<ol data-list-format="decimal"[^>]*><li>Override ordered item<\/li><\/ol><ol data-list-format="decimal"[^>]*><li>Restart ordered item<\/li><\/ol>/);
+// 中文注解：具体编号实例的 startOverride 必须覆盖抽象层级的 start=5，并进入在线 ol 的标准 start 属性。
+assert.match(imported.content, /<ol start="7" data-list-format="upperRoman" style="list-style-type:\s*upper-roman"><li>Started Roman item 1<\/li><li>Started Roman item 2<\/li><\/ol>/);
 assert.match(imported.content, /<td[^>]*><p[^>]*>Import Cell 1<\/p><ol data-list-format="decimal"[^>]*><li>Table ordered item<\/li><\/ol><\/td>/);
 assert.match(imported.content, /<td colspan="2" rowspan="2"[^>]*><p[^>]*>Merged approval<\/p><\/td><td[^>]*><p[^>]*>Approved<\/p><\/td>/);
 assert.deepEqual(imported.pageLayout, {
@@ -594,6 +605,7 @@ assert.match(roundTripColumnsXml, /<w:top w:val="double" w:color="1F4E79" w:sz="
 assert.match(roundTripColumnsXml, /<w:vAlign w:val="center"\/>/);
 const roundTripZip = await JSZip.loadAsync(roundTripBuffer);
 const roundTripXml = await roundTripZip.file("word/document.xml")?.async("string") || "";
+const roundTripNumberingXml = await roundTripZip.file("word/numbering.xml")?.async("string") || "";
 const decoratedRoundTripXml = (roundTripXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || [])
   .find((run) => run.includes(">斜体下划线删除线文本</w:t>")) || "";
 assert.match(decoratedRoundTripXml, /<w:i\/>/);
@@ -602,6 +614,8 @@ assert.match(decoratedRoundTripXml, /<w:strike\/>/);
 assert.match(roundTripXml, /<w:gridSpan w:val="2"\/>/);
 assert.match(roundTripXml, /<w:vMerge w:val="restart"\/>/);
 assert.match(roundTripXml, /<w:vMerge w:val="continue"\/>/);
+assert.match(roundTripNumberingXml, /<w:start w:val="7"\/>/);
+assert.match(roundTripNumberingXml, /<w:numFmt w:val="upperRoman"\/>/);
 // 中文注解：高级字符格式必须在导入后再次导出为 Word 原生属性，不能只停留为浏览器视觉样式。
 assert.match(roundTripXml, /<w:highlight w:val="yellow"\/>/);
 const darkCyanHighlightRoundTripXml = (roundTripXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("Dark cyan highlight")) || "";
@@ -673,6 +687,7 @@ assert.match(roundTripImported.content, /text-transform:\s*uppercase/);
 assert.match(roundTripImported.content, /font-variant-caps:\s*small-caps/);
 assert.match(roundTripImported.content, /--word-text-border:\s*double,12,C00000,2/i);
 assert.match(roundTripImported.content, /<ol data-list-format="decimal"[^>]*>[\s\S]*?<ol data-list-format="lowerLetter" style="list-style-type:\s*lower-alpha">[\s\S]*?Nested ordered item/);
+assert.match(roundTripImported.content, /<ol start="7" data-list-format="upperRoman"[^>]*>[\s\S]*?Started Roman item 1/);
 assert.match(roundTripImported.content, /<p[^>]+data-keep-next="true"[^>]+data-keep-lines="true"[^>]+data-page-break-before="true"[^>]+data-widow-control="true"[^>]*>[\s\S]*?Pagination controlled paragraph[\s\S]*?<\/p>/);
 assert.match(roundTripImported.content, /<p[^>]+data-widow-control="false"[^>]*>[\s\S]*?Widow control disabled paragraph[\s\S]*?<\/p>/);
 const roundTripImportedTabParagraph = (roundTripImported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || [])

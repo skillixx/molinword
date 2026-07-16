@@ -49,6 +49,7 @@ const content = `
     <li>Ordered item 2</li>
   </ol>
   <ol data-list-format="upperRoman" style="list-style-type:upper-roman"><li>Roman item 1</li><li>Roman item 2</li></ol>
+  <ol start="5" data-list-format="upperLetter" style="list-style-type:upper-alpha"><li>Started letter item</li></ol>
   <ul><li>Bullet item</li></ul>
   <p>图片导出测试</p>
   <img src="data:image/png;base64,${tinyPngBase64}" style="width:120px;max-width:100%;height:auto" alt="export image" />
@@ -306,7 +307,7 @@ function listInfoForText(text) {
   };
 }
 
-function numberFormatForList({ numberId, level }) {
+function numberingLevelXml({ numberId, level }) {
   const numberXml = [...numberingXml.matchAll(/<w:num w:numId="(\d+)">([\s\S]*?)<\/w:num>/g)]
     .find((match) => match[1] === numberId)?.[2] || "";
   const abstractId = numberXml.match(/<w:abstractNumId w:val="(\d+)"\/>/)?.[1];
@@ -314,13 +315,22 @@ function numberFormatForList({ numberId, level }) {
     .find((match) => match[1] === abstractId)?.[2] || "";
   const levelXml = [...abstractXml.matchAll(/<w:lvl w:ilvl="(\d+)"[^>]*>([\s\S]*?)<\/w:lvl>/g)]
     .find((match) => Number(match[1]) === level)?.[2] || "";
-  return levelXml.match(/<w:numFmt w:val="([^"]+)"\/>/)?.[1];
+  return levelXml;
+}
+
+function numberFormatForList(list) {
+  return numberingLevelXml(list).match(/<w:numFmt w:val="([^"]+)"\/>/)?.[1];
+}
+
+function numberStartForList(list) {
+  return Number(numberingLevelXml(list).match(/<w:start w:val="(\d+)"\/>/)?.[1] || 1);
 }
 
 const orderedItem = listInfoForText("Ordered item 1");
 const nestedOrderedItem = listInfoForText("Nested ordered item");
 const bulletItem = listInfoForText("Bullet item");
 const romanItem = listInfoForText("Roman item 1");
+const startedLetterItem = listInfoForText("Started letter item");
 const tableListA = listInfoForText("Table list A");
 const tableListB = listInfoForText("Table list B");
 assert.equal(orderedItem.level, 0);
@@ -335,6 +345,9 @@ assert.equal(numberFormatForList(orderedItem), "decimal");
 assert.equal(numberFormatForList(nestedOrderedItem), "decimal");
 assert.equal(numberFormatForList(bulletItem), "bullet");
 assert.equal(numberFormatForList(romanItem), "upperRoman");
+assert.equal(numberFormatForList(startedLetterItem), "upperLetter");
+// 中文注解：起始值必须写入该列表实际引用的抽象编号层级，不能只保留在网页样式里。
+assert.equal(numberStartForList(startedLetterItem), 5);
 
 // 中文注解：图片必须进入 DOCX 媒体目录并建立 image relationship，避免导出文件只剩占位文本。
 assert.match(documentXml, /<w:drawing>/);

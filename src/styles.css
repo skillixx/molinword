@@ -1614,6 +1614,36 @@ textarea {
   outline: none;
 }
 
+.list-start-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 34px;
+  padding: 0 7px;
+  border: 1px solid #dfe5eb;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #245f55;
+  font-size: 13px;
+}
+
+.list-start-control input {
+  width: 54px;
+  min-height: 28px;
+  border: 0;
+  border-left: 1px solid #e7ebef;
+  padding-left: 7px;
+  background: transparent;
+  color: inherit;
+  outline: none;
+  font: inherit;
+}
+
+.list-start-control:has(input:disabled) {
+  color: #9aa5af;
+  background: #f7f8f9;
+}
+
 .hidden-file-input {
   display: none;
 }

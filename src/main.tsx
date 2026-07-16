@@ -3548,6 +3548,21 @@ function Editor(props: {
     setSelectionHint(applied ? `已设置编号格式为${label}。` : "编号格式设置失败，请重新选择列表。");
   };
 
+  const applyOrderedListStart = (rawValue: string) => {
+    if (!editor?.isActive("orderedList")) {
+      setSelectionHint("请先把光标放到编号列表中。");
+      return;
+    }
+    const parsed = Number(rawValue);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 32767) {
+      setSelectionHint("起始编号请输入 1 到 32767 之间的整数。");
+      return;
+    }
+    // 中文注解：直接更新 orderedList 的标准 start 属性，编辑态、分页克隆和 DOCX 导出共用同一个语义值。
+    const applied = editor.chain().focus().updateAttributes("orderedList", { start: parsed }).run();
+    setSelectionHint(applied ? `编号已从 ${parsed} 开始。` : "起始编号设置失败，请重新选择列表。");
+  };
+
   const applyParagraphAlignment = (alignment: "left" | "center" | "right" | "justify", label: string) => {
     if (!editor) return;
     const applied = (editor.chain().focus() as unknown as { setParagraphAlignment: (value: string) => { run: () => boolean } }).setParagraphAlignment(alignment).run();
@@ -4050,6 +4065,18 @@ function Editor(props: {
             <button className={editor?.isActive("bulletList") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleBulletList().run()} title="项目符号列表"><List size={16} />列表</button>
             <button className={editor?.isActive("orderedList") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleOrderedList().run()} title="编号列表"><ListOrdered size={16} />编号</button>
             <FormatSelect title="设置当前编号列表的编号格式" placeholder="编号格式" options={orderedListFormatOptions} icon={<ListOrdered size={16} />} disabled={!editor?.isActive("orderedList")} onSelect={(value, label) => applyOrderedListFormat(value, label)} />
+            <label className="list-start-control" title="设置当前编号列表的起始编号">
+              <span>起始</span>
+              <input
+                aria-label="编号起始值"
+                type="number"
+                min="1"
+                max="32767"
+                value={editor?.isActive("orderedList") ? String(editor.getAttributes("orderedList").start || 1) : ""}
+                disabled={!editor?.isActive("orderedList")}
+                onChange={(event) => applyOrderedListStart(event.target.value)}
+              />
+            </label>
             <button onClick={() => editor?.chain().focus().insertContent({ type: "docxTab", attrs: { positionTwip: 720, alignment: "left" } }).run()} title="插入制表符">制表位</button>
             <span className="format-divider" />
             <button onClick={() => editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()} title="插入 3x3 表格"><TableIcon size={16} />表格</button>

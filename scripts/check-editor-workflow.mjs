@@ -271,6 +271,7 @@ try {
   await page.getByLabel("右缩进", { exact: true }).selectOption("14.17pt");
   await selectEditorText("第二个编号项");
   await page.getByLabel("编号格式", { exact: true }).selectOption("upperRoman");
+  await page.getByLabel("编号起始值", { exact: true }).fill("4");
   await selectEditorText("all Caps Format");
   await page.getByLabel("字母格式", { exact: true }).selectOption("uppercase");
   await selectEditorText("small Caps Format");
@@ -291,7 +292,7 @@ try {
   assert.match(textBorderHtml, /padding(?:-top)?:\s*1\.33px/i);
   assert.match(advancedFormatHtml, /<p[^>]+style="[^"]*margin-left:\s*28\.35pt[^"]*text-indent:\s*-28\.35pt[^"]*"[^>]*>[\s\S]*?悬挂缩进工具内容[\s\S]*?<\/p>/);
   assert.match(advancedFormatHtml, /<p[^>]+style="[^"]*margin-left:\s*28\.35pt[^"]*margin-right:\s*14\.17pt[^"]*"[^>]*>[\s\S]*?段落左右缩进工具内容[\s\S]*?<\/p>/);
-  assert.match(advancedFormatHtml, /<ol[^>]+data-list-format="upperRoman"[^>]+style="[^"]*list-style-type:\s*upper-roman/);
+  assert.match(advancedFormatHtml, /<ol(?=[^>]*start="4")(?=[^>]*data-list-format="upperRoman")(?=[^>]*style="[^"]*list-style-type:\s*upper-roman)[^>]*>/);
   assert.match(advancedFormatHtml, /<span[^>]+style="[^"]*text-transform:\s*uppercase[^"]*"[^>]*>all Caps Format<\/span>/);
   assert.match(advancedFormatHtml, /<span[^>]+style="[^"]*font-variant-caps:\s*small-caps[^"]*"[^>]*>small Caps Format<\/span>/);
   await selectEditorText("链接工具");
@@ -567,6 +568,7 @@ try {
   assert.match(storedDocument.content, /text-indent:\s*-28\.35pt/);
   assert.match(storedDocument.content, /margin-right:\s*14\.17pt/);
   assert.match(storedDocument.content, /data-list-format="upperRoman"/);
+  assert.match(storedDocument.content, /<ol(?=[^>]*start="4")(?=[^>]*data-list-format="upperRoman")[^>]*>/);
   assert.match(storedDocument.content, /text-transform:\s*uppercase/);
   assert.match(storedDocument.content, /font-variant-caps:\s*small-caps/);
   assert.match(storedDocument.content, /data-highlight="darkCyan"/);
@@ -751,6 +753,7 @@ try {
   const romanAbstractId = romanNumberXml.match(/<w:abstractNumId w:val="(\d+)"\/>/)?.[1] || "";
   const romanAbstractXml = [...numberingXml.matchAll(/<w:abstractNum w:abstractNumId="(\d+)"[^>]*>([\s\S]*?)<\/w:abstractNum>/g)].find((match) => match[1] === romanAbstractId)?.[2] || "";
   assert.match(romanAbstractXml, /<w:lvl[^>]+w:ilvl="0"[^>]*>[\s\S]*?<w:numFmt w:val="upperRoman"\/>/);
+  assert.match(romanAbstractXml, /<w:lvl[^>]+w:ilvl="0"[^>]*>[\s\S]*?<w:start w:val="4"\/>/);
   const allCapsRun = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("all Caps Format")) || "";
   const smallCapsRun = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("small Caps Format")) || "";
   assert.match(allCapsRun, /<w:caps\/>/);
@@ -1016,7 +1019,7 @@ try {
   assert.equal(result.listMarginLeft, "48px");
   assert.equal(result.sourceListItemMarginBottom, "5.33px");
   assert.equal(result.firstFragmentMarginBottom, "0px");
-  assert.equal(result.secondListStart, "2");
+  assert.equal(result.secondListStart, "5");
   assert.equal(result.sourceOrderedListStyle, "upper-roman");
   assert.equal(result.previewOrderedListStyle, "upper-roman");
   assert.equal(result.previewListText, result.sourceListText);
