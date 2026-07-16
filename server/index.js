@@ -10,6 +10,7 @@ import JSZip from "jszip";
 import mammoth from "mammoth";
 import { Client as MinioClient } from "minio";
 import multer from "multer";
+import { normalizeUploadedFileName } from "./upload-file-name.js";
 import mysql from "mysql2/promise";
 import sanitizeHtml from "sanitize-html";
 const require = createRequire(import.meta.url);
@@ -320,7 +321,11 @@ const pageImageUpload = multer({
 
 function receiveImportedDocument(request, response, next) {
   documentUpload.single("file")(request, response, (error) => {
-    if (!error) return next();
+    if (!error) {
+      // 中文注解：在扩展名判断、标题生成和文件归档之前统一修正 multipart 文件名编码。
+      if (request.file) request.file.originalname = normalizeUploadedFileName(request.file.originalname);
+      return next();
+    }
     if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {
       response.status(400).json({ message: "文件不能超过 15MB。" });
       return;
@@ -2363,7 +2368,9 @@ function legacyDocTextToHtml(value = "") {
     .filter(Boolean)
     .map((line) => {
       const tag = /^(?:[一二三四五六七八九十]+[、.]|第[一二三四五六七八九十]+[章节]|\d+[、.])/.test(line) ? "h2" : "p";
-      return `<${tag}>${escapeHtml(line)}</${tag}>`;
+      const escapedLine = escapeHtml(line);
+      // 中文注解：旧版 DOC 提取器不返回字体颜色；标题按 Word 默认黑色落库，避免继承在线编辑器的墨绿色模板色。
+      return tag === "h2" ? `<h2><span style="color: #000000">${escapedLine}</span></h2>` : `<p>${escapedLine}</p>`;
     })
     .join("") || "<p></p>";
 }
@@ -5043,7 +5050,7 @@ app.post("/api/ai/polish", async (request, response) => {
     });
   }
 });
-export { createDocxBuffer, parseImportedDocument, parseStyledDocxToHtml, sanitizeImportedHtml };
+export { createDocxBuffer, legacyDocTextToHtml, parseImportedDocument, parseStyledDocxToHtml, sanitizeImportedHtml };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   app.listen(port, "127.0.0.1", () => {

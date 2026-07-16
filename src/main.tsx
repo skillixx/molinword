@@ -70,6 +70,7 @@ type AiAction = "continue" | "expand" | "shorten" | "correct" | "polish" | "form
 type AiApplyMode = "replace" | "insert";
 type TextCaseMode = "upper" | "lower" | "title";
 type EditorViewMode = "edit" | "page";
+type RibbonTab = "home" | "format" | "insert" | "layout" | "review" | "document";
 type PreviewFootnote = { id: number; text: string };
 type EditorComment = { id: number; text: string; author: string; initials: string; date: string; from: number; to: number; excerpt: string };
 type EditorRevision = { id: number; type: "insert" | "delete"; author: string; date: string; from: number; to: number; text: string };
@@ -1127,6 +1128,13 @@ function FormatSelect(props: {
       </select>
     </label>
   );
+}
+
+function RibbonGroup(props: { label: string; children: React.ReactNode; className?: string }) {
+  return <section className={`ribbon-group${props.className ? ` ${props.className}` : ""}`}>
+    <div className="ribbon-group-body">{props.children}</div>
+    <span className="ribbon-group-label">{props.label}</span>
+  </section>;
 }
 
 function pickImportedStyles(styleText: string | null, allowedNames: string[]) {
@@ -3401,6 +3409,7 @@ function Editor(props: {
   const [hasSelection, setHasSelection] = React.useState(false);
   const [manualSavePending, setManualSavePending] = React.useState(false);
   const [viewMode, setViewMode] = React.useState<EditorViewMode>("edit");
+  const [activeRibbonTab, setActiveRibbonTab] = React.useState<RibbonTab>("home");
   const [previewPages, setPreviewPages] = React.useState<PreviewPage[]>(() => {
     const layout = normalizeDocumentPageLayout(props.pageLayout);
     const page = createPreviewPage(layout, 0, 0);
@@ -4609,6 +4618,26 @@ function Editor(props: {
         <aside className="outline-panel"><div className="section-title"><ListTree size={18} /><h2>文档大纲</h2><button className="panel-collapse-button" onClick={() => props.setIsOutlineCollapsed(!props.isOutlineCollapsed)} title={props.isOutlineCollapsed ? "展开文档大纲" : "收起文档大纲"} aria-label={props.isOutlineCollapsed ? "展开文档大纲" : "收起文档大纲"}>{props.isOutlineCollapsed ? <ChevronsRight size={17} /> : <ChevronsLeft size={17} />}</button></div><div className="outline-content">{props.outline.length === 0 ? <div className="empty-state">暂无大纲，请先生成或在正文中添加标题。</div> : props.outline.map((item) => <button key={item.id} className={item.level === 3 ? "outline-child" : ""} onMouseDown={(event) => event.preventDefault()} onClick={() => jumpToOutline(item)}>{item.title}</button>)}</div></aside>
         <section className="paper-panel">
           <div className={`format-bar${viewMode === "page" ? " preview-mode" : ""}`}>
+            <div className="ribbon-tabs" role="tablist" aria-label="编辑功能区">
+              {([
+                { id: "home", label: "开始" },
+                { id: "format", label: "格式" },
+                { id: "insert", label: "插入" },
+                { id: "layout", label: "布局" },
+                { id: "review", label: "审阅" },
+                { id: "document", label: "文档" }
+              ] as const).map((tab) => <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={activeRibbonTab === tab.id}
+                className={activeRibbonTab === tab.id ? "active-ribbon-tab" : ""}
+                disabled={viewMode === "page" && tab.id !== "document"}
+                onClick={() => setActiveRibbonTab(tab.id)}
+              >{tab.label}</button>)}
+            </div>
+            {activeRibbonTab === "document" ? <div className="ribbon-panel" role="tabpanel" aria-label="文档功能区">
+            <RibbonGroup label="视图与页面" className="ribbon-group-wide">
             <div className="view-mode-control" aria-label="文档视图">
               <button className={viewMode === "edit" ? "active-format" : ""} onClick={() => setViewMode("edit")} title="切换到可编辑的 A4 视图">编辑</button>
               <button className={viewMode === "page" ? "active-format" : ""} onClick={() => setViewMode("page")} title="按导出 Word 的页面尺寸预览分页">分页</button>
@@ -4707,15 +4736,23 @@ function Editor(props: {
                 </div> : null}
               </div>
             </details>
-            {viewMode === "edit" ? <>
-            <button onClick={() => editor?.chain().focus().undo().run()} disabled={!editor?.can().undo()} title="撤销" aria-label="撤销"><Undo2 size={16} /></button>
-            <button onClick={() => editor?.chain().focus().redo().run()} disabled={!editor?.can().redo()} title="重做" aria-label="重做"><Redo2 size={16} /></button>
+            </RibbonGroup>
+            {viewMode === "edit" ? <RibbonGroup label="分隔符">
             <button onClick={insertManualPageBreak} title="在当前位置插入分页符"><FileText size={16} />分页符</button>
             <button onClick={insertManualColumnBreak} title="在当前位置插入分栏符并进入下一栏"><Columns3 size={16} />分栏符</button>
             <button onClick={insertSectionBreak} title="从下一页开始新节并允许独立页面设置"><Rows3 size={16} />分节符</button>
-            <span className="format-divider" />
+            </RibbonGroup> : null}
+            </div> : null}
+            {viewMode === "edit" && activeRibbonTab === "home" ? <div className="ribbon-panel" role="tabpanel" aria-label="开始功能区">
+            <RibbonGroup label="历史">
+            <button onClick={() => editor?.chain().focus().undo().run()} disabled={!editor?.can().undo()} title="撤销" aria-label="撤销"><Undo2 size={16} /></button>
+            <button onClick={() => editor?.chain().focus().redo().run()} disabled={!editor?.can().redo()} title="重做" aria-label="重做"><Redo2 size={16} /></button>
+            </RibbonGroup>
+            <RibbonGroup label="样式">
             <FormatSelect title="设置当前段落样式" placeholder="段落样式" options={paragraphStyleOptions} onSelect={(value) => applyDocumentTextStyle(value)} />
             <FormatSelect title="设置当前段落的大纲级别" placeholder="大纲级别" options={outlineLevelOptions} icon={<ListTree size={16} />} onSelect={(value) => applyOutlineLevel(value)} />
+            </RibbonGroup>
+            <RibbonGroup label="基础格式" className="ribbon-group-medium">
             <button className={editor?.isActive("bold") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleBold().run()} title="加粗"><Bold size={16} />加粗</button>
             <button className={editor?.isActive("italic") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleItalic().run()} title="斜体"><Italic size={16} /></button>
             <button className={editor?.isActive("underline") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleUnderline().run()} title="下划线"><UnderlineIcon size={16} />下划线</button>
@@ -4728,42 +4765,8 @@ function Editor(props: {
               <button aria-label="确认超链接" onClick={applyHyperlink} title="确认超链接"><Check size={16} /></button>
               <button aria-label="关闭超链接编辑" onClick={() => setLinkEditorOpen(false)} title="关闭"><X size={16} /></button>
             </div> : null}
-            <button aria-label="添加或编辑批注" className={editor?.isActive("commentMark") ? "active-format" : ""} onClick={openCommentEditor} title="为选中文字添加批注，或修改当前批注"><PenLine size={16} />批注</button>
-            <button aria-label="标记新增修订" onClick={() => markSelectionRevision("insert")} disabled={!hasSelection} title="将选中文字标记为新增修订"><Plus size={16} />新增修订</button>
-            <button aria-label="标记删除修订" onClick={() => markSelectionRevision("delete")} disabled={!hasSelection} title="将选中文字标记为删除修订"><Trash2 size={16} />删除修订</button>
-            <button aria-label="插入或编辑脚注" className={editor?.isActive("footnoteReference") ? "active-format" : ""} onClick={openFootnoteEditor} title="在当前位置插入脚注，或修改选中的脚注"><FileText size={16} />脚注</button>
-            <button aria-label="插入或编辑尾注" className={editor?.isActive("endnoteReference") ? "active-format" : ""} onClick={openEndnoteEditor} title="在当前位置插入尾注，或修改选中的尾注"><FileText size={16} />尾注</button>
-            <button className={editor?.isActive("strike") ? "active-format" : ""} onClick={() => applyStrikeStyle(editor?.isActive("strike") ? "none" : "single", editor?.isActive("strike") ? "无删除线" : "单删除线")} title="删除线"><Strikethrough size={16} /></button>
-            <FormatSelect title="设置或清除选中文字的删除线样式" placeholder="删除线样式" options={strikeStyleOptions} icon={<Strikethrough size={16} />} onSelect={applyStrikeStyle} />
-            <button aria-label="黄色突出显示" className={editor?.isActive("textHighlight", { color: "yellow" }) ? "active-format" : ""} onClick={() => applyTextHighlight("yellow", "黄色突出显示")} title="黄色突出显示"><Highlighter size={16} /></button>
-            <FormatSelect title="设置或清除选中文字的 Word 突出显示颜色" placeholder="突出显示" options={highlightColorOptions} onSelect={(value, label) => applyTextHighlight(value, label)} />
-            <button aria-label="上标" className={editor?.isActive("superscriptText") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleMark("superscriptText").run()} title="上标"><Superscript size={16} /></button>
-            <button aria-label="下标" className={editor?.isActive("subscriptText") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleMark("subscriptText").run()} title="下标"><Subscript size={16} /></button>
-            <label className="format-select" title="设置选中文字字体">
-              <Type size={16} />
-              <select aria-label="字体" defaultValue="" onChange={(event) => { if (event.target.value) applySelectedTextStyle({ "font-family": event.target.value }, "字体"); event.target.value = ""; }}>
-                <option value="">字体</option>
-                {fontFamilyOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
-            </label>
-            <label className="format-select" title="设置选中文字字号">
-              <Type size={16} />
-              <select aria-label="字号" defaultValue="" onChange={(event) => { if (event.target.value) applySelectedTextStyle({ "font-size": event.target.value }, "字号"); event.target.value = ""; }}>
-                <option value="">字号</option>
-                {fontSizeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
-            </label>
-            <FormatSelect title="设置选中文字的字符间距" placeholder="字符间距" options={characterSpacingOptions} onSelect={(value, label) => applySelectedTextStyle({ "letter-spacing": value === "normal" ? undefined : value }, `字符间距：${label}`)} />
-            <FormatSelect title="设置选中文字相对基线的升降位置" placeholder="文字位置" options={baselinePositionOptions} onSelect={(value, label) => applySelectedTextStyle({ "vertical-align": value === "baseline" ? undefined : value }, `文字位置：${label}`)} />
-            <FormatSelect title="设置选中文字的非破坏性字母大小写格式" placeholder="字母格式" options={letterCaseFormatOptions} onSelect={(value, label) => applySelectedTextStyle({ "text-transform": value === "uppercase" ? "uppercase" : undefined, "font-variant-caps": value === "small-caps" ? "small-caps" : undefined }, label)} />
-            <FormatSelect title="插入控制英文复合词换行位置的特殊连字符" placeholder="特殊连字符" options={specialHyphenOptions} onSelect={insertSpecialHyphen} />
-            <label className="format-select" title="设置选中文字颜色">
-              <Type size={16} />
-              <select aria-label="文字颜色" defaultValue="" onChange={(event) => { if (event.target.value) applySelectedTextStyle({ color: event.target.value }, "颜色"); event.target.value = ""; }}>
-                <option value="">颜色</option>
-                {textColorOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
-            </label>
+            </RibbonGroup>
+            <RibbonGroup label="段落与列表" className="ribbon-group-wide">
             <button className={editor?.isActive("bulletList") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleBulletList().run()} title="项目符号列表"><List size={16} />列表</button>
             <button className={editor?.isActive("orderedList") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleOrderedList().run()} title="编号列表"><ListOrdered size={16} />编号</button>
             <FormatSelect title="设置当前编号列表的编号格式" placeholder="编号格式" options={orderedListFormatOptions} icon={<ListOrdered size={16} />} disabled={!editor?.isActive("orderedList")} onSelect={(value, label) => applyOrderedListFormat(value, label)} />
@@ -4780,7 +4783,27 @@ function Editor(props: {
               />
             </label>
             <button onClick={() => editor?.chain().focus().insertContent({ type: "docxTab", attrs: { positionTwip: 720, alignment: "left" } }).run()} title="插入制表符">制表位</button>
-            <span className="format-divider" />
+            </RibbonGroup>
+            </div> : null}
+            {viewMode === "edit" && activeRibbonTab === "format" ? <div className="ribbon-panel" role="tabpanel" aria-label="格式功能区">
+            <RibbonGroup label="字体与高级格式" className="ribbon-group-wide">
+            <button className={editor?.isActive("strike") ? "active-format" : ""} onClick={() => applyStrikeStyle(editor?.isActive("strike") ? "none" : "single", editor?.isActive("strike") ? "无删除线" : "单删除线")} title="删除线"><Strikethrough size={16} /></button>
+            <FormatSelect title="设置或清除选中文字的删除线样式" placeholder="删除线样式" options={strikeStyleOptions} icon={<Strikethrough size={16} />} onSelect={applyStrikeStyle} />
+            <button aria-label="黄色突出显示" className={editor?.isActive("textHighlight", { color: "yellow" }) ? "active-format" : ""} onClick={() => applyTextHighlight("yellow", "黄色突出显示")} title="黄色突出显示"><Highlighter size={16} /></button>
+            <FormatSelect title="设置或清除选中文字的 Word 突出显示颜色" placeholder="突出显示" options={highlightColorOptions} onSelect={(value, label) => applyTextHighlight(value, label)} />
+            <button aria-label="上标" className={editor?.isActive("superscriptText") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleMark("superscriptText").run()} title="上标"><Superscript size={16} /></button>
+            <button aria-label="下标" className={editor?.isActive("subscriptText") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleMark("subscriptText").run()} title="下标"><Subscript size={16} /></button>
+            <label className="format-select" title="设置选中文字字体"><Type size={16} /><select aria-label="字体" defaultValue="" onChange={(event) => { if (event.target.value) applySelectedTextStyle({ "font-family": event.target.value }, "字体"); event.target.value = ""; }}><option value="">字体</option>{fontFamilyOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+            <label className="format-select" title="设置选中文字字号"><Type size={16} /><select aria-label="字号" defaultValue="" onChange={(event) => { if (event.target.value) applySelectedTextStyle({ "font-size": event.target.value }, "字号"); event.target.value = ""; }}><option value="">字号</option>{fontSizeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+            <FormatSelect title="设置选中文字的字符间距" placeholder="字符间距" options={characterSpacingOptions} onSelect={(value, label) => applySelectedTextStyle({ "letter-spacing": value === "normal" ? undefined : value }, `字符间距：${label}`)} />
+            <FormatSelect title="设置选中文字相对基线的升降位置" placeholder="文字位置" options={baselinePositionOptions} onSelect={(value, label) => applySelectedTextStyle({ "vertical-align": value === "baseline" ? undefined : value }, `文字位置：${label}`)} />
+            <FormatSelect title="设置选中文字的非破坏性字母大小写格式" placeholder="字母格式" options={letterCaseFormatOptions} onSelect={(value, label) => applySelectedTextStyle({ "text-transform": value === "uppercase" ? "uppercase" : undefined, "font-variant-caps": value === "small-caps" ? "small-caps" : undefined }, label)} />
+            <FormatSelect title="插入控制英文复合词换行位置的特殊连字符" placeholder="特殊连字符" options={specialHyphenOptions} onSelect={insertSpecialHyphen} />
+            <label className="format-select" title="设置选中文字颜色"><Type size={16} /><select aria-label="文字颜色" defaultValue="" onChange={(event) => { if (event.target.value) applySelectedTextStyle({ color: event.target.value }, "颜色"); event.target.value = ""; }}><option value="">颜色</option>{textColorOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+            </RibbonGroup>
+            </div> : null}
+            {viewMode === "edit" && activeRibbonTab === "insert" ? <div className="ribbon-panel" role="tabpanel" aria-label="插入功能区">
+            <RibbonGroup label="表格" className="ribbon-group-wide">
             <button onClick={() => editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()} title="插入 3x3 表格"><TableIcon size={16} />表格</button>
             <button onClick={() => editor?.chain().focus().addRowAfter().run()} disabled={!editor?.isActive("table")} title="下方插入行">加行</button>
             <button onClick={() => editor?.chain().focus().addColumnAfter().run()} disabled={!editor?.isActive("table")} title="右侧插入列">加列</button>
@@ -4802,6 +4825,8 @@ function Editor(props: {
             <FormatSelect title="设置当前单元格内边距" placeholder="单元格边距" options={tableCellPaddingOptions} onSelect={(value, label) => updateCurrentTableCell({ margin: Number(value) }, `${label}单元格边距`)} />
             <FormatSelect title="设置当前单元格底色" placeholder="单元格底色" options={tableCellShadingOptions} onSelect={(value, label) => updateCurrentTableCell({ shading: value === "none" ? null : value }, `单元格${label}`)} />
             <FormatSelect title="设置当前单元格边框" placeholder="单元格边框" options={tableCellBorderOptions} onSelect={(value, label) => updateCurrentTableCell({ borderPreset: value }, `单元格${label}`)} />
+            </RibbonGroup>
+            <RibbonGroup label="图片" className="ribbon-group-wide">
             <button onClick={() => imageInputRef.current?.click()} title="插入图片"><ImageIcon size={16} />图片</button>
             {selectedImageAttributes ? <div className="image-format-control">
               <div className="image-layout-segments" aria-label="图片文字环绕方式">
@@ -4815,12 +4840,16 @@ function Editor(props: {
               <label className="image-aspect-lock"><input aria-label="锁定图片纵横比" type="checkbox" checked={imageAspectLocked} onChange={(event) => setImageAspectLocked(event.target.checked)} />锁定比例</label>
             </div> : null}
             <input ref={imageInputRef} className="hidden-file-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={(event) => { insertImageFile(event.target.files?.[0] || null); event.currentTarget.value = ""; }} />
-            <span className="format-divider" />
+            </RibbonGroup>
+            </div> : null}
+            {viewMode === "edit" && activeRibbonTab === "layout" ? <div className="ribbon-panel" role="tabpanel" aria-label="布局功能区">
+            <RibbonGroup label="对齐">
             <button onClick={() => applyParagraphAlignment("left", "左对齐")} title="左对齐"><AlignLeft size={16} /></button>
             <button onClick={() => applyParagraphAlignment("center", "居中对齐")} title="居中对齐"><AlignCenter size={16} /></button>
             <button onClick={() => applyParagraphAlignment("right", "右对齐")} title="右对齐"><AlignRight size={16} /></button>
             <button onClick={() => applyParagraphAlignment("justify", "两端对齐")} title="两端对齐"><AlignJustify size={16} /></button>
-            <span className="format-divider" />
+            </RibbonGroup>
+            <RibbonGroup label="段落间距" className="ribbon-group-wide">
             <FormatSelect title="设置当前段落或选区的行距" placeholder="行距" options={lineSpacingOptions} icon={<Rows3 size={16} />} onSelect={(value, label) => applyParagraphSpacing({ "line-height": value, "--word-line-rule": "auto" }, `${label}行距`)} />
             <FormatSelect title="设置当前段落或选区的段前间距" placeholder="段前" options={paragraphSpacingOptions} onSelect={(value) => applyParagraphSpacing({ "margin-top": value }, `段前 ${value}`)} />
             <FormatSelect title="设置当前段落或选区的段后间距" placeholder="段后" options={paragraphSpacingOptions} onSelect={(value) => applyParagraphSpacing({ "margin-bottom": value }, `段后 ${value}`)} />
@@ -4829,20 +4858,34 @@ function Editor(props: {
             <FormatSelect title="设置当前段落或选区的右缩进" placeholder="右缩进" options={paragraphSideIndentOptions} icon={<IndentDecrease size={16} />} onSelect={(value, label) => applyParagraphSpacing({ "margin-right": value }, `${label}右缩进`)} />
             <FormatSelect title="设置当前段落或选区的底纹" placeholder="段落底纹" options={paragraphShadingOptions} onSelect={(value, label) => applyParagraphAppearance({ shading: value === "none" ? null : JSON.stringify({ fill: value, color: "#000000", type: "clear" }) }, `段落${label}`)} />
             <FormatSelect title="设置当前段落或选区的边框" placeholder="段落边框" options={paragraphBorderOptions} onSelect={(value, label) => applyParagraphAppearance({ borders: paragraphBorderPreset(value) }, `段落${label}`)} />
+            </RibbonGroup>
+            <RibbonGroup label="分页控制" className="ribbon-group-medium">
             <button className={editor?.getAttributes("paragraph").keepNext || editor?.getAttributes("heading").keepNext ? "active-format" : ""} onClick={() => toggleParagraphPagination("keepNext", "与下段同页")} title="保持当前段落与下一段在同一页">与下段同页</button>
             <button className={editor?.getAttributes("paragraph").keepLines || editor?.getAttributes("heading").keepLines ? "active-format" : ""} onClick={() => toggleParagraphPagination("keepLines", "段中不分页")} title="避免当前段落被拆到两页">段中不分页</button>
             <button className={editor?.getAttributes("paragraph").pageBreakBefore || editor?.getAttributes("heading").pageBreakBefore ? "active-format" : ""} onClick={() => toggleParagraphPagination("pageBreakBefore", "段前分页")} title="让当前段落从新页开始">段前分页</button>
             <button className={(editor?.getAttributes("paragraph").widowControl ?? editor?.getAttributes("heading").widowControl) !== false ? "active-format" : ""} onClick={() => toggleParagraphPagination("widowControl", "孤行控制")} title="避免段落首行或末行单独出现在一页">孤行控制</button>
             <button className={editor?.getAttributes("paragraph").bidirectional || editor?.getAttributes("heading").bidirectional ? "active-format" : ""} onClick={() => toggleParagraphPagination("bidirectional", "从右到左排版")} title="切换当前段落或选区为从右到左排版">从右到左</button>
-            <span className="format-divider" />
+            </RibbonGroup>
+            <RibbonGroup label="缩进">
             <button onClick={() => editor?.chain().focus().decreaseIndent().run()} title="减少首行缩进"><IndentDecrease size={16} />减少首行</button>
             <button onClick={() => editor?.chain().focus().increaseIndent().run()} title="增加首行缩进"><IndentIncrease size={16} />首行缩进</button>
-            <span className="format-divider" />
+            </RibbonGroup>
+            </div> : null}
+            {viewMode === "edit" && activeRibbonTab === "review" ? <div className="ribbon-panel" role="tabpanel" aria-label="审阅功能区">
+            <RibbonGroup label="批注与修订" className="ribbon-group-medium">
+            <button aria-label="添加或编辑批注" className={editor?.isActive("commentMark") ? "active-format" : ""} onClick={openCommentEditor} title="为选中文字添加批注，或修改当前批注"><PenLine size={16} />批注</button>
+            <button aria-label="标记新增修订" onClick={() => markSelectionRevision("insert")} disabled={!hasSelection} title="将选中文字标记为新增修订"><Plus size={16} />新增修订</button>
+            <button aria-label="标记删除修订" onClick={() => markSelectionRevision("delete")} disabled={!hasSelection} title="将选中文字标记为删除修订"><Trash2 size={16} />删除修订</button>
+            <button aria-label="插入或编辑脚注" className={editor?.isActive("footnoteReference") ? "active-format" : ""} onClick={openFootnoteEditor} title="在当前位置插入脚注，或修改选中的脚注"><FileText size={16} />脚注</button>
+            <button aria-label="插入或编辑尾注" className={editor?.isActive("endnoteReference") ? "active-format" : ""} onClick={openEndnoteEditor} title="在当前位置插入尾注，或修改选中的尾注"><FileText size={16} />尾注</button>
+            </RibbonGroup>
+            <RibbonGroup label="文字处理" className="ribbon-group-medium">
             <button onClick={() => changeSelectedTextCase("upper")} title="将选中文字转为大写"><Type size={16} />大写</button>
             <button onClick={() => changeSelectedTextCase("lower")} title="将选中文字转为小写"><Type size={16} />小写</button>
             <button onClick={() => changeSelectedTextCase("title")} title="将选中英文转为首字母大写"><Type size={16} />首字母</button>
             <button onClick={clearSelectionFormat} title="清除当前选区格式"><Eraser size={16} />清除格式</button>
-            </> : null}
+            </RibbonGroup>
+            </div> : null}
           </div>
           {footnoteEditorOpen ? <div className="footnote-editor">
             <textarea aria-label="脚注内容" autoFocus maxLength={4000} rows={3} value={footnoteText} onChange={(event) => setFootnoteText(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") applyFootnote(); if (event.key === "Escape") setFootnoteEditorOpen(false); }} />

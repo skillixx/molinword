@@ -202,13 +202,18 @@ try {
     scrollWidth: bar.scrollWidth,
     flexWrap: getComputedStyle(bar).flexWrap
   }));
-  assert.ok(formatBarGeometry.height <= 72, `格式栏高度应稳定在单行范围，实际为 ${formatBarGeometry.height}px`);
-  assert.equal(formatBarGeometry.flexWrap, "nowrap", "格式栏控件应保持在同一行");
-  assert.ok(formatBarGeometry.scrollWidth > formatBarGeometry.clientWidth, "格式控件超出时应在单行工具栏内横向滚动");
+  // 中文注解：WPS 风格功能区通过标签和分组消除横向滚动，窄内容区允许组内自动换行。
+  assert.ok(formatBarGeometry.height <= 480, `功能区高度不应失控，实际为 ${formatBarGeometry.height}px`);
+  assert.equal(formatBarGeometry.scrollWidth, formatBarGeometry.clientWidth, "功能区不应产生横向滚动");
+  assert.deepEqual(await page.getByRole("tab").allTextContents(), ["开始", "格式", "插入", "布局", "审阅", "文档"]);
+  assert.equal(await page.getByRole("tab", { name: "开始" }).getAttribute("aria-selected"), "true");
   await editor.click();
   await editor.press("Control+A");
+  await page.getByRole("tab", { name: "格式" }).click();
   await page.getByLabel("字体", { exact: true }).selectOption("SimSun");
+  await page.getByRole("tab", { name: "开始" }).click();
   await page.getByTitle("斜体", { exact: true }).click();
+  await page.getByRole("tab", { name: "格式" }).click();
   await page.getByTitle("删除线", { exact: true }).click();
   const selectEditorText = async (target) => {
     await page.evaluate((text) => {
@@ -230,6 +235,23 @@ try {
     }, target);
     await page.waitForTimeout(50);
   };
+  const placeEditorCursorAtTextEnd = async (target) => {
+    await page.evaluate((text) => {
+      const root = document.querySelector(".word-editor");
+      const paragraph = Array.from(root?.querySelectorAll("p") || []).find((item) => item.textContent?.includes(text));
+      if (!root || !paragraph) throw new Error(`找不到编辑器段落：${text}`);
+      const range = document.createRange();
+      range.selectNodeContents(paragraph);
+      range.collapse(false);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      root.focus();
+      // 中文注解：切换功能区后显式同步段尾光标，避免工具按钮沿用切换前的旧选区。
+      document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+    }, target);
+    await page.waitForTimeout(50);
+  };
   const formattedHtml = await editor.innerHTML();
   const floatingEditorImage = editor.locator('img[alt="浮动审批标识"]');
   assert.equal(await floatingEditorImage.getAttribute("data-docx-wrap"), "square");
@@ -242,12 +264,14 @@ try {
   assert.match(formattedHtml, /color:\s*(?:#0000ff|rgb\(0, 0, 255\))/);
   assert.match(formattedHtml, /<em>/);
   assert.match(formattedHtml, /<s>/);
+  await page.getByRole("tab", { name: "开始" }).click();
   await page.getByRole("button", { name: "撤销", exact: true }).click();
   assert.doesNotMatch(await editor.innerHTML(), /<s>/);
   await page.getByRole("button", { name: "重做", exact: true }).click();
   assert.match(await editor.innerHTML(), /<s>/);
 
   // 中文注解：真实选择三个独立文本并点击工具栏，证明高级字符格式可编辑，而不只是被动展示导入结果。
+  await page.getByRole("tab", { name: "格式" }).click();
   await selectEditorText("突出显示工具");
   await page.getByRole("button", { name: "黄色突出显示", exact: true }).click();
   await selectEditorText("突出显示工具");
@@ -261,22 +285,28 @@ try {
   await selectEditorText("字符间距工具");
   await page.getByLabel("字符间距", { exact: true }).selectOption("2pt");
   await page.getByLabel("文字位置", { exact: true }).selectOption("3pt");
+  await page.getByRole("tab", { name: "开始" }).click();
   await selectEditorText("下划线样式工具");
   await page.getByLabel("下划线样式", { exact: true }).selectOption("double");
+  await page.getByRole("tab", { name: "格式" }).click();
   await selectEditorText("双删除线工具");
   await page.getByLabel("删除线样式", { exact: true }).selectOption("double");
+  await page.getByRole("tab", { name: "开始" }).click();
   await selectEditorText("字符边框工具");
   await page.getByLabel("字符边框", { exact: true }).selectOption("dashed");
+  await page.getByRole("tab", { name: "布局" }).click();
   await selectEditorText("悬挂缩进工具");
   await page.getByLabel("悬挂缩进", { exact: true }).selectOption("28.35pt");
   await selectEditorText("段落左右缩进工具");
   await page.getByLabel("左缩进", { exact: true }).selectOption("28.35pt");
   await page.getByLabel("右缩进", { exact: true }).selectOption("14.17pt");
+  await page.getByRole("tab", { name: "开始" }).click();
   await selectEditorText("第二个编号项");
   await page.getByLabel("编号格式", { exact: true }).selectOption("upperRoman");
   await page.getByLabel("编号起始值", { exact: true }).fill("4");
   await selectEditorText("大纲级别工具");
   await page.locator('label[title="设置当前段落的大纲级别"] select').selectOption("4");
+  await page.getByRole("tab", { name: "格式" }).click();
   await selectEditorText("all Caps Format");
   await page.getByLabel("字母格式", { exact: true }).selectOption("uppercase");
   await selectEditorText("small Caps Format");
@@ -302,6 +332,7 @@ try {
   assert.match(advancedFormatHtml, /<h4[^>]+data-outline-level="3"[^>]*>[\s\S]*?大纲级别工具[\s\S]*?<\/h4>/);
   assert.match(advancedFormatHtml, /<span[^>]+style="[^"]*text-transform:\s*uppercase[^"]*"[^>]*>all Caps Format<\/span>/);
   assert.match(advancedFormatHtml, /<span[^>]+style="[^"]*font-variant-caps:\s*small-caps[^"]*"[^>]*>small Caps Format<\/span>/);
+  await page.getByRole("tab", { name: "开始" }).click();
   await selectEditorText("链接工具");
   await page.getByRole("button", { name: "设置超链接", exact: true }).click();
   await page.getByLabel("超链接地址", { exact: true }).fill("https://example.com/office");
@@ -330,6 +361,7 @@ try {
   assert.equal(await editor.locator('.docx-tab[data-docx-tab="true"]').count(), 4);
   const editorTabWidths = await editor.locator(".docx-tab").evaluateAll((tabs) => tabs.map((tab) => tab.getBoundingClientRect().width));
   assert.ok(editorTabWidths.every((width) => width >= 2), "编辑器中的制表位应获得稳定可见宽度");
+  await page.getByRole("tab", { name: "布局" }).click();
   const paginationParagraphLocator = editor.locator("p").filter({ hasText: "分页控制段落" }).filter({ hasNotText: "前置" });
   await paginationParagraphLocator.click();
   await page.getByRole("button", { name: "与下段同页", exact: true }).click();
@@ -345,6 +377,7 @@ try {
   await page.getByRole("button", { name: "从右到左", exact: true }).click();
   assert.equal(await rtlParagraph.getAttribute("data-bidirectional"), "true");
   assert.equal(await rtlParagraph.evaluate((paragraph) => getComputedStyle(paragraph).direction), "rtl");
+  await page.getByRole("tab", { name: "格式" }).click();
   const specialHyphenParagraph = editor.locator("p").filter({ hasText: "特殊连字符工具" });
   await specialHyphenParagraph.click();
   await specialHyphenParagraph.press("End");
@@ -363,9 +396,9 @@ try {
   await editor.type("第二行");
   assert.match(await manualLineBreakParagraph.innerHTML(), /第一行[\s\S]*?<br[^>]*>[\s\S]*?第二行/);
 
+  await page.getByRole("tab", { name: "审阅" }).click();
   const footnoteParagraph = editor.locator("p").filter({ hasText: "脚注工具" });
-  await footnoteParagraph.click();
-  await footnoteParagraph.press("End");
+  await placeEditorCursorAtTextEnd("脚注工具");
   await page.getByRole("button", { name: "插入或编辑脚注", exact: true }).click();
   await page.getByLabel("脚注内容", { exact: true }).fill("审批依据说明");
   await page.getByRole("button", { name: "确认脚注", exact: true }).click();
@@ -375,8 +408,7 @@ try {
   assert.match(await sourceFootnoteReference.locator("xpath=ancestor::p[1]").textContent() || "", /脚注工具/);
 
   const endnoteParagraph = editor.locator("p").filter({ hasText: "尾注工具" });
-  await endnoteParagraph.click();
-  await endnoteParagraph.press("End");
+  await placeEditorCursorAtTextEnd("尾注工具");
   await page.getByRole("button", { name: "插入或编辑尾注", exact: true }).click();
   await page.getByLabel("尾注内容", { exact: true }).fill("文末法规来源");
   await page.getByRole("button", { name: "确认尾注", exact: true }).click();
@@ -425,6 +457,7 @@ try {
   assert.equal(await editor.locator("p").filter({ hasText: "拒绝删除工具" }).count(), 1);
   assert.equal(await editor.locator('.revision-delete').filter({ hasText: "拒绝删除工具" }).count(), 0);
 
+  await page.getByRole("tab", { name: "布局" }).click();
   const paragraphAppearance = editor.locator("p").filter({ hasText: "段落外观工具" });
   await paragraphAppearance.click();
   // 中文注解：先让 ProseMirror 完成点击选区同步，再打开原生下拉框，模拟真实连续操作并消除事件循环竞态。
@@ -457,6 +490,7 @@ try {
     paddingTop: "4px"
   });
 
+  await page.getByRole("tab", { name: "插入" }).click();
   const sourceTables = editor.locator("table");
   assert.equal(await sourceTables.count(), 2);
   const sourceGeometry = await sourceTables.last().evaluate((table) => ({
@@ -577,10 +611,12 @@ try {
     document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
   });
   await page.waitForTimeout(50);
+  await page.getByRole("tab", { name: "开始" }).click();
   await page.locator('label[title="设置当前段落样式"] select').selectOption("heading-2");
   assert.match(await editor.innerHTML(), /<h2[^>]*>.*保留小号红字.*<\/h2>/);
 
   await page.setViewportSize({ width: 1280, height: 720 });
+  await page.getByRole("tab", { name: "文档" }).click();
   await page.getByText("页面设置", { exact: true }).click();
   const desktopPageSettings = await page.locator(".page-layout-popover").boundingBox();
   // 中文注解：常见 1280×720 办公窗口也必须完整容纳页面设置，长表单通过面板内部滚动访问。
@@ -609,10 +645,10 @@ try {
   await page.getByLabel("偶数页页眉文字", { exact: true }).fill("偶数页项目页眉");
   await page.getByLabel("偶数页页脚文字", { exact: true }).fill("偶数页办公文档");
   await page.getByLabel("偶数页脚页码", { exact: true }).check();
-  await page.getByText("页面设置", { exact: true }).click();
+  await page.getByLabel("关闭页面设置", { exact: true }).click();
   await page.setViewportSize({ width: 1440, height: 900 });
 
-  // 中文注解：派发正文点击关闭页面设置浮层，再聚焦文末；工具栏换行时不依赖易被遮挡的坐标点击。
+  // 中文注解：页面设置已经通过关闭按钮收起，再聚焦文末；功能区换行时不依赖易被遮挡的坐标点击。
   await editor.evaluate((element) => element.click());
   await editor.focus();
   await editor.press("Control+End");
@@ -649,7 +685,7 @@ try {
   await page.getByLabel("默认页脚文字", { exact: true }).fill("第二节横向页脚");
   await page.getByText("首页不同", { exact: true }).click();
   await page.getByText("奇偶页不同", { exact: true }).click();
-  await page.getByText("页面设置", { exact: true }).click();
+  await page.getByLabel("关闭页面设置", { exact: true }).click();
 
   const secondSectionParagraph = editor.locator("p").filter({ hasText: "第二节横向内容" });
   await secondSectionParagraph.click();
@@ -660,6 +696,7 @@ try {
   assert.equal(await editorColumnBreak.count(), 1);
   assert.deepEqual(await editorColumnBreak.evaluate((marker) => ({ before: marker.previousElementSibling?.textContent || "", after: marker.nextElementSibling?.textContent || "" })), { before: "第二节横向内容", after: "分栏符后内容" });
 
+  await page.getByRole("tab", { name: "插入" }).click();
   await floatingEditorImage.click();
   await page.getByLabel("选中图片宽度", { exact: true }).fill("56");
   await page.getByRole("button", { name: "上下型", exact: true }).click();
@@ -995,6 +1032,7 @@ try {
   assert.match(largeRun, /<w:sz w:val="36"\/>/);
   assert.match(largeRun, /<w:color w:val="0000FF"\/>/);
 
+  await page.getByRole("tab", { name: "文档" }).click();
   await page.getByRole("button", { name: "分页", exact: true }).click();
   await page.locator(".page-sheet").first().waitFor();
   await page.waitForFunction(() => document.querySelectorAll(".page-sheet").length > 5);
@@ -1027,10 +1065,12 @@ try {
   assert.match(await previewCommentMark.evaluate((mark) => `${getComputedStyle(mark).backgroundColor} ${getComputedStyle(mark).borderBottomStyle}`), /rgb\(255, 244, 199\).*solid/);
   const previewInsertRevision = page.locator('.page-body .revision-insert[data-revision-id="1"]').first();
   await previewInsertRevision.waitFor();
-  assert.match(await previewInsertRevision.evaluate((mark) => `${getComputedStyle(mark).color} ${getComputedStyle(mark).borderBottomStyle}`), /rgb\(23, 106, 72\).*solid/);
+  const previewInsertRevisionStyle = await page.locator('.page-body .revision-insert[data-revision-id="1"]').evaluateAll((marks) => marks.map((mark) => `${getComputedStyle(mark).color} ${getComputedStyle(mark).borderBottomStyle}`).find((value) => value.includes("rgb(23, 106, 72)")) || "");
+  assert.match(previewInsertRevisionStyle, /rgb\(23, 106, 72\).*solid/);
   const previewDeleteRevision = page.locator('.page-body .revision-delete[data-revision-id="2"]').first();
   await previewDeleteRevision.waitFor();
-  assert.match(await previewDeleteRevision.evaluate((mark) => `${getComputedStyle(mark).color} ${getComputedStyle(mark).textDecorationLine}`), /rgb\(180, 35, 44\).*line-through/);
+  const previewDeleteRevisionStyle = await page.locator('.page-body .revision-delete[data-revision-id="2"]').evaluateAll((marks) => marks.map((mark) => `${getComputedStyle(mark).color} ${getComputedStyle(mark).textDecorationLine}`).find((value) => value.includes("rgb(180, 35, 44)")) || "");
+  assert.match(previewDeleteRevisionStyle, /rgb\(180, 35, 44\).*line-through/);
   const previewLink = page.locator('.page-body a[href="https://example.com/office"]').first();
   await previewLink.waitFor();
   await page.waitForFunction(() => Array.from(document.querySelectorAll('.page-body a[href="https://example.com/office"]')).some((link) => getComputedStyle(link).textDecorationLine.includes("underline")));
@@ -1404,6 +1444,7 @@ try {
   await page.reload({ waitUntil: "networkidle" });
   await page.getByText(storedDocument.title, { exact: true }).click();
   await editor.waitFor();
+  await page.getByRole("tab", { name: "文档" }).click();
   await page.getByRole("button", { name: "分页", exact: true }).click();
   await page.locator(".page-sheet").first().waitFor();
   await page.waitForFunction(() => Array.from(document.querySelectorAll(".page-sheet")).some((page) => page.getAttribute("data-section-index") === "1"));
