@@ -446,6 +446,8 @@ function sanitizeImportedHtml(value = "") {
         "font-size": [/^\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
         "font-weight": [/^(?:bold|[1-9]00)$/],
         "font-style": [/^italic$/],
+        "letter-spacing": [/^normal$/, /^-?\d+(?:\.\d+)?pt$/],
+        "vertical-align": [/^baseline$/, /^-?\d+(?:\.\d+)?pt$/],
         "background-color": [/^#[0-9a-f]{6}$/i],
         "text-align": [/^(?:left|center|right|justify)$/],
         "text-indent": [/^-?\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
@@ -717,6 +719,19 @@ function parseRunProperties(rPr, themeFonts = {}, themeColors = {}) {
   const strike = xmlChild(rPr, "w:strike") || xmlChild(rPr, "w:dstrike");
   const highlight = normalizeDocxHighlight(xmlVal(xmlChild(rPr, "w:highlight")));
   const verticalAlign = xmlVal(xmlChild(rPr, "w:vertAlign"));
+  const characterSpacingNode = xmlChild(rPr, "w:spacing");
+  const characterSpacing = Number(xmlVal(characterSpacingNode));
+  if (characterSpacingNode && Number.isFinite(characterSpacing)) {
+    // 中文注解：Word 字符间距使用二十分之一磅，转换为 CSS 磅值后浏览器换行宽度才能与导出接近。
+    styles["letter-spacing"] = characterSpacing === 0 ? "normal" : `${characterSpacing / 20}pt`;
+  }
+  const positionNode = xmlChild(rPr, "w:position");
+  const positionValue = String(xmlVal(positionNode) || "").trim();
+  const positionPt = /^-?\d+(?:\.\d+)?pt$/i.test(positionValue) ? Number.parseFloat(positionValue) : Number(positionValue) / 2;
+  if (positionNode && Number.isFinite(positionPt)) {
+    // 中文注解：Word 的数字位置值以半磅计；正值上移、负值下移，与 CSS vertical-align 的方向一致。
+    styles["vertical-align"] = positionPt === 0 ? "baseline" : `${positionPt}pt`;
+  }
   if (bold) {
     styles.$bold = wordToggleEnabled(bold) ? "1" : "0";
     if (styles.$bold === "1") styles["font-weight"] = "bold";
@@ -2129,6 +2144,24 @@ function cssLengthToTwip(value = "") {
   return undefined;
 }
 
+function cssSignedLengthToTwip(value = "") {
+  const text = String(value).trim();
+  const pt = text.match(/^(-?[\d.]+)pt$/i);
+  if (pt) return Math.round(Number(pt[1]) * 20);
+  const px = text.match(/^(-?[\d.]+)px$/i);
+  if (px) return Math.round((Number(px[1]) * 72 / 96) * 20);
+  return undefined;
+}
+
+function cssBaselinePositionToHalfPoints(value = "") {
+  const text = String(value).trim();
+  const pt = text.match(/^(-?[\d.]+)pt$/i);
+  if (pt) return Math.round(Number(pt[1]) * 2);
+  const px = text.match(/^(-?[\d.]+)px$/i);
+  if (px) return Math.round((Number(px[1]) * 72 / 96) * 2);
+  return undefined;
+}
+
 function fontFamilyFromCss(value = "") {
   return String(value).split(",")[0]?.replace(/^['"]|['"]$/g, "").trim() || "";
 }
@@ -2139,11 +2172,16 @@ function textRunStyleFromNode(node) {
   const color = normalizeDocxColor(styles.color);
   const size = cssSizeToHalfPoints(styles["font-size"]);
   const font = fontFamilyFromCss(styles["font-family"]);
+  const characterSpacing = styles["letter-spacing"] === "normal" ? 0 : cssSignedLengthToTwip(styles["letter-spacing"]);
+  const position = styles["vertical-align"] === "baseline" ? 0 : cssBaselinePositionToHalfPoints(styles["vertical-align"]);
   if (color) runStyle.color = color;
   if (size) runStyle.size = size;
   if (font) runStyle.font = font;
   if (styles["font-weight"] === "bold" || Number(styles["font-weight"]) >= 600) runStyle.bold = true;
   if (styles["font-style"] === "italic") runStyle.italics = true;
+  // 中文注解：零值也要进入扁平化标记，用于覆盖外层 span 的字距或基线设置；docx 会在最终文本运行中省略零值。
+  if (characterSpacing !== undefined) runStyle.characterSpacing = characterSpacing;
+  if (position !== undefined) runStyle.position = position;
   const highlight = normalizeDocxHighlight(node?.attribs?.["data-highlight"]);
   if (highlight) runStyle.highlight = highlight;
   return runStyle;
@@ -2233,6 +2271,8 @@ function textRunsFromNode(node, marks = {}) {
       color: marks.color,
       size: marks.size,
       font: marks.font,
+      characterSpacing: marks.characterSpacing,
+      position: marks.position,
       highlight: marks.highlight,
       superScript: marks.superScript,
       subScript: marks.subScript

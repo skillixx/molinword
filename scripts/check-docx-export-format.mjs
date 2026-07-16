@@ -15,6 +15,7 @@ const content = `
     <mark data-highlight="yellow" style="background-color:#FFFF00">突出显示文字</mark>
     <sup>上标文字</sup>
     <sub>下标文字</sub>
+    <span style="letter-spacing:2pt;vertical-align:3pt">Advanced character spacing</span>
   </p>
   <table>
     <tbody>
@@ -212,6 +213,9 @@ function paragraphXmlForText(text) {
 const headingOneXml = paragraphXmlForText("Heading one parity");
 assert.ok(headingOneXml, "heading one should exist");
 assert.match(headingOneXml, /<w:spacing[^>]+w:after="120"/);
+const advancedCharacterXml = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("Advanced character spacing")) || "";
+assert.match(advancedCharacterXml, /<w:spacing w:val="40"\/>/);
+assert.match(advancedCharacterXml, /<w:position w:val="6"\/>/);
 
 const spacingParagraphXml = paragraphXmlForText("Spacing paragraph");
 assert.ok(spacingParagraphXml, "spacing paragraph should exist");

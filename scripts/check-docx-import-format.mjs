@@ -123,6 +123,7 @@ async function buildFormattedDocxFixture() {
       <w:r><w:rPr><w:highlight w:val="yellow"/></w:rPr><w:t>Highlighted text</w:t></w:r>
       <w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:t>Superscript text</w:t></w:r>
       <w:r><w:rPr><w:vertAlign w:val="subscript"/></w:rPr><w:t>Subscript text</w:t></w:r>
+      <w:r><w:rPr><w:spacing w:val="40"/><w:position w:val="6"/></w:rPr><w:t>Expanded raised text</w:t></w:r>
     </w:p>
     <w:p><w:r><w:t>链接前 </w:t></w:r><w:hyperlink r:id="rIdHyperlink1"><w:r><w:rPr><w:u w:val="single"/><w:color w:val="0563C1"/></w:rPr><w:t>OpenAI documentation</w:t></w:r></w:hyperlink><w:r><w:t> 链接后</w:t></w:r></w:p>
     <w:p><w:pPr><w:pStyle w:val="BodyBased"/></w:pPr><w:r><w:t>Inherited spacing</w:t></w:r></w:p>
@@ -428,6 +429,7 @@ assert.match(imported.content, /<s><em><u>斜体下划线删除线文本<\/u><\/
 assert.match(imported.content, /<mark data-highlight="yellow" style="background-color:\s*#FFFF00">Highlighted text<\/mark>/);
 assert.match(imported.content, /<sup>Superscript text<\/sup>/);
 assert.match(imported.content, /<sub>Subscript text<\/sub>/);
+assert.match(imported.content, /<span[^>]+style="[^"]*letter-spacing:\s*2pt[^"]*vertical-align:\s*3pt[^"]*"[^>]*>Expanded raised text<\/span>/);
 assert.match(imported.content, /data-paragraph-shading="[^\"]*(?:&quot;fill&quot;|fill)[^\"]*FFF2CC[^\"]*"/);
 assert.match(imported.content, /data-paragraph-borders="[^\"]*(?:&quot;top&quot;|top)[^\"]*FF0000[^\"]*"/);
 assert.match(imported.content, /background-color:\s*#FFF2CC/i);
@@ -586,6 +588,9 @@ assert.match(roundTripXml, /<w:vMerge w:val="continue"\/>/);
 assert.match(roundTripXml, /<w:highlight w:val="yellow"\/>/);
 assert.match(roundTripXml, /<w:vertAlign w:val="superscript"\/>/);
 assert.match(roundTripXml, /<w:vertAlign w:val="subscript"\/>/);
+const advancedCharacterRoundTripXml = (roundTripXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("Expanded raised text")) || "";
+assert.match(advancedCharacterRoundTripXml, /<w:spacing w:val="40"\/>/);
+assert.match(advancedCharacterRoundTripXml, /<w:position w:val="6"\/>/);
 const paginationControlledRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Pagination controlled paragraph")) || "";
 assert.match(paginationControlledRoundTripXml, /<w:keepNext\/>/);
 assert.match(paginationControlledRoundTripXml, /<w:keepLines\/>/);
@@ -632,6 +637,7 @@ assert.match(roundTripImported.content, /<s><em><u>斜体下划线删除线文�
 assert.match(roundTripImported.content, /<mark data-highlight="yellow"[^>]*>Highlighted text<\/mark>/);
 assert.match(roundTripImported.content, /<sup>Superscript text<\/sup>/);
 assert.match(roundTripImported.content, /<sub>Subscript text<\/sub>/);
+assert.match(roundTripImported.content, /<span[^>]+style="[^"]*letter-spacing:\s*2pt[^"]*vertical-align:\s*3pt[^"]*"[^>]*>Expanded raised text<\/span>/);
 assert.match(roundTripImported.content, /<p[^>]+data-keep-next="true"[^>]+data-keep-lines="true"[^>]+data-page-break-before="true"[^>]+data-widow-control="true"[^>]*>[\s\S]*?Pagination controlled paragraph[\s\S]*?<\/p>/);
 assert.match(roundTripImported.content, /<p[^>]+data-widow-control="false"[^>]*>[\s\S]*?Widow control disabled paragraph[\s\S]*?<\/p>/);
 const roundTripImportedTabParagraph = (roundTripImported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || [])

@@ -752,13 +752,29 @@ const fontFamilyOptions = [
   { label: "Arial", value: "Arial" },
   { label: "Times New Roman", value: "Times New Roman" }
 ];
+const characterSpacingOptions = [
+  { label: "标准", value: "normal" },
+  { label: "紧缩 1 磅", value: "-1pt" },
+  { label: "紧缩 0.5 磅", value: "-0.5pt" },
+  { label: "加宽 0.5 磅", value: "0.5pt" },
+  { label: "加宽 1 磅", value: "1pt" },
+  { label: "加宽 2 磅", value: "2pt" },
+  { label: "加宽 3 磅", value: "3pt" }
+];
+const baselinePositionOptions = [
+  { label: "标准", value: "baseline" },
+  { label: "降低 3 磅", value: "-3pt" },
+  { label: "降低 1.5 磅", value: "-1.5pt" },
+  { label: "提升 1.5 磅", value: "1.5pt" },
+  { label: "提升 3 磅", value: "3pt" }
+];
 const paragraphStyleOptions = [
   { label: "正文", value: "paragraph" },
   { label: "标题 1", value: "heading-1" },
   { label: "标题 2", value: "heading-2" },
   { label: "标题 3", value: "heading-3" }
 ];
-const importedInlineStyleNames = ["font-family", "font-size", "color", "font-weight", "font-style"];
+const importedInlineStyleNames = ["font-family", "font-size", "color", "font-weight", "font-style", "letter-spacing", "vertical-align"];
 const importedBlockStyleNames = ["text-align", "text-indent", "margin-left", "line-height", "margin-top", "margin-bottom", "--word-line-rule"];
 const lineSpacingOptions = [
   { label: "单倍", value: "1" },
@@ -1005,7 +1021,7 @@ function FormatSelect(props: {
   return (
     <label className="format-select" title={props.title}>
       {props.icon}
-      <select defaultValue="" disabled={props.disabled} onChange={(event) => {
+      <select aria-label={props.placeholder} defaultValue="" disabled={props.disabled} onChange={(event) => {
         const value = event.target.value;
         const label = event.target.selectedOptions[0]?.text || value;
         if (value) props.onSelect(value, label);
@@ -3354,8 +3370,11 @@ function Editor(props: {
     editor.chain().focus().unsetAllMarks().clearNodes().run();
   };
 
-  const applySelectedTextStyle = (styles: Record<string, string>, label: string) => {
+  const applySelectedTextStyle = (styles: Record<string, string | undefined>, label: string) => {
     if (!editor) return;
+    const lastSelection = lastEditorSelectionRef.current;
+    // 中文注解：保留快捷键刚形成的当前选区；只有下拉框确实让选区折叠时，才恢复最后一次非空文字选区。
+    if (editor.state.selection.empty && lastSelection && lastSelection.from !== lastSelection.to) editor.commands.setTextSelection(lastSelection);
     const { from, to, empty } = editor.state.selection;
     if (!empty) {
       const markType = editor.state.schema.marks.importedTextStyle;
@@ -3875,6 +3894,8 @@ function Editor(props: {
                 {fontSizeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </label>
+            <FormatSelect title="设置选中文字的字符间距" placeholder="字符间距" options={characterSpacingOptions} onSelect={(value, label) => applySelectedTextStyle({ "letter-spacing": value === "normal" ? undefined : value }, `字符间距：${label}`)} />
+            <FormatSelect title="设置选中文字相对基线的升降位置" placeholder="文字位置" options={baselinePositionOptions} onSelect={(value, label) => applySelectedTextStyle({ "vertical-align": value === "baseline" ? undefined : value }, `文字位置：${label}`)} />
             <label className="format-select" title="设置选中文字颜色">
               <Type size={16} />
               <select aria-label="文字颜色" defaultValue="" onChange={(event) => { if (event.target.value) applySelectedTextStyle({ color: event.target.value }, "颜色"); event.target.value = ""; }}>

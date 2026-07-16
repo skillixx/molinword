@@ -32,7 +32,7 @@ const fixtureDocument = {
   tone: "正式",
   templateId: 3,
   outline: ["超长结构分页"],
-  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table data-table-width-type="dxa" data-table-width-value="7200" data-table-grid-width="7200" data-table-layout="fixed" style="width:480px;table-layout:fixed"><tbody><tr><th colwidth="120">审批阶段</th><th colwidth="360">状态</th></tr><tr><td colwidth="120">商务评审</td><td colwidth="360">通过</td></tr><tr><td colwidth="120">归档确认</td><td colwidth="360">完成</td></tr></tbody></table><p>段落外观工具</p><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p><p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab workflow<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p><p>Tab keyboard</p><p>${widowText}</p>`,
+  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具 字符间距工具</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table data-table-width-type="dxa" data-table-width-value="7200" data-table-grid-width="7200" data-table-layout="fixed" style="width:480px;table-layout:fixed"><tbody><tr><th colwidth="120">审批阶段</th><th colwidth="360">状态</th></tr><tr><td colwidth="120">商务评审</td><td colwidth="360">通过</td></tr><tr><td colwidth="120">归档确认</td><td colwidth="360">完成</td></tr></tbody></table><p>段落外观工具</p><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p><p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab workflow<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p><p>Tab keyboard</p><p>${widowText}</p>`,
   // 中文注解：模拟升级前数据库里的旧页面设置，确保真实历史文档开启高级页眉时不会崩溃。
   pageLayout: { headerText: "", footerText: "", pageNumberEnabled: false },
   status: "draft",
@@ -238,10 +238,14 @@ try {
   await page.getByRole("button", { name: "上标", exact: true }).click();
   await selectEditorText("下标工具");
   await page.getByRole("button", { name: "下标", exact: true }).click();
+  await selectEditorText("字符间距工具");
+  await page.getByLabel("字符间距", { exact: true }).selectOption("2pt");
+  await page.getByLabel("文字位置", { exact: true }).selectOption("3pt");
   const advancedFormatHtml = await editor.innerHTML();
   assert.match(advancedFormatHtml, /<mark[^>]+data-highlight="yellow"[^>]*>突出显示工具<\/mark>/);
   assert.match(advancedFormatHtml, /<sup>上标工具<\/sup>/);
   assert.match(advancedFormatHtml, /<sub>下标工具<\/sub>/);
+  assert.match(advancedFormatHtml, /<span[^>]+style="[^"]*letter-spacing:\s*2pt[^"]*vertical-align:\s*3pt[^"]*"[^>]*>字符间距工具<\/span>/);
   await selectEditorText("链接工具");
   await page.getByRole("button", { name: "设置超链接", exact: true }).click();
   await page.getByLabel("超链接地址", { exact: true }).fill("https://example.com/office");
@@ -283,6 +287,8 @@ try {
 
   const paragraphAppearance = editor.locator("p").filter({ hasText: "段落外观工具" });
   await paragraphAppearance.click();
+  // 中文注解：先让 ProseMirror 完成点击选区同步，再打开原生下拉框，模拟真实连续操作并消除事件循环竞态。
+  await page.waitForTimeout(50);
   await page.locator('label[title="设置当前段落或选区的底纹"] select').selectOption("#DDEBF7");
   await page.waitForFunction(() => Array.from(document.querySelectorAll(".word-editor p")).find((paragraph) => paragraph.textContent?.includes("段落外观工具"))?.getAttribute("data-paragraph-shading")?.includes("DDEBF7"));
   await page.locator('label[title="设置当前段落或选区的边框"] select').selectOption("dashed");
@@ -501,6 +507,8 @@ try {
   assert.match(storedDocument.content, /<h2[^>]*>.*保留小号红字.*<\/h2>/);
   assert.match(storedDocument.content, /font-family:\s*SimSun/);
   assert.match(storedDocument.content, /font-size:\s*12pt/);
+  assert.match(storedDocument.content, /letter-spacing:\s*2pt/);
+  assert.match(storedDocument.content, /vertical-align:\s*3pt/);
   assert.match(storedDocument.content, /<p[^>]+data-paragraph-shading="[^\"]*DDEBF7[^\"]*"[^>]+data-paragraph-borders="[^\"]*dashed[^\"]*"[^>]*>[\s\S]*?段落外观工具[\s\S]*?<\/p>/);
   assert.match(storedDocument.content, /data-section-break="nextPage"/);
   assert.match(storedDocument.content, /rowspan="2"/);
@@ -660,6 +668,9 @@ try {
   assert.match(documentXml, /<w:highlight w:val="yellow"\/>/);
   assert.match(documentXml, /<w:vertAlign w:val="superscript"\/>/);
   assert.match(documentXml, /<w:vertAlign w:val="subscript"\/>/);
+  const advancedCharacterRun = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("字符间距工具")) || "";
+  assert.match(advancedCharacterRun, /<w:spacing w:val="40"\/>/);
+  assert.match(advancedCharacterRun, /<w:position w:val="6"\/>/);
   const floatingBodyDrawing = (documentXml.match(/<w:drawing>[\s\S]*?<\/w:drawing>/g) || []).find((drawing) => drawing.includes("浮动审批标识")) || "";
   assert.match(floatingBodyDrawing, /<wp:anchor/);
   assert.match(floatingBodyDrawing, /<wp:positionH relativeFrom="column"><wp:align>left<\/wp:align><\/wp:positionH>/);
@@ -729,6 +740,14 @@ try {
     const style = getComputedStyle(paragraph);
     return { backgroundColor: style.backgroundColor, borderTopStyle: style.borderTopStyle, borderTopWidth: style.borderTopWidth, paddingTop: style.paddingTop };
   }), { backgroundColor: "rgb(221, 235, 247)", borderTopStyle: "dashed", borderTopWidth: "1px", paddingTop: "4px" });
+  const previewAdvancedCharacter = page.locator(".page-body span").filter({ hasText: "字符间距工具" }).first();
+  await previewAdvancedCharacter.waitFor();
+  const previewAdvancedStyle = await previewAdvancedCharacter.evaluate((span) => {
+    const style = getComputedStyle(span);
+    return { letterSpacing: Number.parseFloat(style.letterSpacing), verticalAlign: Number.parseFloat(style.verticalAlign) };
+  });
+  assert.ok(Math.abs(previewAdvancedStyle.letterSpacing - (2 * 96 / 72)) < 0.05);
+  assert.ok(Math.abs(previewAdvancedStyle.verticalAlign - (3 * 96 / 72)) < 0.05);
 
   const result = await page.evaluate(() => {
     const pages = Array.from(document.querySelectorAll(".page-sheet"));
