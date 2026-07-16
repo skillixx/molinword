@@ -207,6 +207,14 @@ try {
   assert.equal(formatBarGeometry.scrollWidth, formatBarGeometry.clientWidth, "功能区不应产生横向滚动");
   assert.deepEqual(await page.getByRole("tab").allTextContents(), ["开始", "格式", "插入", "布局", "审阅", "文档"]);
   assert.equal(await page.getByRole("tab", { name: "开始" }).getAttribute("aria-selected"), "true");
+  for (const ribbonTab of ["开始", "格式", "插入", "布局", "审阅", "文档"]) {
+    await page.getByRole("tab", { name: ribbonTab }).click();
+    const geometry = await page.locator(".format-bar").evaluate((bar) => ({ height: bar.getBoundingClientRect().height, clientWidth: bar.clientWidth, scrollWidth: bar.scrollWidth }));
+    assert.equal(geometry.scrollWidth, geometry.clientWidth, `${ribbonTab}功能区不应产生横向滚动`);
+    assert.ok(geometry.height <= 340, `${ribbonTab}功能区高度不应挤压正文，实际为 ${geometry.height}px`);
+  }
+  assert.equal(await page.getByText("选择表格后显示编辑工具", { exact: true }).count(), 0, "离开插入页签后不应残留表格上下文提示");
+  await page.getByRole("tab", { name: "开始" }).click();
   await editor.click();
   await editor.press("Control+A");
   await page.getByRole("tab", { name: "格式" }).click();
@@ -1465,13 +1473,31 @@ try {
   );
 
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "编辑", exact: true }).click();
+  for (const ribbonTab of ["开始", "格式", "插入", "布局", "审阅", "文档"]) {
+    await page.getByRole("tab", { name: ribbonTab }).click();
+    const geometry = await page.locator(".format-bar").evaluate((bar) => ({ clientWidth: bar.clientWidth, scrollWidth: bar.scrollWidth }));
+    assert.equal(geometry.scrollWidth, geometry.clientWidth, `移动端${ribbonTab}功能区不应产生横向滚动`);
+  }
+  await page.getByRole("tab", { name: "文档" }).click();
   const mobile = await page.evaluate(() => {
     const scroll = document.querySelector(".editor-scroll");
-    return { viewportWidth: document.documentElement.clientWidth, scrollClientWidth: scroll?.clientWidth || 0, scrollWidth: scroll?.scrollWidth || 0 };
+    const ribbon = document.querySelector(".format-bar");
+    const tabRows = new Set(Array.from(document.querySelectorAll(".ribbon-tabs [role='tab']")).map((tab) => Math.round(tab.getBoundingClientRect().top)));
+    return {
+      viewportWidth: document.documentElement.clientWidth,
+      scrollClientWidth: scroll?.clientWidth || 0,
+      scrollWidth: scroll?.scrollWidth || 0,
+      ribbonClientWidth: ribbon?.clientWidth || 0,
+      ribbonScrollWidth: ribbon?.scrollWidth || 0,
+      tabRowCount: tabRows.size
+    };
   });
   assert.equal(mobile.viewportWidth, 390);
   assert.ok(mobile.scrollClientWidth <= 390);
   assert.ok(mobile.scrollWidth > mobile.scrollClientWidth);
+  assert.equal(mobile.ribbonScrollWidth, mobile.ribbonClientWidth, "移动端功能区不应产生横向滚动");
+  assert.ok(mobile.tabRowCount <= 2, `移动端功能页签不应占用超过两行，实际为 ${mobile.tabRowCount} 行`);
   await page.getByText("页面设置", { exact: true }).click();
   const mobilePageSettings = await page.locator(".page-layout-popover").boundingBox();
   assert.ok(mobilePageSettings && mobilePageSettings.x >= 0 && mobilePageSettings.y >= 0);
