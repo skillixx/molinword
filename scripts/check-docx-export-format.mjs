@@ -47,6 +47,7 @@ const content = `
   <p data-widow-control="false">Widow control disabled paragraph</p>
   <p data-bidirectional="true" style="direction:rtl">RTL paragraph export</p>
   <p>Export inter\u00ADnational code\u20112026</p>
+  <p>Manual line one<br>Manual line two</p>
   <p data-paragraph-shading='{"fill":"#DDEBF7","color":"#000000","type":"clear"}' data-paragraph-borders='{"top":{"style":"single","size":8,"color":"#FF0000","space":4},"right":{"style":"dashed","size":6,"color":"#00AA00","space":3},"bottom":{"style":"double","size":12,"color":"#0000FF","space":2},"left":{"style":"nil","size":0,"color":"#000000","space":0},"between":{"style":"dotted","size":4,"color":"#888888","space":1}}' style="background-color:#DDEBF7;border-top:1.33px solid #FF0000;padding-top:5.33px">Paragraph appearance export</p>
   <p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab project<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Tab amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p>
   <p>查看 <a href="https://example.com/report?from=editor" target="_blank" rel="noopener noreferrer">Linked report</a></p>
@@ -278,6 +279,9 @@ const rtlParagraphXml = paragraphXmlForText("RTL paragraph export");
 assert.match(rtlParagraphXml, /<w:bidi\/>/);
 const specialHyphenParagraphXml = (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Export inter") && paragraph.includes("2026")) || "";
 assert.match(specialHyphenParagraphXml, /inter[\s\S]*?<w:softHyphen\/>[\s\S]*?national code[\s\S]*?<w:noBreakHyphen\/>[\s\S]*?2026/);
+const manualLineBreakParagraphXml = (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Manual line one") && paragraph.includes("Manual line two")) || "";
+// 中文注解：编辑器内的 Shift+Enter 必须导出为 Word 原生换行，不能丢失或拆成两个段落。
+assert.match(manualLineBreakParagraphXml, /Manual line one[\s\S]*?<w:br\/>[\s\S]*?Manual line two/);
 const appearanceParagraphXml = paragraphXmlForText("Paragraph appearance export");
 assert.match(appearanceParagraphXml, /<w:shd[^>]+w:fill="DDEBF7"/);
 assert.match(appearanceParagraphXml, /<w:pBdr>[\s\S]*<w:top[^>]+w:val="single"[^>]+w:color="FF0000"[^>]+w:sz="8"[^>]+w:space="4"/);

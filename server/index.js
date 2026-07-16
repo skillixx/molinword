@@ -2487,6 +2487,10 @@ function textRunsFromNode(node, marks = {}) {
     // 中文注解：在线制表位导出为真正的 w:tab，不能降级为空格，否则后续文字无法按段落制表位对齐。
     return [new TextRun({ children: [new Tab()] })];
   }
+  if (node.name === "br") {
+    // 中文注解：Tiptap 的 Shift+Enter 会保存为 br；必须导出为同一段落内的 w:br，避免两行文字被拼接。
+    return [new TextRun({ break: 1 })];
+  }
   if (node.type === "text") {
     const text = (node.data || "").replace(/\s+/g, " ");
     const specialHyphenChildren = /[\u00AD\u2011]/u.test(text)

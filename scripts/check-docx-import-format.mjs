@@ -154,6 +154,7 @@ async function buildFormattedDocxFixture() {
     <w:p><w:pPr><w:widowControl w:val="false"/></w:pPr><w:r><w:t>Widow control disabled paragraph</w:t></w:r></w:p>
     <w:p><w:pPr><w:bidi/></w:pPr><w:r><w:t>RTL paragraph source</w:t></w:r></w:p>
     <w:p><w:r><w:t>inter</w:t><w:softHyphen/><w:t>national code</w:t><w:noBreakHyphen/><w:t>2026</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Manual line one</w:t><w:br/><w:t>Manual line two</w:t></w:r></w:p>
     <w:p><w:pPr><w:shd w:val="clear" w:color="000000" w:fill="FFF2CC"/><w:pBdr><w:top w:val="single" w:sz="8" w:space="4" w:color="FF0000"/><w:right w:val="dashed" w:sz="6" w:space="3" w:color="00AA00"/><w:bottom w:val="double" w:sz="12" w:space="2" w:color="0000FF"/><w:left w:val="nil" w:sz="0" w:space="0" w:color="000000"/><w:between w:val="dotted" w:sz="4" w:space="1" w:color="888888"/></w:pBdr></w:pPr><w:r><w:t>Paragraph appearance</w:t></w:r></w:p>
     <w:p>
       <w:pPr><w:tabs><w:tab w:val="left" w:pos="1440"/><w:tab w:val="right" w:pos="5760"/></w:tabs></w:pPr>
@@ -508,6 +509,8 @@ assert.match(importedRtlParagraph, /data-bidirectional="true"/);
 assert.match(importedRtlParagraph, /direction:\s*rtl/);
 const importedSpecialHyphenParagraph = (imported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || []).find((paragraph) => paragraph.includes("inter") && paragraph.includes("2026")) || "";
 assert.equal(importedSpecialHyphenParagraph.replace(/<[^>]+>/g, ""), "inter\u00ADnational code\u20112026");
+const importedManualLineBreakParagraph = (imported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || []).find((paragraph) => paragraph.includes("Manual line one") && paragraph.includes("Manual line two")) || "";
+assert.match(importedManualLineBreakParagraph, /Manual line one[\s\S]*?<br\s*\/?\s*>[\s\S]*?Manual line two/);
 const importedTabParagraph = (imported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || [])
   .find((paragraph) => paragraph.includes("Tab project") && paragraph.includes("100.00")) || "";
 assert.match(importedTabParagraph, /data-tab-stops="[^\"]*1440[^\"]*5760[^\"]*"/);
@@ -679,6 +682,9 @@ const rtlRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g)
 assert.match(rtlRoundTripXml, /<w:bidi\/>/);
 const specialHyphenRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("inter") && paragraph.includes("2026")) || "";
 assert.match(specialHyphenRoundTripXml, /inter[\s\S]*?<w:softHyphen\/>[\s\S]*?national code[\s\S]*?<w:noBreakHyphen\/>[\s\S]*?2026/);
+const manualLineBreakRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Manual line one") && paragraph.includes("Manual line two")) || "";
+// 中文注解：导入的手动换行需在再次导出时继续保持同一段落内的 w:br。
+assert.match(manualLineBreakRoundTripXml, /Manual line one[\s\S]*?<w:br\/>[\s\S]*?Manual line two/);
 const customOutlineRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Custom outline level 4")) || "";
 const directOutlineRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Direct outline level 8")) || "";
 assert.match(customOutlineRoundTripXml, /<w:outlineLvl w:val="3"\/>/);
@@ -746,6 +752,8 @@ assert.match(roundTripRtlParagraph, /data-bidirectional="true"/);
 assert.match(roundTripRtlParagraph, /direction:\s*rtl/);
 const roundTripSpecialHyphenParagraph = (roundTripImported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || []).find((paragraph) => paragraph.includes("inter") && paragraph.includes("2026")) || "";
 assert.equal(roundTripSpecialHyphenParagraph.replace(/<[^>]+>/g, ""), "inter\u00ADnational code\u20112026");
+const roundTripManualLineBreakParagraph = (roundTripImported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || []).find((paragraph) => paragraph.includes("Manual line one") && paragraph.includes("Manual line two")) || "";
+assert.match(roundTripManualLineBreakParagraph, /Manual line one[\s\S]*?<br\s*\/?\s*>[\s\S]*?Manual line two/);
 assert.match(roundTripImported.content, /<h4[^>]+data-outline-level="3"[^>]*>[\s\S]*?Custom outline level 4/);
 assert.match(roundTripImported.content, /<p[^>]+data-outline-level="7"[^>]*>[\s\S]*?Direct outline level 8/);
 assert.match(roundTripImported.content, /分栏符前[\s\S]*?<\/p><div data-column-break="true" class="column-break-marker"><\/div><p[^>]*>[\s\S]*?分栏符后/);

@@ -32,7 +32,7 @@ const fixtureDocument = {
   tone: "正式",
   templateId: 3,
   outline: ["超长结构分页"],
-  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具 字符间距工具 下划线样式工具 字符边框工具 all Caps Format small Caps Format <mark data-highlight="yellow" style="background-color:#FFFF00">清除高亮工具</mark></p><p>悬挂缩进工具内容用于验证后续各行向右缩进并保持首行位置。</p><p>段落左右缩进工具内容用于验证正文可用行宽和分页位置。</p><p>RTL段落工具内容</p><p>特殊连字符工具</p><p>大纲级别工具</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table data-table-width-type="dxa" data-table-width-value="7200" data-table-grid-width="7200" data-table-layout="fixed" style="width:480px;table-layout:fixed"><tbody><tr><th colwidth="120">审批阶段</th><th colwidth="360">状态</th></tr><tr><td colwidth="120">商务评审</td><td colwidth="360">通过</td></tr><tr><td colwidth="120">归档确认</td><td colwidth="360">完成</td></tr></tbody></table><p>段落外观工具</p><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p><p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab workflow<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p><p>Tab keyboard</p><p>${widowText}</p>`,
+  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具 字符间距工具 下划线样式工具 字符边框工具 all Caps Format small Caps Format <mark data-highlight="yellow" style="background-color:#FFFF00">清除高亮工具</mark></p><p>悬挂缩进工具内容用于验证后续各行向右缩进并保持首行位置。</p><p>段落左右缩进工具内容用于验证正文可用行宽和分页位置。</p><p>RTL段落工具内容</p><p>特殊连字符工具</p><p>手动换行工具</p><p>大纲级别工具</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table data-table-width-type="dxa" data-table-width-value="7200" data-table-grid-width="7200" data-table-layout="fixed" style="width:480px;table-layout:fixed"><tbody><tr><th colwidth="120">审批阶段</th><th colwidth="360">状态</th></tr><tr><td colwidth="120">商务评审</td><td colwidth="360">通过</td></tr><tr><td colwidth="120">归档确认</td><td colwidth="360">完成</td></tr></tbody></table><p>段落外观工具</p><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p><p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab workflow<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p><p>Tab keyboard</p><p>${widowText}</p>`,
   // 中文注解：模拟升级前数据库里的旧页面设置，确保真实历史文档开启高级页眉时不会崩溃。
   pageLayout: { headerText: "", footerText: "", pageNumberEnabled: false },
   status: "draft",
@@ -351,6 +351,14 @@ try {
   await editor.type("2026");
   assert.equal(await specialHyphenParagraph.textContent(), "特殊连字符工具 inter\u00ADnational code\u20112026");
 
+  const manualLineBreakParagraph = editor.locator("p").filter({ hasText: "手动换行工具" });
+  await manualLineBreakParagraph.click();
+  await manualLineBreakParagraph.press("End");
+  await editor.type(" 第一行");
+  await page.keyboard.press("Shift+Enter");
+  await editor.type("第二行");
+  assert.match(await manualLineBreakParagraph.innerHTML(), /第一行[\s\S]*?<br[^>]*>[\s\S]*?第二行/);
+
   const paragraphAppearance = editor.locator("p").filter({ hasText: "段落外观工具" });
   await paragraphAppearance.click();
   // 中文注解：先让 ProseMirror 完成点击选区同步，再打开原生下拉框，模拟真实连续操作并消除事件循环竞态。
@@ -626,6 +634,7 @@ try {
   assert.match(storedDocument.content, /font-variant-caps:\s*small-caps/);
   assert.match(storedDocument.content, /data-highlight="darkCyan"/);
   assert.ok(storedDocument.content.includes("特殊连字符工具") && storedDocument.content.includes("\u00AD") && storedDocument.content.includes("\u2011"));
+  assert.match(storedDocument.content, /手动换行工具 第一行[\s\S]*?<br[^>]*>[\s\S]*?第二行/);
   assert.match(storedDocument.content, /<p[^>]+data-bidirectional="true"[^>]+style="[^"]*direction:\s*rtl[^"]*"[^>]*>[\s\S]*?RTL段落工具内容[\s\S]*?<\/p>/);
   assert.doesNotMatch(storedDocument.content, /<mark[^>]*>清除高亮工具<\/mark>/);
   assert.match(storedDocument.content, /<p[^>]+data-paragraph-shading="[^\"]*DDEBF7[^\"]*"[^>]+data-paragraph-borders="[^\"]*dashed[^\"]*"[^>]*>[\s\S]*?段落外观工具[\s\S]*?<\/p>/);
@@ -722,6 +731,7 @@ try {
   assert.match(reopenedHtml, /<p[^>]+data-paragraph-shading="[^\"]*DDEBF7[^\"]*"[^>]+data-paragraph-borders="[^\"]*dashed[^\"]*"[^>]*>[\s\S]*?段落外观工具[\s\S]*?<\/p>/);
   assert.match(reopenedHtml, /<p[^>]+data-bidirectional="true"[^>]+style="[^"]*direction:\s*rtl[^"]*"[^>]*>[\s\S]*?RTL段落工具内容[\s\S]*?<\/p>/);
   assert.ok(reopenedHtml.includes("特殊连字符工具") && reopenedHtml.includes("\u00AD") && reopenedHtml.includes("\u2011"));
+  assert.match(reopenedHtml, /手动换行工具 第一行[\s\S]*?<br[^>]*>[\s\S]*?第二行/);
   assert.match(reopenedHtml, /data-section-break="nextPage"/);
   assert.match(reopenedHtml, /第二节横向内容/);
   assert.match(reopenedHtml, /<div[^>]+data-column-break="true"[^>]*><\/div>/);
@@ -851,6 +861,8 @@ try {
   assert.match(rtlExportParagraph, /<w:bidi\/>/);
   const specialHyphenExportParagraph = (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("特殊连字符工具") && paragraph.includes("2026")) || "";
   assert.match(specialHyphenExportParagraph, /inter[\s\S]*?<w:softHyphen\/>[\s\S]*?national code[\s\S]*?<w:noBreakHyphen\/>[\s\S]*?2026/);
+  const manualLineBreakExportParagraph = (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("手动换行工具") && paragraph.includes("第二行")) || "";
+  assert.match(manualLineBreakExportParagraph, /第一行[\s\S]*?<w:br\/>[\s\S]*?第二行/);
   const appearanceParagraph = (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("段落外观工具")) || "";
   assert.match(appearanceParagraph, /<w:shd[^>]+w:fill="DDEBF7"/);
   for (const side of ["top", "right", "bottom", "left"]) {
@@ -1100,6 +1112,7 @@ try {
         };
       })(),
       specialHyphenPreviewText: Array.from(document.querySelectorAll(".page-body p")).find((paragraph) => paragraph.textContent?.includes("特殊连字符工具"))?.textContent || "",
+      manualLineBreakPreviewHtml: Array.from(document.querySelectorAll(".page-body p")).find((paragraph) => paragraph.textContent?.includes("手动换行工具"))?.innerHTML || "",
       widowFragmentLineCounts: Array.from(document.querySelectorAll(".page-body p")).filter((paragraph) => paragraph.textContent?.includes("孤行控制验证段落")).map((paragraph) => {
         const range = document.createRange();
         range.selectNodeContents(paragraph);
@@ -1178,6 +1191,7 @@ try {
   assert.equal(result.paginationControlKeepsNext, true, "与下段同页应保留后续段落在同一页");
   assert.deepEqual(result.columnBreakPlacement, { samePage: true, beforeColumn: 0, afterColumn: 1 }, "分栏符应把后续内容推进到同页下一栏");
   assert.equal(result.specialHyphenPreviewText, "特殊连字符工具 inter\u00ADnational code\u20112026", "分页预览应保留两类特殊连字符的换行语义");
+  assert.match(result.manualLineBreakPreviewHtml, /第一行[\s\S]*?<br[^>]*>[\s\S]*?第二行/, "分页预览应保留 Shift+Enter 手动换行");
   assert.ok(result.widowFragmentLineCounts.length > 1, "孤行控制夹具应跨越多个页面");
   assert.ok(result.widowFragmentLineCounts.every((lines) => lines >= 2), "孤行控制段落的每个分页片段都应至少保留两行");
   assert.equal(result.widowPreviewText, widowText);
