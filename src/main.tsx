@@ -776,13 +776,18 @@ const underlineStyleOptions = [
   { label: "波浪下划线", value: "wave" }
 ];
 const underlineCssStyleByType: Record<string, string> = { single: "solid", double: "double", dotted: "dotted", dash: "dashed", wave: "wavy" };
+const letterCaseFormatOptions = [
+  { label: "标准字母", value: "normal" },
+  { label: "全部大写", value: "uppercase" },
+  { label: "小型大写", value: "small-caps" }
+];
 const paragraphStyleOptions = [
   { label: "正文", value: "paragraph" },
   { label: "标题 1", value: "heading-1" },
   { label: "标题 2", value: "heading-2" },
   { label: "标题 3", value: "heading-3" }
 ];
-const importedInlineStyleNames = ["font-family", "font-size", "color", "font-weight", "font-style", "letter-spacing", "vertical-align", "text-decoration-line", "text-decoration-style", "text-decoration-color", "--word-underline-type"];
+const importedInlineStyleNames = ["font-family", "font-size", "color", "font-weight", "font-style", "font-variant-caps", "text-transform", "letter-spacing", "vertical-align", "text-decoration-line", "text-decoration-style", "text-decoration-color", "--word-underline-type"];
 const importedBlockStyleNames = ["text-align", "text-indent", "margin-left", "line-height", "margin-top", "margin-bottom", "--word-line-rule"];
 const lineSpacingOptions = [
   { label: "单倍", value: "1" },
@@ -3905,6 +3910,7 @@ function Editor(props: {
             </label>
             <FormatSelect title="设置选中文字的字符间距" placeholder="字符间距" options={characterSpacingOptions} onSelect={(value, label) => applySelectedTextStyle({ "letter-spacing": value === "normal" ? undefined : value }, `字符间距：${label}`)} />
             <FormatSelect title="设置选中文字相对基线的升降位置" placeholder="文字位置" options={baselinePositionOptions} onSelect={(value, label) => applySelectedTextStyle({ "vertical-align": value === "baseline" ? undefined : value }, `文字位置：${label}`)} />
+            <FormatSelect title="设置选中文字的非破坏性字母大小写格式" placeholder="字母格式" options={letterCaseFormatOptions} onSelect={(value, label) => applySelectedTextStyle({ "text-transform": value === "uppercase" ? "uppercase" : undefined, "font-variant-caps": value === "small-caps" ? "small-caps" : undefined }, label)} />
             <label className="format-select" title="设置选中文字颜色">
               <Type size={16} />
               <select aria-label="文字颜色" defaultValue="" onChange={(event) => { if (event.target.value) applySelectedTextStyle({ color: event.target.value }, "颜色"); event.target.value = ""; }}>

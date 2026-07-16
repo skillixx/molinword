@@ -446,6 +446,8 @@ function sanitizeImportedHtml(value = "") {
         "font-size": [/^\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
         "font-weight": [/^(?:bold|[1-9]00)$/],
         "font-style": [/^italic$/],
+        "font-variant-caps": [/^(?:normal|small-caps)$/],
+        "text-transform": [/^(?:none|uppercase)$/],
         "letter-spacing": [/^normal$/, /^-?\d+(?:\.\d+)?pt$/],
         "vertical-align": [/^baseline$/, /^-?\d+(?:\.\d+)?pt$/],
         "text-decoration-line": [/^underline$/],
@@ -719,6 +721,8 @@ function parseRunProperties(rPr, themeFonts = {}, themeColors = {}) {
   if (color) styles.color = color;
   const bold = xmlChild(rPr, "w:b");
   const italic = xmlChild(rPr, "w:i");
+  const allCaps = xmlChild(rPr, "w:caps");
+  const smallCaps = xmlChild(rPr, "w:smallCaps");
   const underline = xmlChild(rPr, "w:u");
   const strike = xmlChild(rPr, "w:strike") || xmlChild(rPr, "w:dstrike");
   const highlight = normalizeDocxHighlight(xmlVal(xmlChild(rPr, "w:highlight")));
@@ -744,6 +748,8 @@ function parseRunProperties(rPr, themeFonts = {}, themeColors = {}) {
     styles.$italic = wordToggleEnabled(italic) ? "1" : "0";
     if (styles.$italic === "1") styles["font-style"] = "italic";
   }
+  if (allCaps) styles["text-transform"] = wordToggleEnabled(allCaps) ? "uppercase" : "none";
+  if (smallCaps) styles["font-variant-caps"] = wordToggleEnabled(smallCaps) ? "small-caps" : "normal";
   if (underline) {
     const enabled = wordToggleEnabled(underline);
     const underlineType = String(xmlVal(underline) || "single");
@@ -2229,6 +2235,13 @@ function textRunStyleFromNode(node) {
   if (font) runStyle.font = font;
   if (styles["font-weight"] === "bold" || Number(styles["font-weight"]) >= 600) runStyle.bold = true;
   if (styles["font-style"] === "italic") runStyle.italics = true;
+  const hasSmallCaps = ["normal", "small-caps"].includes(styles["font-variant-caps"]);
+  const hasAllCaps = ["none", "uppercase"].includes(styles["text-transform"]);
+  // 中文注解：异常文档可能同时携带两种互斥格式；启用值优先，全部大写再优先于小型大写。
+  if (hasAllCaps && styles["text-transform"] === "uppercase") runStyle.allCaps = true;
+  else if (hasSmallCaps && styles["font-variant-caps"] === "small-caps") runStyle.smallCaps = true;
+  else if (hasAllCaps) runStyle.allCaps = false;
+  else if (hasSmallCaps) runStyle.smallCaps = false;
   // 中文注解：零值也要进入扁平化标记，用于覆盖外层 span 的字距或基线设置；docx 会在最终文本运行中省略零值。
   if (characterSpacing !== undefined) runStyle.characterSpacing = characterSpacing;
   if (position !== undefined) runStyle.position = position;
@@ -2320,6 +2333,9 @@ function textRunsFromNode(node, marks = {}) {
       text,
       bold: marks.bold,
       italics: marks.italics,
+      // 中文注解：docx 内部对 smallCaps/caps 使用互斥分支，存在全部大写设置时优先写入 w:caps。
+      smallCaps: marks.allCaps !== undefined ? undefined : marks.smallCaps,
+      allCaps: marks.allCaps,
       underline: marks.underline === true ? {} : marks.underline,
       strike: marks.strike,
       color: marks.color,
