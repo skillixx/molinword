@@ -446,12 +446,15 @@ function importedTextToHtml(value = "") {
 function sanitizeImportedHtml(value = "") {
   // 中文注解：导入内容只放行编辑器可承载的安全样式和受控外链，避免脚本与存储细节进入前端。
   return sanitizeHtml(String(value), {
-    allowedTags: ["h1", "h2", "h3", "p", "span", "strong", "b", "em", "i", "u", "s", "mark", "sup", "sub", "a", "ul", "ol", "li", "blockquote", "br", "table", "tbody", "thead", "tr", "th", "td", "img", "div"],
+    allowedTags: ["h1", "h2", "h3", "h4", "h5", "h6", "p", "span", "strong", "b", "em", "i", "u", "s", "mark", "sup", "sub", "a", "ul", "ol", "li", "blockquote", "br", "table", "tbody", "thead", "tr", "th", "td", "img", "div"],
     allowedAttributes: {
-      h1: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
-      h2: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
-      h3: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
-      p: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
+      h1: ["style", "data-outline-level", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
+      h2: ["style", "data-outline-level", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
+      h3: ["style", "data-outline-level", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
+      h4: ["style", "data-outline-level", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
+      h5: ["style", "data-outline-level", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
+      h6: ["style", "data-outline-level", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
+      p: ["style", "data-outline-level", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
       li: ["style", "data-indent", "data-keep-next", "data-keep-lines", "data-page-break-before", "data-widow-control", "data-tab-stops", "data-paragraph-shading", "data-paragraph-borders"],
       span: ["style", "class", "data-docx-tab", "data-tab-position", "data-tab-alignment"],
       mark: ["data-highlight", "style"],
@@ -878,6 +881,9 @@ function splitWordTextByScript(text = "", styles = {}) {
 
 function parseParagraphProperties(pPr, themeColors = {}) {
   const styles = {};
+  const rawOutlineLevel = xmlVal(xmlChild(pPr, "w:outlineLvl"));
+  const outlineLevel = rawOutlineLevel === "" ? NaN : Number(rawOutlineLevel);
+  if (Number.isInteger(outlineLevel) && outlineLevel >= 0 && outlineLevel <= 8) styles.$outlineLevel = String(outlineLevel);
   const align = xmlVal(xmlChild(pPr, "w:jc"));
   if (["left", "center", "right", "both", "justify"].includes(align)) styles["text-align"] = align === "both" ? "justify" : align;
   const indent = xmlChild(pPr, "w:ind");
@@ -1307,7 +1313,10 @@ async function docxImagesFromRun(runNode, zip, relationships) {
   return images;
 }
 
-function docxParagraphTag(style = {}) {
+function docxParagraphTag(style = {}, paragraphStyles = {}) {
+  const outlineLevel = Number(paragraphStyles.$outlineLevel);
+  if (Number.isInteger(outlineLevel) && outlineLevel >= 0 && outlineLevel <= 5) return `h${outlineLevel + 1}`;
+  if (Number.isInteger(outlineLevel) && outlineLevel >= 6 && outlineLevel <= 8) return "p";
   const name = `${style.name || ""} ${style.id || ""}`.toLowerCase();
   if (name.includes("title") || name.includes("标题 1") || name.includes("heading 1")) return "h1";
   if (name.includes("标题 2") || name.includes("heading 2")) return "h2";
@@ -1401,10 +1410,11 @@ async function parseStyledDocxParagraph(paragraphNode, context) {
     bodyParts.push(href && linkHtml ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${linkHtml}</a>` : linkHtml);
   }
   const body = bodyParts.join("") || "<br>";
-  const tag = docxParagraphTag(style);
+  const tag = docxParagraphTag(style, paragraphStyles);
   const list = docxListInfo(pPr, style, numbering);
   const indentLevel = wordTwipToIndentLevel(firstValue(xmlChild(pPr, "w:ind")?.attribs, ["w:firstLine", "firstLine"]));
   const attrs = [];
+  if (/^[0-8]$/.test(String(paragraphStyles.$outlineLevel || ""))) attrs.push(`data-outline-level="${paragraphStyles.$outlineLevel}"`);
   const appearanceStyle = paragraphAppearanceCss(paragraphStyles.$paragraphShading, paragraphStyles.$paragraphBorders);
   const styleText = [cssText(paragraphStyles), appearanceStyle].filter(Boolean).join("; ");
   if (styleText) attrs.push(`style="${escapeHtml(styleText)}"`);
@@ -2363,6 +2373,10 @@ function docxParagraphShadingFromNode(node) {
 function paragraphStyleFromNode(node) {
   const styles = parseStyleMap(node?.attribs?.style);
   const paragraphStyle = {};
+  const tagOutlineLevel = /^h([1-6])$/.test(String(node?.name || "")) ? Number(String(node.name).slice(1)) - 1 : undefined;
+  const attributeOutlineLevel = Number(node?.attribs?.["data-outline-level"]);
+  const outlineLevel = Number.isInteger(attributeOutlineLevel) && attributeOutlineLevel >= 0 && attributeOutlineLevel <= 8 ? attributeOutlineLevel : tagOutlineLevel;
+  if (outlineLevel !== undefined) paragraphStyle.outlineLevel = outlineLevel;
   const alignmentMap = {
     left: AlignmentType.LEFT,
     center: AlignmentType.CENTER,
@@ -2548,16 +2562,14 @@ function paragraphFromNode(node, listContext = null) {
   if (!text && !hasImage) return null;
   const paragraphStyle = mergeParagraphOptions(paragraphStyleFromNode(node), paragraphIndentFromNode(node));
 
-  if (tagName === "h1") {
-    return new Paragraph({ children: textRunsFromNode(node), heading: HeadingLevel.HEADING_1, ...mergeParagraphOptions({ spacing: { after: 120 } }, paragraphStyle) });
-  }
-
-  if (tagName === "h2") {
-    return new Paragraph({ children: textRunsFromNode(node), heading: HeadingLevel.HEADING_2, ...mergeParagraphOptions({ spacing: { before: 180, after: 120 } }, paragraphStyle) });
-  }
-
-  if (tagName === "h3") {
-    return new Paragraph({ children: textRunsFromNode(node), heading: HeadingLevel.HEADING_3, ...mergeParagraphOptions({ spacing: { before: 140, after: 100 } }, paragraphStyle) });
+  const headingLevel = ({
+    h1: HeadingLevel.HEADING_1, h2: HeadingLevel.HEADING_2, h3: HeadingLevel.HEADING_3,
+    h4: HeadingLevel.HEADING_4, h5: HeadingLevel.HEADING_5, h6: HeadingLevel.HEADING_6
+  })[tagName];
+  if (headingLevel) {
+    const level = Number(tagName.slice(1));
+    const spacing = level === 1 ? { after: 120 } : level === 2 ? { before: 180, after: 120 } : { before: 140, after: level === 3 ? 100 : 80 };
+    return new Paragraph({ children: textRunsFromNode(node), heading: headingLevel, ...mergeParagraphOptions({ spacing }, paragraphStyle) });
   }
 
   if (tagName === "li") {
@@ -2582,7 +2594,7 @@ function paragraphFromNode(node, listContext = null) {
 function tableCellChildrenFromNode(cellNode, listState) {
   const children = [];
   for (const child of cellNode.children || []) {
-    if (["h1", "h2", "h3", "p", "li"].includes(child.name)) {
+    if (["h1", "h2", "h3", "h4", "h5", "h6", "p", "li"].includes(child.name)) {
       const paragraph = paragraphFromNode(child);
       if (paragraph) children.push(paragraph);
     } else if (isHtmlListNode(child)) {
@@ -2880,7 +2892,7 @@ function extractDocxBlocksFromNodes(nodes = [], emptyText = "空白文档") {
       return;
     }
 
-    if (["h1", "h2", "h3", "p", "li"].includes(node.name)) {
+    if (["h1", "h2", "h3", "h4", "h5", "h6", "p", "li"].includes(node.name)) {
       const paragraph = paragraphFromNode(node);
       if (paragraph) blocks.push(paragraph);
       return;

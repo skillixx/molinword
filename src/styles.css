@@ -1417,9 +1417,15 @@ textarea {
 .page-body h1,
 .page-body h2,
 .page-body h3,
+.page-body h4,
+.page-body h5,
+.page-body h6,
 .pagination-measurer h1,
 .pagination-measurer h2,
-.pagination-measurer h3 {
+.pagination-measurer h3,
+.pagination-measurer h4,
+.pagination-measurer h5,
+.pagination-measurer h6 {
   margin: 22px 0 10px;
   color: var(--document-heading-color, #245f55);
   letter-spacing: 0;
@@ -1442,6 +1448,24 @@ textarea {
 .pagination-measurer h3 {
   margin: 9.33px 0 6.67px;
   font-size: var(--document-heading-3-size, 16px);
+}
+
+.page-body h4,
+.pagination-measurer h4 {
+  margin: 8px 0 6px;
+  font-size: 15px;
+}
+
+.page-body h5,
+.pagination-measurer h5 {
+  margin: 7px 0 5px;
+  font-size: 14px;
+}
+
+.page-body h6,
+.pagination-measurer h6 {
+  margin: 6px 0 4px;
+  font-size: 13.33px;
 }
 
 .page-body ul,
@@ -1672,7 +1696,10 @@ textarea {
 
 .word-editor h1,
 .word-editor h2,
-.word-editor h3 {
+.word-editor h3,
+.word-editor h4,
+.word-editor h5,
+.word-editor h6 {
   margin: 22px 0 10px;
   color: var(--document-heading-color, #245f55);
   letter-spacing: 0;
@@ -1692,6 +1719,21 @@ textarea {
 .word-editor h3 {
   margin: 9.33px 0 6.67px;
   font-size: var(--document-heading-3-size, 16px);
+}
+
+.word-editor h4 {
+  margin: 8px 0 6px;
+  font-size: 15px;
+}
+
+.word-editor h5 {
+  margin: 7px 0 5px;
+  font-size: 14px;
+}
+
+.word-editor h6 {
+  margin: 6px 0 4px;
+  font-size: 13.33px;
 }
 
 .word-editor p {

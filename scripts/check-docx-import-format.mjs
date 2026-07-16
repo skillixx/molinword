@@ -85,6 +85,12 @@ async function buildFormattedDocxFixture() {
     <w:basedOn w:val="Normal"/>
     <w:pPr><w:spacing w:after="240"/></w:pPr>
   </w:style>
+  <w:style w:type="paragraph" w:styleId="CustomOutline4">
+    <w:name w:val="Bid Section"/>
+    <w:basedOn w:val="Normal"/>
+    <w:pPr><w:outlineLvl w:val="3"/></w:pPr>
+    <w:rPr><w:b/><w:sz w:val="26"/></w:rPr>
+  </w:style>
   <w:style w:type="paragraph" w:styleId="Title">
     <w:name w:val="Title"/>
     <w:basedOn w:val="Normal"/>
@@ -139,6 +145,8 @@ async function buildFormattedDocxFixture() {
     </w:p>
     <w:p><w:r><w:t>链接前 </w:t></w:r><w:hyperlink r:id="rIdHyperlink1"><w:r><w:rPr><w:u w:val="single"/><w:color w:val="0563C1"/></w:rPr><w:t>OpenAI documentation</w:t></w:r></w:hyperlink><w:r><w:t> 链接后</w:t></w:r></w:p>
     <w:p><w:pPr><w:pStyle w:val="BodyBased"/></w:pPr><w:r><w:t>Inherited spacing</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="CustomOutline4"/></w:pPr><w:r><w:t>Custom outline level 4</w:t></w:r></w:p>
+    <w:p><w:pPr><w:outlineLvl w:val="7"/></w:pPr><w:r><w:t>Direct outline level 8</w:t></w:r></w:p>
     <w:p><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr><w:r><w:t>Hanging indent source</w:t></w:r></w:p>
     <w:p><w:pPr><w:ind w:start="480" w:end="360"/></w:pPr><w:r><w:t>Side indents source</w:t></w:r></w:p>
     <w:p><w:pPr><w:spacing w:line="360" w:lineRule="atLeast"/></w:pPr><w:r><w:t>At least spacing</w:t></w:r></w:p>
@@ -546,6 +554,9 @@ assert.match(imported.content, /<ol data-list-format="decimal"[^>]*><li>Override
 assert.match(imported.content, /<ol start="7" data-list-format="upperRoman" style="list-style-type:\s*upper-roman"><li>Started Roman item 1<\/li><li>Started Roman item 2<\/li><\/ol>/);
 assert.match(imported.content, /<td[^>]*><p[^>]*>Import Cell 1<\/p><ol data-list-format="decimal"[^>]*><li>Table ordered item<\/li><\/ol><\/td>/);
 assert.match(imported.content, /<td colspan="2" rowspan="2"[^>]*><p[^>]*>Merged approval<\/p><\/td><td[^>]*><p[^>]*>Approved<\/p><\/td>/);
+// 中文注解：标题识别必须以 Word 的 outlineLvl 为准，不能依赖英文 Heading 或中文“标题”样式名称。
+assert.match(imported.content, /<h4[^>]+data-outline-level="3"[^>]*>[\s\S]*?Custom outline level 4[\s\S]*?<\/h4>/);
+assert.match(imported.content, /<p[^>]+data-outline-level="7"[^>]*>[\s\S]*?Direct outline level 8[\s\S]*?<\/p>/);
 assert.deepEqual(imported.pageLayout, {
   headerText: "导入页眉",
   headerStyle: { alignment: "right", fontFamily: "Microsoft YaHei", fontSizePt: 12, color: "#1F4E79", bold: true, italic: true },
@@ -641,6 +652,10 @@ assert.match(paginationControlledRoundTripXml, /<w:pageBreakBefore\/>/);
 assert.match(paginationControlledRoundTripXml, /<w:widowControl\/>/);
 const widowDisabledRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Widow control disabled paragraph")) || "";
 assert.match(widowDisabledRoundTripXml, /<w:widowControl w:val="false"\/>/);
+const customOutlineRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Custom outline level 4")) || "";
+const directOutlineRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Direct outline level 8")) || "";
+assert.match(customOutlineRoundTripXml, /<w:outlineLvl w:val="3"\/>/);
+assert.match(directOutlineRoundTripXml, /<w:outlineLvl w:val="7"\/>/);
 const tabRoundTripXml = (roundTripXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("Tab project")) || "";
 assert.match(tabRoundTripXml, /<w:tabs><w:tab w:val="left" w:pos="1440"\/><w:tab w:val="right" w:pos="5760"\/><\/w:tabs>/);
 assert.equal((tabRoundTripXml.match(/<w:tab\/>/g) || []).length, 2);
@@ -692,6 +707,8 @@ assert.match(roundTripImported.content, /<ol data-list-format="decimal"[^>]*>[\s
 assert.match(roundTripImported.content, /<ol start="7" data-list-format="upperRoman"[^>]*>[\s\S]*?Started Roman item 1/);
 assert.match(roundTripImported.content, /<p[^>]+data-keep-next="true"[^>]+data-keep-lines="true"[^>]+data-page-break-before="true"[^>]+data-widow-control="true"[^>]*>[\s\S]*?Pagination controlled paragraph[\s\S]*?<\/p>/);
 assert.match(roundTripImported.content, /<p[^>]+data-widow-control="false"[^>]*>[\s\S]*?Widow control disabled paragraph[\s\S]*?<\/p>/);
+assert.match(roundTripImported.content, /<h4[^>]+data-outline-level="3"[^>]*>[\s\S]*?Custom outline level 4/);
+assert.match(roundTripImported.content, /<p[^>]+data-outline-level="7"[^>]*>[\s\S]*?Direct outline level 8/);
 const roundTripImportedTabParagraph = (roundTripImported.content.match(/<p(?:\s[^>]*)?>[\s\S]*?<\/p>/g) || [])
   .find((paragraph) => paragraph.includes("Tab project") && paragraph.includes("100.00")) || "";
 assert.equal((roundTripImportedTabParagraph.match(/data-docx-tab="true"/g) || []).length, 2);

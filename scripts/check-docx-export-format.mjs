@@ -34,6 +34,8 @@ const content = `
   <div data-page-break="true" class="page-break-marker"></div>
   <p>分页符后的内容</p>
   <p style="line-height:1.5;margin-top:6pt;margin-bottom:12pt">Spacing paragraph</p>
+  <h4 data-outline-level="3">Fourth-level heading</h4>
+  <p data-outline-level="7">Eighth-level outline paragraph</p>
   <p style="line-height:18pt;--word-line-rule:exact">Exact spacing paragraph</p>
   <p style="margin-left:36pt;text-indent:-18pt">Hanging indent export</p>
   <p style="margin-left:24pt;margin-right:18pt">Side indents export</p>
@@ -296,6 +298,11 @@ assert.match(geometryCellBordersXml, /<w:left w:val="nil" w:color="000000" w:sz=
 // 中文注解：编号列表、嵌套层级和项目符号必须保留各自语义，不能统一退化为一级圆点。
 assert.match(documentXml, /<w:numPr><w:ilvl w:val="0"\/><w:numId w:val="\d+"\/><\/w:numPr>/);
 assert.match(documentXml, /<w:numPr><w:ilvl w:val="1"\/><w:numId w:val="\d+"\/><\/w:numPr>/);
+const fourthLevelHeadingXml = paragraphXmlForText("Fourth-level heading");
+const eighthLevelOutlineXml = paragraphXmlForText("Eighth-level outline paragraph");
+assert.match(fourthLevelHeadingXml, /<w:pStyle w:val="Heading4"\/>/);
+assert.match(fourthLevelHeadingXml, /<w:outlineLvl w:val="3"\/>/);
+assert.match(eighthLevelOutlineXml, /<w:outlineLvl w:val="7"\/>/);
 assert.match(numberingXml, /<w:numFmt w:val="decimal"\/>/);
 assert.match(numberingXml, /<w:numFmt w:val="bullet"\/>/);
 

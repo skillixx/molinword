@@ -794,6 +794,10 @@ const paragraphStyleOptions = [
   { label: "标题 2", value: "heading-2" },
   { label: "标题 3", value: "heading-3" }
 ];
+const outlineLevelOptions = [
+  { label: "正文级别", value: "body" },
+  ...Array.from({ length: 9 }, (_, index) => ({ label: `大纲 ${index + 1} 级`, value: String(index + 1) }))
+];
 const importedInlineStyleNames = ["font-family", "font-size", "color", "font-weight", "font-style", "font-variant-caps", "text-transform", "letter-spacing", "vertical-align", "text-decoration-line", "text-decoration-style", "text-decoration-color", "--word-underline-type", "border-width", "border-style", "border-color", "border-top", "border-right", "border-bottom", "border-left", "padding", "padding-top", "padding-right", "padding-bottom", "padding-left", "--word-text-border"];
 const importedBlockStyleNames = ["text-align", "text-indent", "margin-left", "margin-right", "line-height", "margin-top", "margin-bottom", "--word-line-rule"];
 const lineSpacingOptions = [
@@ -1657,6 +1661,28 @@ const ListFormatAttributes = Extension.create({
   }
 });
 
+const OutlineLevelAttributes = Extension.create({
+  name: "outlineLevelAttributes",
+  addGlobalAttributes() {
+    return [{
+      types: ["paragraph", "heading"],
+      attributes: {
+        outlineLevel: {
+          default: null,
+          parseHTML: (element) => {
+            const rawValue = element.getAttribute("data-outline-level");
+            const value = rawValue === null ? NaN : Number(rawValue);
+            return Number.isInteger(value) && value >= 0 && value <= 8 ? value : null;
+          },
+          renderHTML: (attributes) => Number.isInteger(attributes.outlineLevel) && attributes.outlineLevel >= 0 && attributes.outlineLevel <= 8
+            ? { "data-outline-level": attributes.outlineLevel }
+            : {}
+        }
+      }
+    }];
+  }
+});
+
 const ParagraphIndent = Extension.create({
   name: "paragraphIndent",
   addGlobalAttributes() {
@@ -1982,7 +2008,7 @@ function measureTabFollowingContent(tab: HTMLElement, paragraph: HTMLElement, ne
 }
 
 function layoutDocxTabs(root: ParentNode) {
-  const paragraphs = Array.from(root.querySelectorAll<HTMLElement>("p, h1, h2, h3, li")).filter((paragraph) => paragraph.querySelector(".docx-tab"));
+  const paragraphs = Array.from(root.querySelectorAll<HTMLElement>("p, h1, h2, h3, h4, h5, h6, li")).filter((paragraph) => paragraph.querySelector(".docx-tab"));
   for (const paragraph of paragraphs) {
     const tabs = Array.from(paragraph.querySelectorAll<HTMLElement>(".docx-tab"));
     tabs.forEach((tab) => { tab.style.width = "0px"; });
@@ -3100,7 +3126,7 @@ function Editor(props: {
   }, [props.pageLayout]);
 
   const editor = useEditor({
-    extensions: [StarterKit.configure({ link: { openOnClick: false, autolink: false, linkOnPaste: true, HTMLAttributes: { target: "_blank", rel: "noopener noreferrer" } } }), DocumentImage.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DocxTab, ListFormatAttributes, ParagraphIndent, PageBreak, SectionBreak, DocumentTable, DocumentTableRow, DocumentTableHeader, DocumentTableCell],
+    extensions: [StarterKit.configure({ link: { openOnClick: false, autolink: false, linkOnPaste: true, HTMLAttributes: { target: "_blank", rel: "noopener noreferrer" } } }), DocumentImage.configure({ inline: false, allowBase64: true }), ImportedTextStyle, TextHighlight, SuperscriptText, SubscriptText, DocxTab, ListFormatAttributes, OutlineLevelAttributes, ParagraphIndent, PageBreak, SectionBreak, DocumentTable, DocumentTableRow, DocumentTableHeader, DocumentTableCell],
     content: props.content,
     editorProps: { attributes: { class: "word-editor" } },
     onCreate({ editor }) {
@@ -3563,6 +3589,26 @@ function Editor(props: {
     }
     const applied = style === "paragraph" ? chain.setParagraph().run() : chain.setHeading({ level }).run();
     setSelectionHint(applied ? "已应用段落样式。" : "请把光标放到需要调整的段落中。");
+  };
+
+  const applyOutlineLevel = (value: string) => {
+    if (!editor) return;
+    const chain = editor.chain().focus();
+    if (value === "body") {
+      const applied = chain.setParagraph().updateAttributes("paragraph", { outlineLevel: null }).run();
+      setSelectionHint(applied ? "已设置为正文级别。" : "请把光标放到需要调整的段落中。");
+      return;
+    }
+    const level = Number(value);
+    if (!Number.isInteger(level) || level < 1 || level > 9) {
+      setSelectionHint("不支持该大纲级别。");
+      return;
+    }
+    // 中文注解：HTML 只提供六级标题，Word 第 7-9 级使用普通段落承载，并通过受控属性保留完整大纲语义。
+    const applied = level <= 6
+      ? chain.setHeading({ level: level as 1 | 2 | 3 | 4 | 5 | 6 }).updateAttributes("heading", { outlineLevel: level - 1 }).run()
+      : chain.setParagraph().updateAttributes("paragraph", { outlineLevel: level - 1 }).run();
+    setSelectionHint(applied ? `已设置为大纲 ${level} 级。` : "请把光标放到需要调整的段落中。");
   };
 
   const applyOrderedListFormat = (format: string, label: string) => {
@@ -4061,6 +4107,7 @@ function Editor(props: {
             <button onClick={insertSectionBreak} title="从下一页开始新节并允许独立页面设置"><Rows3 size={16} />分节符</button>
             <span className="format-divider" />
             <FormatSelect title="设置当前段落样式" placeholder="段落样式" options={paragraphStyleOptions} onSelect={(value) => applyDocumentTextStyle(value)} />
+            <FormatSelect title="设置当前段落的大纲级别" placeholder="大纲级别" options={outlineLevelOptions} icon={<ListTree size={16} />} onSelect={(value) => applyOutlineLevel(value)} />
             <button className={editor?.isActive("bold") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleBold().run()} title="加粗"><Bold size={16} />加粗</button>
             <button className={editor?.isActive("italic") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleItalic().run()} title="斜体"><Italic size={16} /></button>
             <button className={editor?.isActive("underline") ? "active-format" : ""} onClick={() => editor?.chain().focus().toggleUnderline().run()} title="下划线"><UnderlineIcon size={16} />下划线</button>

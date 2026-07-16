@@ -32,7 +32,7 @@ const fixtureDocument = {
   tone: "正式",
   templateId: 3,
   outline: ["超长结构分页"],
-  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具 字符间距工具 下划线样式工具 字符边框工具 all Caps Format small Caps Format <mark data-highlight="yellow" style="background-color:#FFFF00">清除高亮工具</mark></p><p>悬挂缩进工具内容用于验证后续各行向右缩进并保持首行位置。</p><p>段落左右缩进工具内容用于验证正文可用行宽和分页位置。</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table data-table-width-type="dxa" data-table-width-value="7200" data-table-grid-width="7200" data-table-layout="fixed" style="width:480px;table-layout:fixed"><tbody><tr><th colwidth="120">审批阶段</th><th colwidth="360">状态</th></tr><tr><td colwidth="120">商务评审</td><td colwidth="360">通过</td></tr><tr><td colwidth="120">归档确认</td><td colwidth="360">完成</td></tr></tbody></table><p>段落外观工具</p><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p><p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab workflow<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p><p>Tab keyboard</p><p>${widowText}</p>`,
+  content: `<p><span style="font-size: 12pt; color: #ff0000">保留小号红字</span><span style="font-size: 18pt; color: #0000ff">保留大号蓝字</span></p><p>突出显示工具 上标工具 下标工具 字符间距工具 下划线样式工具 字符边框工具 all Caps Format small Caps Format <mark data-highlight="yellow" style="background-color:#FFFF00">清除高亮工具</mark></p><p>悬挂缩进工具内容用于验证后续各行向右缩进并保持首行位置。</p><p>段落左右缩进工具内容用于验证正文可用行宽和分页位置。</p><p>大纲级别工具</p><ol><li>${listText}</li><li>第二个编号项，用于确认编号连续。</li></ol><table><tbody><tr><th>说明</th><th>标准</th></tr><tr><td><img src="${tinyPng}" style="width:32px;height:32px" /><p>${cellA}</p></td><td><p>${cellB}</p></td></tr><tr><td><p>下一行</p></td><td><p>保持结构</p></td></tr></tbody></table><table data-table-width-type="dxa" data-table-width-value="7200" data-table-grid-width="7200" data-table-layout="fixed" style="width:480px;table-layout:fixed"><tbody><tr><th colwidth="120">审批阶段</th><th colwidth="360">状态</th></tr><tr><td colwidth="120">商务评审</td><td colwidth="360">通过</td></tr><tr><td colwidth="120">归档确认</td><td colwidth="360">完成</td></tr></tbody></table><p>段落外观工具</p><p>分页控制前置段落</p><p>分页控制段落</p><p>分页控制后续段落</p><p data-tab-stops='[{"alignment":"left","position":1440},{"alignment":"right","position":5760}]'>Tab workflow<span class="docx-tab" data-docx-tab="true" data-tab-position="1440" data-tab-alignment="left"></span>Amount<span class="docx-tab" data-docx-tab="true" data-tab-position="5760" data-tab-alignment="right"></span>100.00</p><p>Tab keyboard</p><p>${widowText}</p>`,
   // 中文注解：模拟升级前数据库里的旧页面设置，确保真实历史文档开启高级页眉时不会崩溃。
   pageLayout: { headerText: "", footerText: "", pageNumberEnabled: false },
   status: "draft",
@@ -272,6 +272,8 @@ try {
   await selectEditorText("第二个编号项");
   await page.getByLabel("编号格式", { exact: true }).selectOption("upperRoman");
   await page.getByLabel("编号起始值", { exact: true }).fill("4");
+  await selectEditorText("大纲级别工具");
+  await page.locator('label[title="设置当前段落的大纲级别"] select').selectOption("4");
   await selectEditorText("all Caps Format");
   await page.getByLabel("字母格式", { exact: true }).selectOption("uppercase");
   await selectEditorText("small Caps Format");
@@ -293,6 +295,7 @@ try {
   assert.match(advancedFormatHtml, /<p[^>]+style="[^"]*margin-left:\s*28\.35pt[^"]*text-indent:\s*-28\.35pt[^"]*"[^>]*>[\s\S]*?悬挂缩进工具内容[\s\S]*?<\/p>/);
   assert.match(advancedFormatHtml, /<p[^>]+style="[^"]*margin-left:\s*28\.35pt[^"]*margin-right:\s*14\.17pt[^"]*"[^>]*>[\s\S]*?段落左右缩进工具内容[\s\S]*?<\/p>/);
   assert.match(advancedFormatHtml, /<ol(?=[^>]*start="4")(?=[^>]*data-list-format="upperRoman")(?=[^>]*style="[^"]*list-style-type:\s*upper-roman)[^>]*>/);
+  assert.match(advancedFormatHtml, /<h4[^>]+data-outline-level="3"[^>]*>[\s\S]*?大纲级别工具[\s\S]*?<\/h4>/);
   assert.match(advancedFormatHtml, /<span[^>]+style="[^"]*text-transform:\s*uppercase[^"]*"[^>]*>all Caps Format<\/span>/);
   assert.match(advancedFormatHtml, /<span[^>]+style="[^"]*font-variant-caps:\s*small-caps[^"]*"[^>]*>small Caps Format<\/span>/);
   await selectEditorText("链接工具");
@@ -575,6 +578,7 @@ try {
   assert.match(storedDocument.content, /margin-right:\s*14\.17pt/);
   assert.match(storedDocument.content, /data-list-format="upperRoman"/);
   assert.match(storedDocument.content, /<ol(?=[^>]*start="4")(?=[^>]*data-list-format="upperRoman")[^>]*>/);
+  assert.match(storedDocument.content, /<h4[^>]+data-outline-level="3"[^>]*>[\s\S]*?大纲级别工具[\s\S]*?<\/h4>/);
   assert.match(storedDocument.content, /text-transform:\s*uppercase/);
   assert.match(storedDocument.content, /font-variant-caps:\s*small-caps/);
   assert.match(storedDocument.content, /data-highlight="darkCyan"/);
@@ -674,6 +678,7 @@ try {
   assert.match(reopenedHtml, /<td[^>]+data-cell-margins="[^"]*&quot;top&quot;:180[^"]*"[^>]+data-cell-vertical-align="bottom"[^>]+data-cell-shading="#FFF2CC"[^>]*>.*商务评审/s);
   assert.match(reopenedHtml, /<td[^>]+data-cell-borders="[^"]*&quot;top&quot;[^"]*dashed[^"]*6B7280[^"]*"[^>]*>.*商务评审/s);
   assert.match(reopenedHtml, /<table(?=[^>]*data-table-alignment="right")(?=[^>]*style="[^"]*margin-left:\s*auto)(?=[^>]*style="[^"]*margin-right:\s*0px)[^>]*>[\s\S]*?商务评审/);
+  assert.match(reopenedHtml, /<h4[^>]+data-outline-level="3"[^>]*>[\s\S]*?大纲级别工具[\s\S]*?<\/h4>/);
   const reopenedHeaderRow = reopenedHtml.match(/<tr[^>]+data-row-height="850"[^>]*>/)?.[0] || "";
   assert.match(reopenedHeaderRow, /data-row-height-rule="exact"/);
   assert.match(reopenedHeaderRow, /data-row-cant-split="true"/);
@@ -763,6 +768,9 @@ try {
   const romanAbstractXml = [...numberingXml.matchAll(/<w:abstractNum w:abstractNumId="(\d+)"[^>]*>([\s\S]*?)<\/w:abstractNum>/g)].find((match) => match[1] === romanAbstractId)?.[2] || "";
   assert.match(romanAbstractXml, /<w:lvl[^>]+w:ilvl="0"[^>]*>[\s\S]*?<w:numFmt w:val="upperRoman"\/>/);
   assert.match(romanAbstractXml, /<w:lvl[^>]+w:ilvl="0"[^>]*>[\s\S]*?<w:start w:val="4"\/>/);
+  const outlineHeadingParagraph = (documentXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("大纲级别工具")) || "";
+  assert.match(outlineHeadingParagraph, /<w:pStyle w:val="Heading4"\/>/);
+  assert.match(outlineHeadingParagraph, /<w:outlineLvl w:val="3"\/>/);
   const allCapsRun = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("all Caps Format")) || "";
   const smallCapsRun = (documentXml.match(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g) || []).find((run) => run.includes("small Caps Format")) || "";
   assert.match(allCapsRun, /<w:caps\/>/);
