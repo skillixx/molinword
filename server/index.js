@@ -460,7 +460,7 @@ function sanitizeImportedHtml(value = "") {
       mark: ["data-highlight", "style"],
       a: ["href", "target", "rel"],
       ol: ["style", "data-list-format", "start"],
-      table: ["style", "data-table-width-type", "data-table-width-value", "data-table-grid-width", "data-table-layout", "data-table-alignment", "data-table-borders"],
+      table: ["style", "data-table-width-type", "data-table-width-value", "data-table-grid-width", "data-table-layout", "data-table-alignment", "data-table-indent", "data-table-borders"],
       tr: ["style", "data-row-height", "data-row-height-rule", "data-row-cant-split", "data-row-repeat-header"],
       th: ["style", "colspan", "rowspan", "colwidth", "data-docx-cell", "data-cell-margins", "data-cell-vertical-align", "data-cell-shading", "data-cell-borders"],
       td: ["style", "colspan", "rowspan", "colwidth", "data-docx-cell", "data-cell-margins", "data-cell-vertical-align", "data-cell-shading", "data-cell-borders"],
@@ -491,7 +491,7 @@ function sanitizeImportedHtml(value = "") {
         "line-height": [/^\d+(?:\.\d+)?(?:px|pt|em|rem|%)?$/],
         "--word-line-rule": [/^(?:auto|exact|atLeast)$/],
         // 中文注解：表格居中和右对齐依赖受控的 auto 外边距，清洗时必须保留，否则导入后视觉位置会丢失。
-        "margin-left": [/^auto$/, /^\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
+        "margin-left": [/^auto$/, /^-?\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
         "margin-right": [/^auto$/, /^\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
         "margin-top": [/^\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
         "margin-bottom": [/^\d+(?:\.\d+)?(?:px|pt|em|rem)$/],
@@ -1575,6 +1575,11 @@ async function parseStyledDocxTable(tableNode, context) {
   const tableLayout = firstValue(xmlChild(tableProperties, "w:tblLayout")?.attribs, ["w:type", "type"]) === "fixed" ? "fixed" : "autofit";
   const rawTableAlignment = xmlVal(xmlChild(tableProperties, "w:jc"));
   const tableAlignment = rawTableAlignment === "center" ? "center" : ["right", "end"].includes(rawTableAlignment) ? "right" : "left";
+  const tableIndentNode = xmlChild(tableProperties, "w:tblInd");
+  const tableIndentType = firstValue(tableIndentNode?.attribs, ["w:type", "type"]);
+  const tableIndent = tableIndentNode && (!tableIndentType || tableIndentType === "dxa")
+    ? Math.max(-31680, Math.min(31680, Math.round(Number(firstValue(tableIndentNode.attribs, ["w:w", "w"])) || 0)))
+    : 0;
   const tableCellMargins = parseDocxCellMargins(xmlChild(tableProperties, "w:tblCellMar"));
   const tableBorders = parseDocxBorders(xmlChild(tableProperties, "w:tblBorders"), context.themeColors || {});
   const gridWidths = xmlChildren(xmlChild(tableNode, "w:tblGrid"), "w:gridCol")
@@ -1675,13 +1680,14 @@ async function parseStyledDocxTable(tableNode, context) {
     ? "margin-left: auto; margin-right: auto"
     : tableAlignment === "right"
       ? "margin-left: auto; margin-right: 0px"
-      : "margin-left: 0px; margin-right: auto";
+      : `margin-left: ${Math.round(tableIndent * 96 / 1440 * 100) / 100}px; margin-right: auto`;
   const attributes = [
     `data-table-width-type="${tableWidthType}"`,
     `data-table-width-value="${tableWidthValue}"`,
     `data-table-grid-width="${gridWidth}"`,
     `data-table-layout="${tableLayout}"`,
     `data-table-alignment="${tableAlignment}"`,
+    `data-table-indent="${tableIndent}"`,
     ...(Object.keys(tableBorders).length ? [`data-table-borders="${escapeHtml(JSON.stringify(tableBorders))}"`] : []),
     `style="${widthStyle}; ${alignmentStyle}; table-layout: ${tableLayout === "fixed" ? "fixed" : "auto"}"`
   ];
@@ -2684,6 +2690,9 @@ function tableFromNode(tableNode, listState) {
     columnWidths: resolvedColumnWidths.length ? resolvedColumnWidths : undefined,
     layout: tableNode.attribs?.["data-table-layout"] === "fixed" ? TableLayoutType.FIXED : TableLayoutType.AUTOFIT,
     alignment: ({ left: AlignmentType.LEFT, center: AlignmentType.CENTER, right: AlignmentType.RIGHT })[tableNode.attribs?.["data-table-alignment"]] || AlignmentType.LEFT,
+    indent: Number(tableNode.attribs?.["data-table-indent"])
+      ? { size: Math.max(-31680, Math.min(31680, Math.round(Number(tableNode.attribs["data-table-indent"])))), type: WidthType.DXA }
+      : undefined,
     borders: docxBordersFromNode(tableNode, "data-table-borders", true),
     rows
   });

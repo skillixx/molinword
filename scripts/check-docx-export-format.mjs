@@ -22,7 +22,7 @@ const content = `
     <span style="font-variant-caps:small-caps">Small caps export source</span>
     <span style="border-top:2px double #C00000;border-right:2px double #C00000;border-bottom:2px double #C00000;border-left:2px double #C00000;padding-top:2.67px;padding-right:2.67px;padding-bottom:2.67px;padding-left:2.67px;--word-text-border:double,12,C00000,2">Run border export source</span>
   </p>
-  <table>
+  <table data-table-alignment="left" data-table-indent="720" style="margin-left:48px;margin-right:auto">
     <tbody>
       <tr><th><p>表头 A</p></th><th><p>表头 B</p></th></tr>
       <tr>
@@ -277,6 +277,9 @@ const geometryTableXml = (documentXml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/g) || []).
 assert.match(geometryTableXml, /<w:jc w:val="right"\/>/);
 assert.match(geometryTableXml, /<w:tblW w:type="dxa" w:w="6000"\/>/);
 assert.match(geometryTableXml, /<w:tblLayout w:type="fixed"\/>/);
+const indentedTableXml = (documentXml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/g) || []).find((table) => table.includes("Table list A")) || "";
+assert.match(indentedTableXml, /<w:jc w:val="left"\/>/);
+assert.match(indentedTableXml, /<w:tblInd w:type="dxa" w:w="720"\/>/);
 const geometryTableBordersXml = geometryTableXml.match(/<w:tblBorders>[\s\S]*?<\/w:tblBorders>/)?.[0] || "";
 assert.match(geometryTableBordersXml, /<w:top w:val="single" w:color="FF0000" w:sz="8"\/>/);
 assert.match(geometryTableBordersXml, /<w:insideH w:val="dotted" w:color="888888" w:sz="4"\/>/);

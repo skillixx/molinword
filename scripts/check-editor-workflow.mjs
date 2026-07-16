@@ -457,6 +457,13 @@ try {
     marginLeft: table.style.marginLeft,
     marginRight: table.style.marginRight
   })), { alignment: "right", marginLeft: "auto", marginRight: "0px" });
+  await page.locator('label[title="设置当前表格左缩进"] select').selectOption("567");
+  assert.deepEqual(await sourceTables.last().evaluate((table) => ({
+    alignment: table.getAttribute("data-table-alignment"),
+    indent: table.getAttribute("data-table-indent"),
+    marginLeft: table.style.marginLeft,
+    marginRight: table.style.marginRight
+  })), { alignment: "left", indent: "567", marginLeft: "37.8px", marginRight: "auto" });
 
   await page.evaluate(() => {
     const paragraph = document.querySelector(".word-editor p");
@@ -586,7 +593,7 @@ try {
   assert.match(storedDocument.content, /<p[^>]+data-paragraph-shading="[^\"]*DDEBF7[^\"]*"[^>]+data-paragraph-borders="[^\"]*dashed[^\"]*"[^>]*>[\s\S]*?段落外观工具[\s\S]*?<\/p>/);
   assert.match(storedDocument.content, /data-section-break="nextPage"/);
   assert.match(storedDocument.content, /rowspan="2"/);
-  assert.match(storedDocument.content, /<table(?=[^>]*data-table-alignment="right")(?=[^>]*style="[^"]*margin-left:\s*auto)(?=[^>]*style="[^"]*margin-right:\s*0px)[^>]*>[\s\S]*?商务评审/);
+  assert.match(storedDocument.content, /<table(?=[^>]*data-table-alignment="left")(?=[^>]*data-table-indent="567")(?=[^>]*style="[^"]*margin-left:\s*37\.8px)(?=[^>]*style="[^"]*margin-right:\s*auto)[^>]*>[\s\S]*?商务评审/);
   assert.match(storedDocument.content, /第二节横向内容/);
   assert.match(storedDocument.content, /第二节横向页眉/);
   const storedSectionLayoutText = storedDocument.content.match(/data-section-layout="([^"]+)"/)?.[1]
@@ -677,7 +684,7 @@ try {
   assert.equal((reopenedHtml.match(/data-docx-tab="true"/g) || []).length, 4);
   assert.match(reopenedHtml, /<td[^>]+data-cell-margins="[^"]*&quot;top&quot;:180[^"]*"[^>]+data-cell-vertical-align="bottom"[^>]+data-cell-shading="#FFF2CC"[^>]*>.*商务评审/s);
   assert.match(reopenedHtml, /<td[^>]+data-cell-borders="[^"]*&quot;top&quot;[^"]*dashed[^"]*6B7280[^"]*"[^>]*>.*商务评审/s);
-  assert.match(reopenedHtml, /<table(?=[^>]*data-table-alignment="right")(?=[^>]*style="[^"]*margin-left:\s*auto)(?=[^>]*style="[^"]*margin-right:\s*0px)[^>]*>[\s\S]*?商务评审/);
+  assert.match(reopenedHtml, /<table(?=[^>]*data-table-alignment="left")(?=[^>]*data-table-indent="567")(?=[^>]*style="[^"]*margin-left:\s*37\.8px)(?=[^>]*style="[^"]*margin-right:\s*auto)[^>]*>[\s\S]*?商务评审/);
   assert.match(reopenedHtml, /<h4[^>]+data-outline-level="3"[^>]*>[\s\S]*?大纲级别工具[\s\S]*?<\/h4>/);
   const reopenedHeaderRow = reopenedHtml.match(/<tr[^>]+data-row-height="850"[^>]*>/)?.[0] || "";
   assert.match(reopenedHeaderRow, /data-row-height-rule="exact"/);
@@ -725,7 +732,8 @@ try {
   const geometryTable = (documentXml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/g) || []).find((table) => table.includes("商务评审")) || "";
   assert.match(geometryTable, /<w:tblW w:type="dxa" w:w="7200"\/>/);
   assert.match(geometryTable, /<w:tblLayout w:type="fixed"\/>/);
-  assert.match(geometryTable, /<w:jc w:val="right"\/>/);
+  assert.match(geometryTable, /<w:jc w:val="left"\/>/);
+  assert.match(geometryTable, /<w:tblInd w:type="dxa" w:w="567"\/>/);
   assert.match(geometryTable, /<w:tblGrid><w:gridCol w:w="1800"\/><w:gridCol w:w="5400"\/><\/w:tblGrid>/);
   const businessReviewCellXml = (geometryTable.match(/<w:tc>[\s\S]*?<\/w:tc>/g) || []).find((cell) => cell.includes("商务评审")) || "";
   const businessReviewMarginsXml = businessReviewCellXml.match(/<w:tcMar>[\s\S]*?<\/w:tcMar>/)?.[0] || "";
@@ -894,7 +902,14 @@ try {
   assert.match(await previewSmallCaps.getAttribute("style") || "", /font-variant-caps:\s*small-caps/i);
   const previewDarkCyanHighlight = page.locator('.page-body mark[data-highlight="darkCyan"]').filter({ hasText: "突出显示工具" }).first();
   await previewDarkCyanHighlight.waitFor();
-  assert.equal(await previewDarkCyanHighlight.evaluate((mark) => getComputedStyle(mark).backgroundColor), "rgb(0, 128, 128)");
+  // 中文注解：分页器可能在等待期间替换片段节点，从当前已连接节点中取样，避免读取到脱离文档后的空计算样式。
+  await page.waitForFunction(() => Array.from(document.querySelectorAll('.page-body mark[data-highlight="darkCyan"]'))
+    .some((mark) => mark.isConnected && mark.textContent?.includes("突出显示工具") && getComputedStyle(mark).backgroundColor === "rgb(0, 128, 128)"));
+  const previewHighlightColor = await page.evaluate(() => Array.from(document.querySelectorAll('.page-body mark[data-highlight="darkCyan"]'))
+    .find((mark) => mark.isConnected && mark.textContent?.includes("突出显示工具"))
+    ? getComputedStyle(Array.from(document.querySelectorAll('.page-body mark[data-highlight="darkCyan"]')).find((mark) => mark.isConnected && mark.textContent?.includes("突出显示工具"))).backgroundColor
+    : "");
+  assert.equal(previewHighlightColor, "rgb(0, 128, 128)");
 
   const result = await page.evaluate(() => {
     const pages = Array.from(document.querySelectorAll(".page-sheet"));
@@ -976,6 +991,7 @@ try {
           previewWidth: preview ? Math.round(preview.getBoundingClientRect().width) : 0,
           previewColumns: widths(preview),
           alignment: preview?.getAttribute("data-table-alignment") || "",
+          indent: preview?.getAttribute("data-table-indent") || "",
           marginLeft: preview ? Number.parseFloat(getComputedStyle(preview).marginLeft) : 0,
           marginRight: preview ? Number.parseFloat(getComputedStyle(preview).marginRight) : 0
         };
@@ -1054,9 +1070,10 @@ try {
   assert.ok(result.previewTabWidths.every((width) => width >= 2), "分页预览中的制表位应按 Word 位置完成布局");
   assert.ok(result.tableGeometry.previewWidth >= 480 && result.tableGeometry.previewWidth <= 481);
   assert.deepEqual(result.tableGeometry.previewColumns, [120, 360]);
-  assert.equal(result.tableGeometry.alignment, "right");
-  assert.ok(result.tableGeometry.marginLeft > 100);
-  assert.equal(result.tableGeometry.marginRight, 0);
+  assert.equal(result.tableGeometry.alignment, "left");
+  assert.equal(result.tableGeometry.indent, "567");
+  assert.ok(Math.abs(result.tableGeometry.marginLeft - 37.8) < 0.2);
+  assert.ok(result.tableGeometry.marginRight > 70);
   assert.deepEqual(result.previewBusinessCellFormat, {
     paddingTop: "12px",
     paddingRight: "12px",

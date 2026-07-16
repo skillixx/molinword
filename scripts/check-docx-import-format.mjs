@@ -163,6 +163,7 @@ async function buildFormattedDocxFixture() {
       <w:tr><w:trPr><w:tblHeader/><w:cantSplit/><w:trHeight w:val="720" w:hRule="exact"/></w:trPr><w:tc><w:tcPr><w:tcW w:type="dxa" w:w="1800"/><w:tcMar><w:right w:w="600" w:type="dxa"/></w:tcMar><w:vAlign w:val="center"/><w:shd w:val="clear" w:fill="D9EAD3"/><w:tcBorders><w:right w:val="double" w:sz="16" w:color="800080"/></w:tcBorders></w:tcPr><w:p><w:r><w:t>Geometry A</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:tcW w:type="dxa" w:w="4200"/></w:tcPr><w:p><w:r><w:t>Geometry B</w:t></w:r></w:p></w:tc></w:tr>
     </w:tbl>
     <w:tbl>
+      <w:tblPr><w:jc w:val="left"/><w:tblInd w:w="720" w:type="dxa"/></w:tblPr>
       <w:tr>
         <w:tc><w:p><w:r><w:t>Header A</w:t></w:r></w:p></w:tc>
         <w:tc><w:p><w:r><w:t>Header B</w:t></w:r></w:p></w:tc>
@@ -553,6 +554,10 @@ assert.match(imported.content, /<ol data-list-format="decimal"[^>]*><li>Override
 // 中文注解：具体编号实例的 startOverride 必须覆盖抽象层级的 start=5，并进入在线 ol 的标准 start 属性。
 assert.match(imported.content, /<ol start="7" data-list-format="upperRoman" style="list-style-type:\s*upper-roman"><li>Started Roman item 1<\/li><li>Started Roman item 2<\/li><\/ol>/);
 assert.match(imported.content, /<td[^>]*><p[^>]*>Import Cell 1<\/p><ol data-list-format="decimal"[^>]*><li>Table ordered item<\/li><\/ol><\/td>/);
+const importedIndentedTable = (imported.content.match(/<table(?:\s[^>]*)?>[\s\S]*?<\/table>/g) || []).find((table) => table.includes("Import Cell 1")) || "";
+assert.match(importedIndentedTable, /data-table-alignment="left"/);
+assert.match(importedIndentedTable, /data-table-indent="720"/);
+assert.match(importedIndentedTable, /margin-left:\s*48px/);
 assert.match(imported.content, /<td colspan="2" rowspan="2"[^>]*><p[^>]*>Merged approval<\/p><\/td><td[^>]*><p[^>]*>Approved<\/p><\/td>/);
 // 中文注解：标题识别必须以 Word 的 outlineLvl 为准，不能依赖英文 Heading 或中文“标题”样式名称。
 assert.match(imported.content, /<h4[^>]+data-outline-level="3"[^>]*>[\s\S]*?Custom outline level 4[\s\S]*?<\/h4>/);
@@ -685,6 +690,9 @@ assert.match(geometryCellBordersRoundTripXml, /<w:top w:val="single" w:color="FF
 assert.match(geometryCellBordersRoundTripXml, /<w:right w:val="double" w:color="800080" w:sz="16"\/>/);
 assert.match(geometryCellBordersRoundTripXml, /<w:bottom w:val="double" w:color="0000FF" w:sz="12"\/>/);
 assert.match(geometryCellBordersRoundTripXml, /<w:left w:val="nil" w:color="000000" w:sz="0"\/>/);
+const indentedTableRoundTripXml = (roundTripXml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/g) || []).find((table) => table.includes("Import Cell 1")) || "";
+assert.match(indentedTableRoundTripXml, /<w:jc w:val="left"\/>/);
+assert.match(indentedTableRoundTripXml, /<w:tblInd w:type="dxa" w:w="720"\/>/);
 const roundTripImported = await parseImportedDocument({
   originalname: "round-trip-format.docx",
   buffer: roundTripBuffer,
@@ -721,6 +729,9 @@ assert.match(roundTripImportedGeometryTable, /margin-right:\s*auto/);
 assert.match(roundTripImportedGeometryTable, /style="(?=[^"]*width:\s*400px)(?=[^"]*margin-left:\s*auto)(?=[^"]*margin-right:\s*auto)(?=[^"]*table-layout:\s*fixed)[^"]*"/);
 assert.match(roundTripImportedGeometryTable, /colwidth="120"/);
 assert.match(roundTripImportedGeometryTable, /colwidth="280"/);
+const roundTripImportedIndentedTable = (roundTripImported.content.match(/<table(?:\s[^>]*)?>[\s\S]*?<\/table>/g) || []).find((table) => table.includes("Import Cell 1")) || "";
+assert.match(roundTripImportedIndentedTable, /data-table-indent="720"/);
+assert.match(roundTripImportedIndentedTable, /margin-left:\s*48px/);
 assert.match(roundTripImportedGeometryTable, /data-cell-vertical-align="center"/);
 assert.match(roundTripImportedGeometryTable, /data-cell-shading="#D9EAD3"/);
 assert.match(roundTripImportedGeometryTable, /padding-right:\s*40px/);
