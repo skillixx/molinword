@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import express from "express";
-import { AlignmentType, BorderStyle, Column, ColumnBreak as DocxColumnBreak, Document, ExternalHyperlink, Footer, Header, HeadingLevel, HeightRule, ImageRun, LevelFormat, LineRuleType, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, Tab, Table, TableCell, TableLayoutType, TableRow, TextDirection, TextRun, TextWrappingSide, TextWrappingType, VerticalAlignTable, WidthType } from "docx";
+import { AlignmentType, BorderStyle, Column, ColumnBreak as DocxColumnBreak, Document, ExternalHyperlink, Footer, Header, HeadingLevel, HeightRule, ImageRun, LevelFormat, LineRuleType, NoBreakHyphen, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, SoftHyphen, Tab, Table, TableCell, TableLayoutType, TableRow, TextDirection, TextRun, TextWrappingSide, TextWrappingType, VerticalAlignTable, WidthType } from "docx";
 import { imageSize } from "image-size";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
@@ -1065,6 +1065,8 @@ function docxTextFromRun(runNode) {
     .map((child) => {
       if (child.type === "tag" && child.name === "w:t") return child.children?.map((textNode) => textNode.data || "").join("") || "";
       if (child.type === "tag" && child.name === "w:tab") return "\t";
+      if (child.type === "tag" && child.name === "w:softHyphen") return "\u00AD";
+      if (child.type === "tag" && child.name === "w:noBreakHyphen") return "\u2011";
       if (child.type === "tag" && child.name === "w:br" && !["page", "column"].includes(firstValue(child.attribs, ["w:type", "type"]))) return "\n";
       return "";
     })
@@ -1397,6 +1399,8 @@ async function docxRunToHtml(runNode, inheritedRunStyles = {}, context = {}, tab
     if (child.type !== "tag") return "";
     if (child.name === "w:t") return renderText(child.children?.map((textNode) => textNode.data || "").join("") || "");
     if (child.name === "w:tab") return docxTabHtml(tabState);
+    if (child.name === "w:softHyphen") return renderText("\u00AD");
+    if (child.name === "w:noBreakHyphen") return renderText("\u2011");
     if (child.name !== "w:br") return "";
     const breakType = firstValue(child.attribs, ["w:type", "type"]);
     if (breakType === "page") return pageBreakHtml();
@@ -2485,8 +2489,12 @@ function textRunsFromNode(node, marks = {}) {
   }
   if (node.type === "text") {
     const text = (node.data || "").replace(/\s+/g, " ");
+    const specialHyphenChildren = /[\u00AD\u2011]/u.test(text)
+      ? text.split(/([\u00AD\u2011])/u).filter(Boolean).map((part) => part === "\u00AD" ? new SoftHyphen() : part === "\u2011" ? new NoBreakHyphen() : part)
+      : null;
     return text ? [new TextRun({
-      text,
+      ...(specialHyphenChildren ? { children: specialHyphenChildren } : { text }),
+      // 中文注解：特殊连字符必须写成 Word 原生节点，才能分别保持“可选断行”和“禁止断行”的排版语义。
       bold: marks.bold,
       italics: marks.italics,
       // 中文注解：docx 内部对 smallCaps/caps 使用互斥分支，存在全部大写设置时优先写入 w:caps。

@@ -795,6 +795,10 @@ const letterCaseFormatOptions = [
   { label: "全部大写", value: "uppercase" },
   { label: "小型大写", value: "small-caps" }
 ];
+const specialHyphenOptions = [
+  { label: "软连字符", value: "soft" },
+  { label: "不换行连字符", value: "nonbreaking" }
+];
 const paragraphStyleOptions = [
   { label: "正文", value: "paragraph" },
   { label: "标题 1", value: "heading-1" },
@@ -3899,6 +3903,15 @@ function Editor(props: {
     setSelectionHint("已插入分栏符。");
   };
 
+  const insertSpecialHyphen = (value: string, label: string) => {
+    if (!editor) return;
+    const character = value === "soft" ? "\u00AD" : value === "nonbreaking" ? "\u2011" : "";
+    if (!character) return;
+    // 中文注解：直接插入 Unicode 对等字符，在线换行由浏览器原生排版，导出时后端再映射为 OOXML 专用节点。
+    editor.chain().focus().insertContent(character).run();
+    setSelectionHint(`已插入${label}。`);
+  };
+
   const updateCurrentSectionLayout = (updater: (current: DocumentPageLayout) => DocumentPageLayout) => {
     const currentSectionIndex = activeSectionIndexRef.current;
     const nextLayout = normalizeDocumentPageLayout(updater(activeSectionLayoutRef.current));
@@ -4271,6 +4284,7 @@ function Editor(props: {
             <FormatSelect title="设置选中文字的字符间距" placeholder="字符间距" options={characterSpacingOptions} onSelect={(value, label) => applySelectedTextStyle({ "letter-spacing": value === "normal" ? undefined : value }, `字符间距：${label}`)} />
             <FormatSelect title="设置选中文字相对基线的升降位置" placeholder="文字位置" options={baselinePositionOptions} onSelect={(value, label) => applySelectedTextStyle({ "vertical-align": value === "baseline" ? undefined : value }, `文字位置：${label}`)} />
             <FormatSelect title="设置选中文字的非破坏性字母大小写格式" placeholder="字母格式" options={letterCaseFormatOptions} onSelect={(value, label) => applySelectedTextStyle({ "text-transform": value === "uppercase" ? "uppercase" : undefined, "font-variant-caps": value === "small-caps" ? "small-caps" : undefined }, label)} />
+            <FormatSelect title="插入控制英文复合词换行位置的特殊连字符" placeholder="特殊连字符" options={specialHyphenOptions} onSelect={insertSpecialHyphen} />
             <label className="format-select" title="设置选中文字颜色">
               <Type size={16} />
               <select aria-label="文字颜色" defaultValue="" onChange={(event) => { if (event.target.value) applySelectedTextStyle({ color: event.target.value }, "颜色"); event.target.value = ""; }}>
