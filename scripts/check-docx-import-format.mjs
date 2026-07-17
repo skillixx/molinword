@@ -114,6 +114,12 @@ async function buildFormattedDocxFixture() {
     <w:pPr><w:outlineLvl w:val="3"/></w:pPr>
     <w:rPr><w:b/><w:sz w:val="26"/></w:rPr>
   </w:style>
+  <w:style w:type="paragraph" w:styleId="DefaultBlackHeading">
+    <w:name w:val="Default Black Heading"/>
+    <w:basedOn w:val="Normal"/>
+    <w:pPr><w:outlineLvl w:val="1"/></w:pPr>
+    <w:rPr><w:b/><w:sz w:val="28"/></w:rPr>
+  </w:style>
   <w:style w:type="paragraph" w:styleId="Title">
     <w:name w:val="Title"/>
     <w:basedOn w:val="Normal"/>
@@ -170,6 +176,7 @@ async function buildFormattedDocxFixture() {
     <w:p><w:r><w:t>链接前 </w:t></w:r><w:hyperlink r:id="rIdHyperlink1"><w:r><w:rPr><w:u w:val="single"/><w:color w:val="0563C1"/></w:rPr><w:t>OpenAI documentation</w:t></w:r></w:hyperlink><w:r><w:t> 链接后</w:t></w:r></w:p>
     <w:p><w:pPr><w:pStyle w:val="BodyBased"/></w:pPr><w:r><w:t>Inherited spacing</w:t></w:r></w:p>
     <w:p><w:pPr><w:pStyle w:val="CustomOutline4"/></w:pPr><w:r><w:t>Custom outline level 4</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="DefaultBlackHeading"/></w:pPr><w:r><w:t>默认黑色标题</w:t></w:r></w:p>
     <w:p><w:pPr><w:outlineLvl w:val="7"/></w:pPr><w:r><w:t>Direct outline level 8</w:t></w:r></w:p>
     <w:p><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr><w:r><w:t>Hanging indent source</w:t></w:r></w:p>
     <w:p><w:pPr><w:ind w:start="480" w:end="360"/></w:pPr><w:r><w:t>Side indents source</w:t></w:r></w:p>
@@ -485,6 +492,9 @@ assert.match(imported.content, /line-height:\s*1\.5/);
 assert.match(imported.content, /margin-top:\s*6pt/);
 assert.match(imported.content, /margin-bottom:\s*12pt/);
 assert.match(imported.content, /color:\s*#C00000/i);
+assert.match(imported.content, /<h1[^>]*>\s*<span[^>]*color:\s*#1F4E79[^>]*>/i);
+// 中文注解：Word 的“自动”字体色不会写入 w:color；标题导入后仍应按 Word 默认黑色显示，不能继承网页主题绿。
+assert.match(imported.content, /<h2[^>]*>\s*<span[^>]*color:\s*#000000[^>]*>\s*<strong>默认黑色标题<\/strong>\s*<\/span>\s*<\/h2>/i);
 assert.match(imported.content, /<strong>/);
 assert.match(imported.content, /<s><em><u>斜体下划线删除线文本<\/u><\/em><\/s>/);
 assert.match(imported.content, /<mark data-highlight="yellow" style="background-color:\s*#FFFF00">Highlighted text<\/mark>/);

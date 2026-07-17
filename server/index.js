@@ -1532,7 +1532,9 @@ async function parseStyledDocxParagraph(paragraphNode, context) {
   const effectiveStyleId = styleId || defaultParagraphStyleId;
   const style = { id: effectiveStyleId, ...(styleMap.get(effectiveStyleId) || defaultParagraphStyle) };
   const paragraphStyles = { ...(style.paragraph || {}), ...parseParagraphProperties(pPr, context.themeColors || {}) };
-  const inheritedRunStyles = style.run || {};
+  const tag = docxParagraphTag(style, paragraphStyles);
+  // 中文注解：Word 的“自动”字体色通常不写入 w:color，桌面端会按黑色显示；标题必须补齐该默认值，避免继承在线编辑器的墨绿色主题。显式源颜色随后覆盖此兜底值。
+  const inheritedRunStyles = /^h[1-6]$/.test(tag) ? { color: "#000000", ...(style.run || {}) } : (style.run || {});
   const tabState = { stops: normalizeDocxTabStops(paragraphStyles.$tabStops), index: 0 };
   const activeCommentIds = context.activeCommentIds || (context.activeCommentIds = []);
   const bodyParts = activeCommentIds.map((id) => commentMarkStartHtml(context.comments?.get(id)));
@@ -1577,7 +1579,6 @@ async function parseStyledDocxParagraph(paragraphNode, context) {
   // 中文注解：跨段批注在每个 HTML 块末尾闭合、下一段重新打开，保持合法 HTML 与连续审阅语义。
   for (let index = activeCommentIds.length - 1; index >= 0; index -= 1) bodyParts.push("</span>");
   const body = bodyParts.join("") || "<br>";
-  const tag = docxParagraphTag(style, paragraphStyles);
   const list = docxListInfo(pPr, style, numbering);
   const indentLevel = wordTwipToIndentLevel(firstValue(xmlChild(pPr, "w:ind")?.attribs, ["w:firstLine", "firstLine"]));
   const attrs = [];
