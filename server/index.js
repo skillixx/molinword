@@ -4196,10 +4196,14 @@ function validateAiText(text, options = {}) {
 function normalizeGeneratedBodyOutline(outline, topic = "AI Word 文档") {
   const items = Array.isArray(outline) ? outline : [];
   const normalized = items
-    .map((item) => String(typeof item === "string" ? item : item?.title || "").replace(/\s+/g, " ").trim())
-    .filter(Boolean)
-    .slice(0, 12);
-  return normalized.length ? normalized : [`一、${String(topic || "AI Word 文档").trim() || "AI Word 文档"}正文`];
+    .map((item) => {
+      const title = String(typeof item === "string" ? item : item?.title || "").replace(/\s+/g, " ").trim().slice(0, 200);
+      const requestedLevel = Number(typeof item === "object" ? item?.level : 2);
+      return { title, level: Number.isInteger(requestedLevel) ? Math.min(6, Math.max(1, requestedLevel)) : 2 };
+    })
+    .filter((item) => item.title);
+  // 中文注解：不能静默截断用户大纲；提示词和格式化统一复用完整规范化结果，确保章节与正文按索引准确对应。
+  return normalized.length ? normalized : [{ title: `一、${String(topic || "AI Word 文档").trim() || "AI Word 文档"}正文`, level: 2 }];
 }
 
 function cleanGeneratedBodyText(value, limit = 6000) {
@@ -4227,8 +4231,8 @@ function generatedBodyParagraphs(value) {
 }
 
 function parseGeneratedBodySections(text, outline, topic) {
-  const titles = normalizeGeneratedBodyOutline(outline, topic);
-  const sections = titles.map((title) => ({ title, paragraphs: [] }));
+  const normalizedOutline = normalizeGeneratedBodyOutline(outline, topic);
+  const sections = normalizedOutline.map((item) => ({ ...item, paragraphs: [] }));
   const jsonSections = extractJsonArray(String(text || ""));
 
   if (jsonSections?.length) {
@@ -4239,7 +4243,7 @@ function parseGeneratedBodySections(text, outline, topic) {
   } else {
     let currentIndex = 0;
     let nextSequentialHeadingIndex = 0;
-    const titleKeys = titles.map(generatedBodyHeadingKey);
+    const titleKeys = normalizedOutline.map((item) => generatedBodyHeadingKey(item.title));
     for (const rawLine of String(text || "").replace(/```(?:json)?/gi, "").replace(/```/g, "").split(/\r?\n/)) {
       const line = cleanGeneratedBodyText(rawLine);
       if (!line) continue;
@@ -4278,7 +4282,8 @@ function formatGeneratedBodyHtml(text, outline = [], topic = "AI Word 文档") {
 
   // 中文注解：排版写入受控 HTML，而不是仅靠页面主题 CSS，确保保存重开和导出 Word 都保留标题、缩进、颜色与字重。
   return sections.map((section) => {
-    const heading = `<h2 data-outline-level="1" data-keep-next="true" data-keep-lines="true" data-widow-control="true" style="${headingStyle}"><span style="${headingTextStyle}">${escapeHtml(section.title)}</span></h2>`;
+    const headingLevel = Math.min(6, Math.max(1, section.level));
+    const heading = `<h${headingLevel} data-outline-level="${headingLevel - 1}" data-keep-next="true" data-keep-lines="true" data-widow-control="true" style="${headingStyle}"><span style="${headingTextStyle}">${escapeHtml(section.title)}</span></h${headingLevel}>`;
     const paragraphs = section.paragraphs.map((paragraph) => `<p data-indent="1" data-widow-control="true" style="${paragraphStyle}"><span style="${bodyTextStyle}">${escapeHtml(paragraph)}</span></p>`).join("");
     return `${heading}${paragraphs}`;
   }).join("") || "<p></p>";
@@ -5011,11 +5016,11 @@ app.post("/api/ai/generate-outline", async (request, response) => {
 
 app.post("/api/ai/generate-body", async (request, response) => {
   const { topic, documentType, tone, requirement, outline, documentId } = request.body;
-  const normalizedOutline = Array.isArray(outline) ? outline : [];
+  const normalizedOutline = normalizeGeneratedBodyOutline(outline, topic);
   const startedAt = Date.now();
   let currentUser = { userId: localUserId, appId: normalizeMolingId(molingAppId), productId: normalizeMolingId(molingProductId), isMolingUser: false };
   let pointHold = null;
-  const prompt = `Write the main body for a ${documentType || "Word"} document in Simplified Chinese. Topic: ${topic || "AI Word document"}. Tone: ${tone || "formal"}. Extra requirement: ${requirement || "none"}.\nOutline:\n${normalizedOutline.map((item, index) => `${index + 1}. ${item}`).join("\n")}\nReturn only a JSON array with exactly ${normalizedOutline.length || 1} objects in outline order. Each object must be {"paragraphs":["paragraph 1","paragraph 2"]}. Do not repeat or rewrite section titles. Each section needs 1-2 complete paragraphs suitable for Word export.`;
+  const prompt = `Write the main body for a ${documentType || "Word"} document in Simplified Chinese. Topic: ${topic || "AI Word document"}. Tone: ${tone || "formal"}. Extra requirement: ${requirement || "none"}.\nOutline:\n${normalizedOutline.map((item, index) => `${index + 1}. ${item.title}`).join("\n")}\nReturn only a JSON array with exactly ${normalizedOutline.length} objects in outline order. Each object must be {"paragraphs":["paragraph 1","paragraph 2"]}. Do not repeat or rewrite section titles. Each section needs 1-2 complete paragraphs suitable for Word export.`;
 
   try {
     currentUser = await getCurrentUser(request);

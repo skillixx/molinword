@@ -123,6 +123,8 @@ async function apiResponse(request, response) {
   if (request.method === "POST" && url.pathname === "/api/ai/generate-body") {
     const body = await readJsonBody(request);
     assert.equal(body.documentId, fixtureDocument.id);
+    assert.ok(Array.isArray(body.outline) && body.outline.length > 0);
+    assert.ok(body.outline.every((item) => typeof item?.title === "string"));
     sendJson(response, { content: "AI 自动格式标题\nAI 自动生成的正文段落。", contentHtml: generatedBodyHtml });
     return true;
   }

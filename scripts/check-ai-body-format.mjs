@@ -20,6 +20,29 @@ assert.match(html, /<p[^>]+data-indent="1"[^>]+data-widow-control="true"[^>]+sty
 assert.doesNotMatch(html, /font-family:\s*"/i);
 assert.equal((html.match(/<p\b/g) || []).length, 3);
 
+const layeredOutline = [
+  { title: "一、总体方案", level: 2 },
+  { title: "1.1 实施步骤", level: 3 }
+];
+const layeredHtml = formatGeneratedBodyHtml(JSON.stringify([
+  { paragraphs: ["总体方案正文。"] },
+  { paragraphs: ["实施步骤正文。"] }
+]), layeredOutline, "分层项目");
+// 中文注解：正文排版必须保留用户大纲层级，二级、三级标题不能在生成后被扁平化。
+assert.match(layeredHtml, /<h2[^>]+data-outline-level="1"[^>]*>[\s\S]*?一、总体方案[\s\S]*?<\/h2>/);
+assert.match(layeredHtml, /<h3[^>]+data-outline-level="2"[^>]*>[\s\S]*?1\.1 实施步骤[\s\S]*?<\/h3>/);
+
+const longOutline = Array.from({ length: 13 }, (_, index) => ({ title: `第${index + 1}节`, level: index % 2 ? 3 : 2 }));
+const longHtml = formatGeneratedBodyHtml(JSON.stringify(longOutline.map((_, index) => ({ paragraphs: [`第${index + 1}节正文。`] }))), longOutline, "长大纲");
+assert.equal((longHtml.match(/<h[1-6]\b/g) || []).length, 13);
+assert.match(longHtml, /第13节正文。/);
+
+const filteredOutlineHtml = formatGeneratedBodyHtml(JSON.stringify([
+  { paragraphs: ["有效第一节正文。"] },
+  { paragraphs: ["有效第二节正文。"] }
+]), [{ title: "" }, { title: "第一节", level: 2 }, { title: "第二节", level: 3 }], "空项过滤");
+assert.match(filteredOutlineHtml, /第一节[\s\S]*有效第一节正文。[\s\S]*第二节[\s\S]*有效第二节正文。/);
+
 const plainTextHtml = formatGeneratedBodyHtml(`## 一、项目背景与目标\n项目围绕实际需求开展。\n\n2. 实施方案\n方案强调分阶段落地。`, outline, "智能文档项目");
 assert.match(plainTextHtml, /一、项目背景与目标[\s\S]*项目围绕实际需求开展。/);
 assert.match(plainTextHtml, /二、实施方案[\s\S]*方案强调分阶段落地。/);
@@ -43,5 +66,10 @@ assert.match(bodyXml, /<w:ind w:firstLine="440"\/>/);
 assert.match(bodyXml, /<w:spacing[^>]+w:line="360"[^>]+w:lineRule="auto"\/>/);
 assert.match(bodyXml, /<w:b\/>/);
 assert.match(bodyXml, /<w:color w:val="000000"\/>/);
+
+const layeredDocxBuffer = await createDocxBuffer({ title: "多级大纲验证", content: layeredHtml });
+const layeredDocumentXml = await (await JSZip.loadAsync(layeredDocxBuffer)).file("word/document.xml").async("string");
+const layeredHeadingXml = (layeredDocumentXml.match(/<w:p[\s\S]*?<\/w:p>/g) || []).find((paragraph) => paragraph.includes("1.1 实施步骤")) || "";
+assert.match(layeredHeadingXml, /<w:pStyle w:val="Heading3"\/>/);
 
 console.log("AI 正文自动排版检查通过。", { sectionCount: outline.length, paragraphCount: 3 });

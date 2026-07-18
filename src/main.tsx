@@ -2924,7 +2924,8 @@ function App() {
       documentType: selectedType,
       tone,
       requirement,
-      outline: outline.map((item) => item.title),
+      // 中文注解：正文生成需要同时传递标题层级，避免多级大纲在自动排版后全部降为同一级标题。
+      outline: outline.map((item) => ({ title: item.title, level: item.level })),
       documentId: currentDocumentId
     });
     if (result?.content) {
