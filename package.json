@@ -9,6 +9,7 @@
     "build": "tsc -b && vite build",
     "check:docx-export-format": "node scripts/check-docx-export-format.mjs",
     "check:docx-import-format": "node scripts/check-docx-import-format.mjs",
+    "check:ai-body-format": "node scripts/check-ai-body-format.mjs",
     "check:upload-file-name-encoding": "node scripts/check-upload-file-name-encoding.mjs",
     "check:legacy-doc-heading-color": "node scripts/check-legacy-doc-heading-color.mjs",
     "check:editor-workflow": "npm run build && node scripts/check-editor-workflow.mjs",

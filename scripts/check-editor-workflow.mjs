@@ -55,6 +55,7 @@ const fixtureTemplate = {
   assets: [{ id: 1, purpose: "template_style", fileName: "style.json", fileType: "json", fileSize: 100, url: "/api/templates/3/assets/1/download" }]
 };
 const fixtureWordStyle = { fontFamily: "SimSun", titleSize: 38, headingSize: 28, bodySize: 22, lineSpacing: 380, titleColor: "1F4E79", headingColor: "245F55" };
+const generatedBodyHtml = '<h2 data-outline-level="1" data-keep-next="true" data-keep-lines="true" data-widow-control="true" style="margin-top:12pt;margin-bottom:6pt;line-height:1.3"><span style="color:#000000;font-weight:bold;font-family:Microsoft YaHei;font-size:16pt">AI 自动格式标题</span></h2><p data-indent="1" data-widow-control="true" style="line-height:1.5;text-align:justify;margin-top:0pt;margin-bottom:6pt"><span style="color:#000000;font-weight:600;font-family:Microsoft YaHei;font-size:11pt">AI 自动生成的正文段落。</span></p>';
 let storedDocument = structuredClone(fixtureDocument);
 let exportedDocxBuffer = null;
 let manualSaveRequestCount = 0;
@@ -117,6 +118,12 @@ async function apiResponse(request, response) {
     const hydratedPageLayout = JSON.parse(JSON.stringify(storedDocument.pageLayout).replaceAll("/api/files/2/content", tinyPng));
     exportedDocxBuffer = await createDocxBuffer({ title: storedDocument.title, content, templateStyle: fixtureWordStyle, pageLayout: hydratedPageLayout });
     sendJson(response, { file: { id: 1, documentId: storedDocument.id, fileName: "editor-parity.docx", fileType: "docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", fileSize: exportedDocxBuffer.length, downloadUrl: "/api/files/1/download" } }, 201);
+    return true;
+  }
+  if (request.method === "POST" && url.pathname === "/api/ai/generate-body") {
+    const body = await readJsonBody(request);
+    assert.equal(body.documentId, fixtureDocument.id);
+    sendJson(response, { content: "AI 自动格式标题\nAI 自动生成的正文段落。", contentHtml: generatedBodyHtml });
     return true;
   }
   if (request.method === "GET" && url.pathname === "/api/files/1/download" && exportedDocxBuffer) {
@@ -1511,6 +1518,20 @@ try {
   // 中文注解：从表格单元格插入时也必须提升为正文顶层节点，否则预览和导出都无法拆节。
   assert.equal(await editor.locator(":scope > .section-break-marker").count(), sectionCountBeforeNestedInsert + 1);
   assert.equal(await editor.locator("table .section-break-marker, li .section-break-marker").count(), 0);
+  documentUpdatesFrozen = false;
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole("button", { name: "生成正文", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector(".word-editor")?.textContent?.includes("AI 自动生成的正文段落。"));
+  while (!storedDocument.content.includes("AI 自动生成的正文段落。")) await new Promise((resolveDelay) => setTimeout(resolveDelay, 20));
+  const generatedEditorHtml = await editor.innerHTML();
+  // 中文注解：前端必须优先采用服务端结构化 HTML，并在保存后保留标题与正文排版，而不是再次降级成无样式纯文本。
+  assert.match(generatedEditorHtml, /<h2[^>]+data-outline-level="1"[^>]+data-keep-next="true"[^>]*>[\s\S]*?AI 自动格式标题[\s\S]*?<\/h2>/);
+  assert.match(generatedEditorHtml, /<p[^>]+data-indent="1"[^>]*>[\s\S]*?font-weight:\s*600[\s\S]*?AI 自动生成的正文段落。[\s\S]*?<\/p>/);
+  assert.match(storedDocument.content, /data-indent="1"/);
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByText(storedDocument.title, { exact: true }).click();
+  await editor.waitFor();
+  assert.match(await editor.innerHTML(), /<p[^>]+data-indent="1"[^>]*>[\s\S]*?AI 自动生成的正文段落。[\s\S]*?<\/p>/);
   assert.deepEqual(browserErrors, []);
 
   console.log("Editor workflow browser check passed");

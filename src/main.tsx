@@ -2919,7 +2919,7 @@ function App() {
 
   const generateBody = async () => {
     if (!hasEnoughPoints(usageCosts.body, "生成正文")) return;
-    const result = await callAi<{ content: string; fallback?: boolean; message?: string }>("正在生成正文", "/api/ai/generate-body", {
+    const result = await callAi<{ content: string; contentHtml?: string; fallback?: boolean; message?: string }>("正在生成正文", "/api/ai/generate-body", {
       topic,
       documentType: selectedType,
       tone,
@@ -2928,7 +2928,8 @@ function App() {
       documentId: currentDocumentId
     });
     if (result?.content) {
-      const html = plainTextToHtml(result.content);
+      // 中文注解：服务端按用户确认的大纲生成带格式 HTML；旧接口没有该字段时才回退到纯文本转换。
+      const html = result.contentHtml?.trim() || plainTextToHtml(result.content);
       setContent(html);
       await saveDocument({ content: html, versionNote: "AI 生成正文" });
     }

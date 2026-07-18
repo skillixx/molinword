@@ -4193,6 +4193,97 @@ function validateAiText(text, options = {}) {
   return normalized;
 }
 
+function normalizeGeneratedBodyOutline(outline, topic = "AI Word 文档") {
+  const items = Array.isArray(outline) ? outline : [];
+  const normalized = items
+    .map((item) => String(typeof item === "string" ? item : item?.title || "").replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .slice(0, 12);
+  return normalized.length ? normalized : [`一、${String(topic || "AI Word 文档").trim() || "AI Word 文档"}正文`];
+}
+
+function cleanGeneratedBodyText(value, limit = 6000) {
+  return String(value ?? "")
+    .replace(/```(?:json)?/gi, "")
+    .replace(/```/g, "")
+    .replace(/^#{1,6}\s*/g, "")
+    .replace(/^[-*+]\s+/, "")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, limit);
+}
+
+function generatedBodyHeadingKey(value) {
+  return cleanGeneratedBodyText(value, 200)
+    .replace(/^(?:第\s*[一二三四五六七八九十百千\d]+\s*[章节部分]|[一二三四五六七八九十百千]+|\d+)\s*[、.．)）:\-—]?\s*/u, "")
+    .replace(/[\s、，。；：:,.．·\-—_（）()《》]/g, "")
+    .toLowerCase();
+}
+
+function generatedBodyParagraphs(value) {
+  const sources = Array.isArray(value) ? value : String(value ?? "").split(/\r?\n{2,}|\r?\n/);
+  return sources.map((item) => cleanGeneratedBodyText(item)).filter(Boolean).slice(0, 8);
+}
+
+function parseGeneratedBodySections(text, outline, topic) {
+  const titles = normalizeGeneratedBodyOutline(outline, topic);
+  const sections = titles.map((title) => ({ title, paragraphs: [] }));
+  const jsonSections = extractJsonArray(String(text || ""));
+
+  if (jsonSections?.length) {
+    jsonSections.slice(0, sections.length).forEach((item, index) => {
+      const paragraphSource = typeof item === "string" ? item : item?.paragraphs ?? item?.content ?? item?.body ?? "";
+      sections[index].paragraphs.push(...generatedBodyParagraphs(paragraphSource));
+    });
+  } else {
+    let currentIndex = 0;
+    let nextSequentialHeadingIndex = 0;
+    const titleKeys = titles.map(generatedBodyHeadingKey);
+    for (const rawLine of String(text || "").replace(/```(?:json)?/gi, "").replace(/```/g, "").split(/\r?\n/)) {
+      const line = cleanGeneratedBodyText(rawLine);
+      if (!line) continue;
+      const key = generatedBodyHeadingKey(line);
+      const matchedIndex = titleKeys.findIndex((titleKey) => titleKey && key === titleKey);
+      const looksLikeHeading = /^#{1,6}\s+/.test(rawLine.trim())
+        || /^(?:第\s*[一二三四五六七八九十百千\d]+\s*[章节部分]|[一二三四五六七八九十百千]+|\d+)\s*[、.．)）:\-—]\s*/u.test(line);
+      if (matchedIndex >= 0) {
+        currentIndex = matchedIndex;
+        nextSequentialHeadingIndex = Math.max(nextSequentialHeadingIndex, matchedIndex + 1);
+        continue;
+      }
+      if (looksLikeHeading && nextSequentialHeadingIndex < sections.length) {
+        currentIndex = nextSequentialHeadingIndex;
+        nextSequentialHeadingIndex += 1;
+        continue;
+      }
+      sections[currentIndex].paragraphs.push(line);
+    }
+  }
+
+  sections.forEach((section) => {
+    if (section.paragraphs.length) return;
+    // 中文注解：模型偶尔漏写某一节时仍保留用户确认的大纲结构，并提供可继续编辑的完整段落，而不是留下空标题。
+    section.paragraphs.push(`本节围绕“${section.title}”展开，结合${String(topic || "文档主题").trim() || "文档主题"}说明相关背景、实施要点与预期成果。`);
+  });
+  return sections;
+}
+
+function formatGeneratedBodyHtml(text, outline = [], topic = "AI Word 文档") {
+  const sections = parseGeneratedBodySections(text, outline, topic);
+  const headingStyle = "margin-top: 12pt; margin-bottom: 6pt; line-height: 1.3";
+  const headingTextStyle = "color: #000000; font-weight: bold; font-family: Microsoft YaHei; font-size: 16pt";
+  const paragraphStyle = "line-height: 1.5; text-align: justify; margin-top: 0pt; margin-bottom: 6pt";
+  const bodyTextStyle = "color: #000000; font-weight: 600; font-family: Microsoft YaHei; font-size: 11pt";
+
+  // 中文注解：排版写入受控 HTML，而不是仅靠页面主题 CSS，确保保存重开和导出 Word 都保留标题、缩进、颜色与字重。
+  return sections.map((section) => {
+    const heading = `<h2 data-outline-level="1" data-keep-next="true" data-keep-lines="true" data-widow-control="true" style="${headingStyle}"><span style="${headingTextStyle}">${escapeHtml(section.title)}</span></h2>`;
+    const paragraphs = section.paragraphs.map((paragraph) => `<p data-indent="1" data-widow-control="true" style="${paragraphStyle}"><span style="${bodyTextStyle}">${escapeHtml(paragraph)}</span></p>`).join("");
+    return `${heading}${paragraphs}`;
+  }).join("") || "<p></p>";
+}
+
 async function callMolinChat(messages) {
   if (!hasGatewayConfig()) {
     throw new Error("未配置 AI 模型服务环境变量");
@@ -4924,7 +5015,7 @@ app.post("/api/ai/generate-body", async (request, response) => {
   const startedAt = Date.now();
   let currentUser = { userId: localUserId, appId: normalizeMolingId(molingAppId), productId: normalizeMolingId(molingProductId), isMolingUser: false };
   let pointHold = null;
-  const prompt = `Write the main body for a ${documentType || "Word"} document in Simplified Chinese. Topic: ${topic || "AI Word document"}. Tone: ${tone || "formal"}. Extra requirement: ${requirement || "none"}.\nOutline:\n${normalizedOutline.map((item, index) => `${index + 1}. ${item}`).join("\n")}\nRequirement: each section should have 1-2 complete paragraphs, suitable for Word export.`;
+  const prompt = `Write the main body for a ${documentType || "Word"} document in Simplified Chinese. Topic: ${topic || "AI Word document"}. Tone: ${tone || "formal"}. Extra requirement: ${requirement || "none"}.\nOutline:\n${normalizedOutline.map((item, index) => `${index + 1}. ${item}`).join("\n")}\nReturn only a JSON array with exactly ${normalizedOutline.length || 1} objects in outline order. Each object must be {"paragraphs":["paragraph 1","paragraph 2"]}. Do not repeat or rewrite section titles. Each section needs 1-2 complete paragraphs suitable for Word export.`;
 
   try {
     currentUser = await getCurrentUser(request);
@@ -4932,7 +5023,7 @@ app.post("/api/ai/generate-body", async (request, response) => {
     const content = await callMolinChat([
       {
         role: "system",
-        content: "You are a professional Simplified Chinese Word document writing assistant. Output clear section titles and natural paragraphs, without Markdown code fences."
+        content: "You are a professional Simplified Chinese Word document writing assistant. Return structured JSON only. The user-confirmed outline is authoritative; write paragraph content without repeating section titles."
       },
       { role: "user", content: prompt }
     ]);
@@ -4947,7 +5038,7 @@ app.post("/api/ai/generate-body", async (request, response) => {
       responseText: validContent,
       latencyMs: Date.now() - startedAt
     });
-    response.json({ content: validContent });
+    response.json({ content: validContent, contentHtml: formatGeneratedBodyHtml(validContent, normalizedOutline, topic) });
   } catch (error) {
     await releasePoints(pointHold).catch((releaseError) => console.warn("Moling point release failed:", releaseError.message));
     await logAiRequest({
@@ -4960,8 +5051,10 @@ app.post("/api/ai/generate-body", async (request, response) => {
       errorMessage: error instanceof Error ? error.message : "正文生成失败",
       latencyMs: Date.now() - startedAt
     });
+    const fallbackContent = `${topic || "AI Word 文档"}\n\n当前 AI 服务暂时不可用，请检查模型配置或稍后重试。你可以先基于已有大纲继续手动编辑文档。`;
     response.json({
-      content: `${topic || "AI Word 文档"}\n\n1. 项目概述\n\n当前 AI 服务暂时不可用，请检查模型配置或稍后重试。你可以先基于已有大纲继续手动编辑文档。`,
+      content: fallbackContent,
+      contentHtml: formatGeneratedBodyHtml(fallbackContent, normalizedOutline, topic),
       fallback: true,
       message: toPublicErrorMessage(error, "AI 正文生成失败，已使用本地兜底内容。")
     });
@@ -5051,7 +5144,7 @@ app.post("/api/ai/polish", async (request, response) => {
     });
   }
 });
-export { createDocxBuffer, legacyDocTextToHtml, parseImportedDocument, parseStyledDocxToHtml, sanitizeImportedHtml };
+export { createDocxBuffer, formatGeneratedBodyHtml, legacyDocTextToHtml, parseImportedDocument, parseStyledDocxToHtml, sanitizeImportedHtml };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   app.listen(port, "127.0.0.1", () => {
