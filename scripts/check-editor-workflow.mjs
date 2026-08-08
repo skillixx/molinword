@@ -728,11 +728,16 @@ try {
   assert.equal(await floatingEditorImage.getAttribute("data-docx-float-align"), "left");
   assert.equal(await floatingEditorImage.evaluate((image) => getComputedStyle(image).float), "left");
 
+  assert.equal(await page.getByRole("status").filter({ hasText: "文档已保存" }).count(), 0, "自动保存不能反复弹出保存成功通知打断编辑");
   const manualSaveCountBeforeShortcut = manualSaveRequestCount;
   await page.keyboard.press("Control+S");
   await page.keyboard.press("Control+S");
   await page.waitForFunction(() => document.querySelector(".toolbar-actions button")?.hasAttribute("disabled") === true);
   await page.waitForFunction(() => document.querySelector(".save-status")?.textContent?.includes("已保存"));
+  const savedNotice = page.getByRole("status").filter({ hasText: "文档已保存" });
+  await savedNotice.waitFor({ timeout: 3000 });
+  await savedNotice.getByRole("button", { name: "关闭成功提示" }).click();
+  await savedNotice.waitFor({ state: "detached" });
   assert.equal(manualSaveRequestCount - manualSaveCountBeforeShortcut, 1);
   assert.match(storedDocument.content, /<h2[^>]*>.*保留小号红字.*<\/h2>/);
   assert.match(storedDocument.content, /font-family:\s*SimSun/);
@@ -885,6 +890,8 @@ try {
   await page.getByRole("button", { name: "导出 Word", exact: true }).click();
   const download = await downloadPromise;
   await page.waitForFunction(() => document.body.textContent?.includes("Word 已生成"));
+  const exportNotice = page.getByRole("status").filter({ hasText: "Word 文件已生成并开始下载" });
+  await exportNotice.waitFor({ timeout: 3000 });
   const downloadedPath = await download.path();
   assert.ok(downloadedPath, "导出的 DOCX 应可下载");
   const downloadedBuffer = await readFile(downloadedPath);

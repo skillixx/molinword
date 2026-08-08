@@ -2744,6 +2744,7 @@ function App() {
   const [aiStatus, setAiStatus] = React.useState("本地兜底已就绪");
   const [aiLoading, setAiLoading] = React.useState<string | null>(null);
   const [aiError, setAiError] = React.useState("");
+  const [successNotice, setSuccessNotice] = React.useState<{ id: number; message: string } | null>(null);
   const [saveStatus, setSaveStatus] = React.useState("未保存");
   const [exportStatus, setExportStatus] = React.useState("");
   const [sessionUser, setSessionUser] = React.useState<SessionUser | null>(null);
@@ -2765,6 +2766,21 @@ function App() {
   const [pageLayout, setPageLayout] = React.useState<DocumentPageLayout>({ ...defaultDocumentPageLayout });
   const saveQueueRef = React.useRef<Promise<unknown>>(Promise.resolve());
   const aiHistoryRequestRef = React.useRef(0);
+  const successNoticeIdRef = React.useRef(0);
+
+  const showSuccess = React.useCallback((message: string) => {
+    successNoticeIdRef.current += 1;
+    setSuccessNotice({ id: successNoticeIdRef.current, message });
+  }, []);
+
+  React.useEffect(() => {
+    if (!successNotice) return;
+    // 中文注解：新成功消息会清理旧计时器；关闭时再核对 ID，避免旧操作的定时器误关掉后到达的新通知。
+    const timer = window.setTimeout(() => {
+      setSuccessNotice((current) => current?.id === successNotice.id ? null : current);
+    }, 4000);
+    return () => window.clearTimeout(timer);
+  }, [successNotice]);
 
   const loadSession = React.useCallback(async () => {
     const response = await fetch("/api/session");
@@ -2849,12 +2865,13 @@ function App() {
     try {
       await loadSession();
       setAiError("");
+      showSuccess("积分余额已刷新。");
     } catch (error) {
       setAiError(error instanceof Error ? error.message : "积分读取失败，请稍后刷新。");
     } finally {
       setPointsRefreshing(false);
     }
-  }, [loadSession]);
+  }, [loadSession, showSuccess]);
 
   const hasEnoughPoints = React.useCallback((cost: number, label: string) => {
     if (!sessionUser?.isMolingUser || !pointsSummary?.enabled || pointsSummary.remaining == null) return true;
@@ -2963,16 +2980,18 @@ function App() {
       setPageLayout(normalizeDocumentPageLayout(created.pageLayout));
       setSaveStatus("已创建");
       await loadRecentDocuments();
+      showSuccess("大纲已生成并创建文档。");
     }
     setActivePanel("editor");
   };
 
   const saveDocument = React.useCallback(
-    (options: { content?: string; title?: string; saveVersion?: boolean; versionNote?: string } = {}) => {
+    (options: { content?: string; title?: string; saveVersion?: boolean; versionNote?: string; notifySuccess?: boolean } = {}) => {
       const documentId = currentDocumentId;
       if (!documentId) return Promise.resolve(null);
       const performSave = async () => {
         try {
+          if (options.notifySuccess) setAiError("");
           setSaveStatus("保存中");
           const response = await fetch(`/api/documents/${documentId}`, {
             method: "PATCH",
@@ -2992,6 +3011,7 @@ function App() {
           const result = await readApiJson(response);
           setSaveStatus("已保存");
           await loadRecentDocuments();
+          if (options.notifySuccess) showSuccess("文档已保存。");
           return result.document as ApiDocument;
         } catch (error) {
           setSaveStatus("保存失败");
@@ -3004,7 +3024,7 @@ function App() {
       saveQueueRef.current = request.then(() => undefined, () => undefined);
       return request;
     },
-    [content, currentDocumentId, currentTitle, loadRecentDocuments, outline, pageLayout, selectedTemplate, selectedType, tone]
+    [content, currentDocumentId, currentTitle, loadRecentDocuments, outline, pageLayout, selectedTemplate, selectedType, showSuccess, tone]
   );
 
   const uploadPageImage = React.useCallback(async (file: File) => {
@@ -3015,13 +3035,14 @@ function App() {
       const response = await fetch(`/api/documents/${currentDocumentId}/images`, { method: "POST", body: formData });
       const result = await readApiJson(response);
       setAiError("");
+      showSuccess("页面图片已上传。");
       return result.image as DocumentPageImage;
     } catch (error) {
       const message = error instanceof Error ? error.message : "页面图片上传失败";
       setAiError(message);
       throw error;
     }
-  }, [currentDocumentId]);
+  }, [currentDocumentId, showSuccess]);
 
   React.useEffect(() => {
     if (!currentDocumentId || activePanel !== "editor") return;
@@ -3047,7 +3068,8 @@ function App() {
       // 中文注解：服务端按用户确认的大纲生成带格式 HTML；旧接口没有该字段时才回退到纯文本转换。
       const html = result.contentHtml?.trim() || plainTextToHtml(result.content);
       setContent(html);
-      await saveDocument({ content: html, versionNote: "AI 生成正文" });
+      const saved = await saveDocument({ content: html, versionNote: "AI 生成正文" });
+      if (saved) showSuccess("正文已生成并保存。");
     }
   };
 
@@ -3136,6 +3158,7 @@ function App() {
         const messages = Array.isArray(result.warnings) ? result.warnings.filter(Boolean) : [];
         if (!result.sourceStored) messages.push("原文件暂未归档到 MinIO，不影响编辑。");
         if (messages.length) setAiError(messages.join(" "));
+        showSuccess("文档已导入并打开。");
       }
     } catch (error) {
       setAiError(error instanceof Error ? error.message : "文档导入失败");
@@ -3147,52 +3170,63 @@ function App() {
   const renameDocument = async (documentId: number, currentName: string) => {
     const nextName = window.prompt("请输入新的文档名称", currentName);
     if (!nextName?.trim()) return;
-    const response = await fetch(`/api/documents/${documentId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: nextName.trim() })
-    });
-    const result = await readApiJson(response).catch((error) => {
+    setAiError("");
+    try {
+      const response = await fetch(`/api/documents/${documentId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: nextName.trim() })
+      });
+      const result = await readApiJson(response);
+      if (documentId === currentDocumentId) {
+        setCurrentTitle(result.document.title);
+        setTopic(result.document.title);
+      }
+      await loadRecentDocuments();
+      showSuccess("文档已重命名。");
+    } catch (error) {
       setAiError(error instanceof Error ? error.message : "重命名失败");
-      return null;
-    });
-    if (!result) return;
-    if (documentId === currentDocumentId) {
-      setCurrentTitle(result.document.title);
-      setTopic(result.document.title);
     }
-    await loadRecentDocuments();
   };
 
   const deleteDocument = async (documentId: number) => {
     if (!window.confirm("确定删除这个文档吗？")) return;
-    const response = await fetch(`/api/documents/${documentId}`, { method: "DELETE" });
-    const result = await readApiJson(response).catch((error) => {
+    setAiError("");
+    try {
+      const response = await fetch(`/api/documents/${documentId}`, { method: "DELETE" });
+      const result = await readApiJson(response);
+      if (!result.deleted) {
+        setAiError("文档不存在或已被删除，请刷新列表后重试。");
+        await loadRecentDocuments();
+        return;
+      }
+      if (documentId === currentDocumentId) {
+        setCurrentDocumentId(null);
+        setCurrentTitle("AI Word 文档助手本地开发方案");
+        setContent(plainTextToHtml(defaultContent));
+        setPageLayout({ ...defaultDocumentPageLayout });
+        setOutline(defaultOutline);
+        setSelectedTemplate(null);
+        setActivePanel("workspace");
+      }
+      await loadRecentDocuments();
+      showSuccess("文档已删除。");
+    } catch (error) {
       setAiError(error instanceof Error ? error.message : "删除失败");
-      return null;
-    });
-    if (!result) return;
-    if (result.deleted && documentId === currentDocumentId) {
-      setCurrentDocumentId(null);
-      setCurrentTitle("AI Word 文档助手本地开发方案");
-      setContent(plainTextToHtml(defaultContent));
-      setPageLayout({ ...defaultDocumentPageLayout });
-      setOutline(defaultOutline);
-      setSelectedTemplate(null);
-      setActivePanel("workspace");
     }
-    await loadRecentDocuments();
   };
 
   const duplicateDocument = async (documentId: number) => {
-    const response = await fetch(`/api/documents/${documentId}/duplicate`, { method: "POST" });
-    const result = await readApiJson(response).catch((error) => {
+    setAiError("");
+    try {
+      const response = await fetch(`/api/documents/${documentId}/duplicate`, { method: "POST" });
+      const result = await readApiJson(response);
+      await loadRecentDocuments();
+      const opened = await openDocument(result.document.id);
+      if (opened) showSuccess("文档副本已创建并打开。");
+    } catch (error) {
       setAiError(error instanceof Error ? error.message : "复制失败");
-      return null;
-    });
-    if (!result) return;
-    await loadRecentDocuments();
-    await openDocument(result.document.id);
+    }
   };
 
   const exportWord = async (contentOverride?: string) => {
@@ -3208,6 +3242,7 @@ function App() {
     }
     try {
       setExportStatus("导出中");
+      setAiError("");
       const saved = await saveDocument({ content: exportContent, saveVersion: true, versionNote: "导出 Word 前保存" });
       if (!saved) throw new Error("导出前自动保存失败，请先确认文档已保存。");
       const response = await fetch(`/api/documents/${currentDocumentId}/export-docx`, {
@@ -3223,6 +3258,7 @@ function App() {
       anchor.click();
       anchor.remove();
       setExportStatus("Word 已生成");
+      showSuccess("Word 文件已生成并开始下载。");
       await loadSession().catch(() => undefined);
     } catch (error) {
       setExportStatus("导出失败");
@@ -3232,6 +3268,7 @@ function App() {
 
   const applyTemplate = async (template: TemplateItem) => {
     const templateWithStyle = await hydrateTemplateStyle(template, false);
+    setAiError("");
     setSelectedTemplate(templateWithStyle);
     setSelectedType(template.documentType);
     setTopic(template.topic);
@@ -3245,6 +3282,7 @@ function App() {
     setCurrentDocumentId(null);
     setSaveStatus("未保存");
     setActivePanel("workspace");
+    showSuccess("正式模板已应用，可继续填写需求或生成大纲。");
   };
 
   const runTemplateAgent = async (input: { brief: string; audience: string; expectedPages: string }) => {
@@ -3306,13 +3344,17 @@ function App() {
     setSaveStatus("智能体文档已创建");
     setActivePanel("editor");
     await loadRecentDocuments();
+    showSuccess("智能体方案已创建为正式文档。");
     return true;
   };
 
   return (
     <main className={`app-shell${isSidebarCollapsed ? " sidebar-collapsed" : ""}`}>
-      {appInitializing ? <div className="global-loading">正在初始化应用...</div> : null}
-      {aiError ? <ErrorBanner message={aiError} onClose={() => setAiError("")} /> : null}
+      <div className="global-feedback-stack">
+        {appInitializing ? <div className="global-loading">正在初始化应用...</div> : null}
+        {aiError ? <ErrorBanner message={aiError} onClose={() => setAiError("")} /> : null}
+        {successNotice ? <SuccessNotice message={successNotice.message} onClose={() => setSuccessNotice(null)} /> : null}
+      </div>
       <aside className="sidebar">
         <div className="sidebar-head">
           <div className="brand">
@@ -3396,7 +3438,7 @@ function App() {
           generateBody={generateBody}
           editContent={editContent}
           uploadPageImage={uploadPageImage}
-          saveDocument={(latestContent) => saveDocument({ content: latestContent, saveVersion: true, versionNote: "手动保存" })}
+          saveDocument={(latestContent) => saveDocument({ content: latestContent, saveVersion: true, versionNote: "手动保存", notifySuccess: true })}
           exportWord={exportWord}
           currentTitle={currentTitle}
           saveStatus={saveStatus}
@@ -3421,6 +3463,16 @@ function ErrorBanner(props: { message: string; onClose: () => void }) {
       <XCircle size={17} />
       <span>{props.message}</span>
       <button onClick={props.onClose} aria-label="关闭提示">关闭</button>
+    </div>
+  );
+}
+
+function SuccessNotice(props: { message: string; onClose: () => void }) {
+  return (
+    <div className="success-notice" role="status" aria-live="polite">
+      <CheckCircle2 size={17} />
+      <span>{props.message}</span>
+      <button type="button" onClick={props.onClose} aria-label="关闭成功提示">关闭</button>
     </div>
   );
 }

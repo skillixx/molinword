@@ -57,6 +57,8 @@ const plan = {
 };
 
 let createdDocument = null;
+const documents = new Map();
+let nextDocumentId = 702;
 let aiHistoryRequestCount = 0;
 const aiHistoryPages = {
   first: {
@@ -105,7 +107,7 @@ const server = createServer(async (request, response) => {
     return;
   }
   if (request.method === "GET" && url.pathname === "/api/documents") {
-    sendJson(response, { documents: createdDocument ? [createdDocument] : [] });
+    sendJson(response, { documents: [...documents.values()] });
     return;
   }
   if (request.method === "GET" && url.pathname === "/api/ai/history") {
@@ -137,7 +139,59 @@ const server = createServer(async (request, response) => {
       wordCount: 0,
       updatedAt: new Date().toISOString()
     };
+    documents.set(createdDocument.id, createdDocument);
     sendJson(response, { document: createdDocument }, 201);
+    return;
+  }
+  if (request.method === "POST" && url.pathname === "/api/documents/import") {
+    for await (const _chunk of request) { /* 中文注解：消费 multipart 正文，模拟真实导入边界。 */ }
+    const importedDocument = {
+      id: nextDocumentId++,
+      userId: "agent-ui-test",
+      title: "导入反馈验收文档",
+      documentType: "Word 文档",
+      tone: "正式",
+      templateId: null,
+      outline: ["一、导入章节"],
+      content: "<h2>一、导入章节</h2><p>导入正文</p>",
+      pageLayout: null,
+      status: "draft",
+      wordCount: 8,
+      updatedAt: new Date().toISOString()
+    };
+    documents.set(importedDocument.id, importedDocument);
+    sendJson(response, { document: importedDocument, warnings: [], sourceStored: true }, 201);
+    return;
+  }
+  const documentMatch = url.pathname.match(/^\/api\/documents\/(\d+)$/);
+  if (documentMatch && request.method === "GET") {
+    const document = documents.get(Number(documentMatch[1]));
+    sendJson(response, document ? { document } : { message: "文档不存在" }, document ? 200 : 404);
+    return;
+  }
+  if (documentMatch && request.method === "PATCH") {
+    const documentId = Number(documentMatch[1]);
+    const current = documents.get(documentId);
+    const input = await readJson(request);
+    const updated = { ...current, ...input, id: documentId, updatedAt: new Date().toISOString() };
+    documents.set(documentId, updated);
+    if (createdDocument?.id === documentId) createdDocument = updated;
+    sendJson(response, { document: updated });
+    return;
+  }
+  if (documentMatch && request.method === "DELETE") {
+    const documentId = Number(documentMatch[1]);
+    // 中文注解：原始文档模拟“列表读取后被并发删除”的业务竞态，验证前端不会把 deleted:false 误报为成功。
+    const deleted = documentId === 701 ? false : documents.delete(documentId);
+    sendJson(response, { deleted });
+    return;
+  }
+  const duplicateMatch = url.pathname.match(/^\/api\/documents\/(\d+)\/duplicate$/);
+  if (duplicateMatch && request.method === "POST") {
+    const source = documents.get(Number(duplicateMatch[1]));
+    const duplicate = { ...source, id: nextDocumentId++, title: `${source.title}（副本）`, updatedAt: new Date().toISOString() };
+    documents.set(duplicate.id, duplicate);
+    sendJson(response, { document: duplicate }, 201);
     return;
   }
 
@@ -194,6 +248,13 @@ try {
   });
   assert.deepEqual(licenseFocusStyle, { outlineStyle: "solid", outlineWidth: "2px", outlineColor: "rgb(47, 125, 112)" }, "键盘 Tab 聚焦开源许可时必须显示高对比双像素轮廓");
   await page.getByRole("button", { name: "模板库", exact: true }).click();
+  await page.getByRole("button", { name: "套用正式模板" }).first().click();
+  const appliedTemplateNotice = page.getByRole("status").filter({ hasText: "正式模板已应用" });
+  await appliedTemplateNotice.waitFor();
+  const appliedTemplateNoticeBox = await appliedTemplateNotice.boundingBox();
+  assert.ok(appliedTemplateNoticeBox && appliedTemplateNoticeBox.x >= 0 && appliedTemplateNoticeBox.x + appliedTemplateNoticeBox.width <= 390, "390px 窄屏下成功通知不能横向溢出");
+  await appliedTemplateNotice.waitFor({ state: "detached", timeout: 6000 });
+  await page.getByRole("button", { name: "模板库", exact: true }).click();
   const agentPanel = page.locator(".template-agent");
   await agentPanel.waitFor();
   const panelBox = await agentPanel.boundingBox();
@@ -240,6 +301,13 @@ try {
   await desktopPage.close();
   await page.getByRole("button", { name: "采用方案并创建文档", exact: true }).click();
   await page.locator(".word-editor").waitFor();
+  const agentCreatedNotice = page.getByRole("status").filter({ hasText: "智能体方案已创建为正式文档" });
+  await agentCreatedNotice.waitFor({ timeout: 3000 });
+  const closeAgentNoticeButton = agentCreatedNotice.getByRole("button", { name: "关闭成功提示" });
+  await closeAgentNoticeButton.focus();
+  assert.equal(await closeAgentNoticeButton.evaluate((node) => document.activeElement === node), true, "成功通知必须可用键盘聚焦并关闭");
+  await closeAgentNoticeButton.click();
+  await agentCreatedNotice.waitFor({ state: "detached" });
   assert.equal(await page.locator(".editor-document-title").textContent(), "产品上线评审会议纪要");
   // 中文注解：Tiptap 会移除未注册的 data 属性，但用户可见的元数据表及内容必须保留。
   assert.equal(await page.locator(".word-editor table", { hasText: "V1.0" }).count(), 1);
@@ -261,8 +329,48 @@ try {
   const heading2Style = heading2Styles[0][0];
   const heading2Color = heading2Style.match(/<w:color w:val="([0-9A-Fa-f]{6})"\/>/)?.[1].toUpperCase();
   assert.ok(!heading2Color || heading2Color === "000000", `Word 标题样式不能回流强调色，实际为 ${heading2Color}`);
+  await page.getByRole("button", { name: "工作台", exact: true }).click();
+  const originalRow = page.locator(".document-row").filter({ hasText: "产品上线评审会议纪要" });
+  page.once("dialog", (dialog) => dialog.accept("产品上线评审纪要（已重命名）"));
+  await originalRow.getByRole("button", { name: "重命名" }).click();
+  const renamedNotice = page.getByRole("status").filter({ hasText: "文档已重命名" });
+  await renamedNotice.waitFor();
+  await renamedNotice.getByRole("button", { name: "关闭成功提示" }).click();
+  const renamedRow = page.locator(".document-row").filter({ hasText: "产品上线评审纪要（已重命名）" });
+  await renamedRow.getByRole("button", { name: "复制" }).click();
+  const duplicatedNotice = page.getByRole("status").filter({ hasText: "文档副本已创建并打开" });
+  await duplicatedNotice.waitFor();
+  await duplicatedNotice.getByRole("button", { name: "关闭成功提示" }).click();
+  assert.equal(await page.locator(".editor-document-title").textContent(), "产品上线评审纪要（已重命名）（副本）");
+  await page.getByRole("button", { name: "工作台", exact: true }).click();
+  const duplicateRow = page.locator(".document-row").filter({ hasText: "产品上线评审纪要（已重命名）（副本）" });
+  page.once("dialog", (dialog) => dialog.accept());
+  await duplicateRow.getByRole("button", { name: "删除" }).click();
+  const deletedNotice = page.getByRole("status").filter({ hasText: "文档已删除" });
+  await deletedNotice.waitFor();
+  await deletedNotice.getByRole("button", { name: "关闭成功提示" }).click();
+  assert.equal(await duplicateRow.count(), 0);
+  page.once("dialog", (dialog) => dialog.accept());
+  await renamedRow.getByRole("button", { name: "删除" }).click();
+  const staleDeleteError = page.getByRole("alert").filter({ hasText: "文档不存在或已被删除" });
+  await staleDeleteError.waitFor();
+  assert.equal(
+    await page.getByRole("status").filter({ hasText: "文档已删除" }).count(),
+    0,
+    "服务端返回 deleted:false 时不能显示删除成功"
+  );
+  assert.equal(await renamedRow.count(), 1, "删除竞态发生后应刷新列表并保留仍可见的服务端记录");
+  await staleDeleteError.getByRole("button", { name: "关闭提示" }).click();
+  await page.locator('input[type="file"][accept*=".docx"]').setInputFiles({
+    name: "operation-feedback.docx",
+    mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    buffer: Buffer.from("operation-feedback-fixture")
+  });
+  const importedNotice = page.getByRole("status").filter({ hasText: "文档已导入并打开" });
+  await importedNotice.waitFor();
+  assert.equal(await page.locator(".editor-document-title").textContent(), "导入反馈验收文档");
   assert.ok(aiHistoryRequestCount >= 4, "移动端刷新、加载更多和桌面初始化都必须真实请求 AI 操作记录接口");
-  console.log("模板智能体、AI 操作历史与 Word 导出工作流检查通过。", { documentId: createdDocument.id, templateId: createdDocument.templateId, aiHistoryRequestCount });
+  console.log("模板智能体、操作反馈、AI 操作历史与 Word 导出工作流检查通过。", { documentId: createdDocument.id, templateId: createdDocument.templateId, aiHistoryRequestCount });
 } finally {
   await browser.close();
   await new Promise((resolveClose) => server.close(resolveClose));
