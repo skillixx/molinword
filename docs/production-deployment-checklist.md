@@ -26,6 +26,7 @@ npm run check:commercial-readiness
 ## 二、生产配置
 
 - `APP_ENV=production`。服务端会强制要求墨灵会话并关闭本地模拟。
+- `APP_RELEASE_ID` 必须与 `/opt/molinword/releases/<release-id>` 的当前发布标识一致，只允许字母、数字、点、下划线和连字符；它会公开出现在健康检查中用于绑定验收证据，不得包含客户名、工单正文或凭据。
 - `SESSION_COOKIE_SECURE=true`，`APP_BASE_URL` 使用 HTTPS。
 - 数据库、MinIO、墨灵内部 API、模型网关配置均不得使用占位值。
 - `MOLING_API_BASE_URL`、`LLM_API_URL`、`STORAGE_ENDPOINT` 使用 HTTPS；只有受控内网链路才可显式设置 `ALLOW_INSECURE_INTERNAL_HTTP=true`。
@@ -63,6 +64,18 @@ npm run check:commercial-readiness
 
 必须使用专用测试用户和可核对的积分账户完成，区分“代码通过”和“平台真实验收”：
 
+先采集不携带会话或业务正文的自动预检证据：
+
+```bash
+cd /opt/molinword/current
+npm run production:collect-acceptance -- \
+  --base-url=https://word.example.com \
+  --release-id=<release-id> \
+  --output=/var/lib/molinword/acceptance/<release-id>-preflight.json
+```
+
+采集器校验 HTTPS、HTML 入口及 `no-store` 缓存策略、安全响应头、`APP_ENV=production`、`APP_RELEASE_ID` 与命令发布号一致、强制会话、MySQL/MinIO/模型就绪、JSON 404、未登录 AI 401 和服务端请求 ID。它只保存白名单布尔值、状态码、安全响应头和请求 ID，单个 JSON 正文最多读取 64 KiB，超时、异常状态、版本不符或缺失头部都会失败关闭。自动通过只会得到 `releaseDecision=manual-approval-required`，不能替代以下真实账号、账本、Word 和人工签字验收。
+
 1. 从墨灵平台入口换取会话，直接访问生产 AI 接口应返回 401。
    同时确认 `/api/health` 返回 200，`/api/ready` 会实际探测数据库、MinIO 和模型网关且均可用时返回 200，并确认响应带服务端生成的合法 `X-Request-Id`。
 2. 使用无效 JSON 和不存在的 `/api/*` 路由确认分别返回规范 JSON 400/404；连续超过 AI 限额时返回 429、`Retry-After` 和 `RateLimit-*` 响应头。
@@ -87,4 +100,4 @@ sudo systemctl start 'molinword-maintenance@billing:reconcile:retry.service'
 - 回滚应用版本不回滚用户文档或计费账本；数据库结构采用向后兼容新增表/列，回滚前先验证旧版本可忽略新结构。
 - 历史 AI 正文脱敏和过期日志删除不可回滚；执行前必须确认备份、目标库、保留期限审批和影响范围。
 
-完成以上真实链路并保存证据后，才能把该版本标记为生产可用。
+完成以上真实链路、填写自动证据文件中的七项 `manualChecks` 并由业务验收人保存签字证据后，才能把该版本标记为生产可用。

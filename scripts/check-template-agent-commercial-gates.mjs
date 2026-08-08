@@ -192,6 +192,7 @@ try {
   // 中文注解：生产环境即使把两个安全变量误配为 false/true，也必须强制会话门禁并关闭本地身份模拟。
   const productionApi = await startApi({
     APP_ENV: "production",
+    APP_RELEASE_ID: "release-commercial-gate-test",
     REQUIRE_MOLING_SESSION: "false",
     LOCAL_MOLING_MOCK: "true",
     DATABASE_URL: "mysql://word_app:a-strong-database-password@127.0.0.1:1/moling_word",
@@ -219,6 +220,7 @@ try {
     assert.equal(healthResponse.headers.get("referrer-policy"), "no-referrer");
     const health = await healthResponse.json();
     assert.equal(health.environment, "production");
+    assert.equal(health.releaseId, "release-commercial-gate-test");
     assert.equal(health.sessionRequired, true);
     for (const forbiddenField of ["molingApiBaseUrl", "storageBucket", "model"]) {
       assert.equal(forbiddenField in health, false, `公开健康检查不得泄露 ${forbiddenField}`);

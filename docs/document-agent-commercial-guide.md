@@ -84,7 +84,8 @@ npm run check:template-agent-api
 npm run check:template-agent-ui
 npm run check:docx-export-format
 npm run check:ai-audit-privacy
+npm run check:production-acceptance
 npm run db:seed:templates
 ```
 
-`check:template-agent-api` 使用自包含的 OpenAI 兼容模型服务，验证需求分析、结构设计、质量审校三次真实模型调用和模板匹配工具阶段。`check:template-agent-ui` 同时在 1440px 桌面和 390px 窄屏执行完整流程：输入需求、查看四阶段结果、采用方案、创建文档、打开编辑器，并检查元数据表、正式章节和 Word 导出。数据库与 MinIO 的真实连接仍需在目标环境单独验收。
+`check:template-agent-api` 使用自包含的 OpenAI 兼容模型服务，验证需求分析、结构设计、质量审校三次真实模型调用和模板匹配工具阶段。`check:template-agent-ui` 同时在 1440px 桌面和 390px 窄屏执行完整流程：输入需求、查看四阶段结果、采用方案、创建文档、打开编辑器，并检查元数据表、正式章节和 Word 导出。`check:production-acceptance` 验证生产证据采集器的发布版本绑定、脱敏、超时、失败关闭和不可覆盖契约；目标环境将非敏感 `APP_RELEASE_ID` 与发布目录对应后，使用 `production:collect-acceptance` 生成预检文件，但其中的 `manual-approval-required` 仍须真实 SSO、积分、Word、多设备、审计和回滚证据关闭。数据库与 MinIO 的真实连接仍需在目标环境单独验收。

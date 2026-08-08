@@ -31,7 +31,7 @@ sudo install -m 0644 ops/nginx/molinword-proxy.conf /etc/nginx/snippets/molinwor
 sudo install -m 0644 ops/nginx/molinword.conf.example /etc/nginx/sites-available/molinword.conf
 ```
 
-先编辑 `/etc/molinword/molinword.env`，按 systemd `EnvironmentFile` 语法通过密钥管理系统注入真实值；再编辑 Nginx 配置中的域名和证书路径。禁止把密钥直接写入命令历史。将已通过门禁且包含 `dist/` 的发布目录复制到 `/opt/molinword/releases/<release-id>`，确认文件归属 `molinword:molinword`，然后在服务器安装纯生产依赖。候选软链接让维护单元验证新版本，同时不影响当前服务：
+先编辑 `/etc/molinword/molinword.env`，将非敏感的 `APP_RELEASE_ID` 设置为当前 `<release-id>`，并按 systemd `EnvironmentFile` 语法通过密钥管理系统注入其他真实值；发布标识只能使用字母、数字、点、下划线和连字符，不能包含客户名、工单正文或凭据。再编辑 Nginx 配置中的域名和证书路径。禁止把密钥直接写入命令历史。将已通过门禁且包含 `dist/` 的发布目录复制到 `/opt/molinword/releases/<release-id>`，确认文件归属 `molinword:molinword`，然后在服务器安装纯生产依赖。候选软链接让维护单元验证新版本，同时不影响当前服务：
 
 ```bash
 cd /opt/molinword/releases/<release-id>
@@ -87,7 +87,18 @@ systemctl status molinword-ai-audit-retention.timer --no-pager
 journalctl -u molinword-api.service -n 100 --no-pager
 ```
 
-随后逐项执行 `docs/production-deployment-checklist.md` 的真实链路验收，保存请求 ID、时间、测试账号、调用前后积分、对账任务、Word 样例和桌面/移动端截图。`/api/ready` 必须为 200；仅 `/api/health` 为 200 不能证明数据库、MinIO 或模型网关可用。
+先运行只读、自动脱敏的生产预检。命令不会发送 Cookie、Authorization 或客户正文，只访问固定的首页、健康、就绪、404 和未登录 AI 探针；证据文件采用独占创建，禁止覆盖旧记录：
+
+```bash
+sudo install -d -m 0700 -o molinword -g molinword /var/lib/molinword/acceptance
+cd /opt/molinword/current
+sudo -u molinword npm run production:collect-acceptance -- \
+  --base-url=https://word.example.com \
+  --release-id=<release-id> \
+  --output=/var/lib/molinword/acceptance/<release-id>-preflight.json
+```
+
+采集器会要求命令中的 `--release-id` 与运行服务 `/api/health` 返回的 `APP_RELEASE_ID` 完全一致。自动检查通过时，证据中的 `automaticStatus` 为 `passed`，但 `releaseDecision` 固定为 `manual-approval-required`。随后仍须逐项执行 `docs/production-deployment-checklist.md` 的真实链路验收，填写证据中七项 `manualChecks`，保存测试账号、调用前后积分、对账任务、Word 样例、三端截图、审计关联和回滚演练记录。`/api/ready` 必须为 200；仅 `/api/health` 为 200 或自动预检通过都不能证明业务已获准上线。
 
 ## 四、对账
 

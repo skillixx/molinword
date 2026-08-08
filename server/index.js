@@ -536,6 +536,7 @@ const configuredAppEnvironment = String(process.env.APP_ENV || "").trim().toLowe
 const configuredNodeEnvironment = String(process.env.NODE_ENV || "").trim().toLowerCase();
 const isProductionRuntime = configuredAppEnvironment === "production" || configuredNodeEnvironment === "production";
 const appEnvironment = isProductionRuntime ? "production" : (configuredAppEnvironment || configuredNodeEnvironment || "development");
+const appReleaseId = String(process.env.APP_RELEASE_ID || "").trim();
 // 中文注解：生产环境强制关闭本地身份模拟，即使部署变量误配也不能绕过登录和积分计费。
 const localMolingMock = !isProductionRuntime && process.env.LOCAL_MOLING_MOCK === "true";
 // 中文注解：生产环境默认且强制要求墨灵会话；开发环境可显式开启同等门禁做联调。
@@ -561,6 +562,7 @@ function validateProductionConfiguration(environment = {}) {
   const errors = [];
   const allowInsecureInternalHttp = configuration.ALLOW_INSECURE_INTERNAL_HTTP === "true";
   const requiredValues = [
+    "APP_RELEASE_ID",
     "DATABASE_URL",
     "INTERNAL_API_TOKEN",
     "MOLING_APP_ID",
@@ -582,6 +584,9 @@ function validateProductionConfiguration(environment = {}) {
     || /replace-with|请替换|changeme|example-key|your[-_]/i.test(String(value));
   for (const key of requiredValues) {
     if (isPlaceholder(configuration[key])) errors.push(`${key} 未配置或仍为占位值`);
+  }
+  if (!isPlaceholder(configuration.APP_RELEASE_ID) && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(String(configuration.APP_RELEASE_ID))) {
+    errors.push("APP_RELEASE_ID 必须为 1 至 80 位字母、数字、点、下划线或连字符");
   }
   for (const key of ["INTERNAL_API_TOKEN", "LLM_API_KEY", "STORAGE_SECRET_ACCESS_KEY"]) {
     if (!isPlaceholder(configuration[key]) && String(configuration[key]).length < 16) errors.push(`${key} 长度不足 16 个字符`);
@@ -5247,6 +5252,7 @@ app.get("/api/health", (_request, response) => {
     gatewayConfigured: hasGatewayConfig(),
     appName: process.env.APP_NAME || "moling_word",
     environment: appEnvironment,
+    releaseId: appReleaseId || null,
     maximumConcurrentAiRequests,
     sessionRequired: requireMolingSession,
     databaseConfigured: Boolean(dbPool),

@@ -64,6 +64,7 @@ const apiProcess = spawn(process.execPath, ["server/index.js"], {
     ...process.env,
     APP_ENV: "production",
     NODE_ENV: "production",
+    APP_RELEASE_ID: "release-http-baseline-test",
     APP_HOST: "127.0.0.1",
     LOCAL_API_PORT: String(port),
     DATABASE_URL: "mysql://word_app:a-strong-database-password@127.0.0.1:1/moling_word",
