@@ -19,6 +19,7 @@ npm run check:commercial-readiness
 - `.github/workflows/commercial-readiness.yml`：拉取请求与主分支商业门禁。
 - `scripts/check-frontend-performance-budget.mjs`：基于 Vite manifest 校验初始 JS/CSS gzip 闭包、单块大小与资源请求总数，防止首屏资产无界增长。
 - `ops/release-target.json` 与 `dist/THIRD_PARTY_LICENSES.txt`：显式绑定 Linux x64 glibc 发布目标，并按锁文件生成该目标生产依赖的许可证、版权和 NOTICE 全文；发布切换前必须确认目标一致且文件非空。
+- `scripts/check-release-target.mjs`：候选版本切换前在目标服务器验证操作系统、CPU 架构与 glibc，避免许可证包和实际安装平台不一致。
 
 安装、验收和回滚命令见 `ops/README.md`。`npm run check:deployment-assets` 只验证这些资产的契约完整性，不证明它们已部署到目标服务器。
 

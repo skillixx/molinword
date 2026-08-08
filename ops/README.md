@@ -39,6 +39,7 @@ test -s dist/THIRD_PARTY_LICENSES.txt
 sudo -u molinword npm ci --omit=dev
 sudo ln -sfn /opt/molinword/releases/<release-id> /opt/molinword/candidate
 sudo systemctl daemon-reload
+sudo systemctl start 'molinword-maintenance@check:release-target.service'
 sudo systemctl start 'molinword-maintenance@check:runtime-config:production.service'
 ```
 
