@@ -1,0 +1,32 @@
+[Unit]
+Description=Moling AI Word audit log retention cleanup
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/opt/molinword/current/scripts/ai-audit-maintenance.mjs
+
+[Service]
+Type=oneshot
+User=molinword
+Group=molinword
+WorkingDirectory=/opt/molinword/current
+EnvironmentFile=/etc/molinword/molinword.env
+# 中文注解：生产配置预检通过后才按批准的保留周期分批删除过期审计元数据。
+ExecStartPre=/usr/bin/node scripts/check-runtime-config.mjs --require-production
+ExecStart=/usr/bin/node scripts/ai-audit-maintenance.mjs cleanup
+TimeoutStartSec=300
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=

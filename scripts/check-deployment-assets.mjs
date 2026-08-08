@@ -62,6 +62,25 @@ assert.match(reconcileTimer, /Persistent=true/);
 const reconciliationWorker = await readRequired("scripts/billing-reconciliation.mjs");
 assert.match(reconciliationWorker, /error\?\.code === "ENOENT"/, "outbox 尚未创建时必须按零条记录处理，不能阻断数据库对账重试");
 assert.match(reconciliationWorker, /status IN \('resolved', 'manual_review', 'processing', 'retry'\)/, "重复导入 outbox 时必须保留已完成、人工复核、租约处理中和退避状态");
+const auditRetentionService = await readRequired("ops/systemd/molinword-ai-audit-retention.service");
+assert.match(auditRetentionService, /ExecStartPre=\/usr\/bin\/node scripts\/check-runtime-config\.mjs --require-production/);
+assert.match(auditRetentionService, /ExecStart=\/usr\/bin\/node scripts\/ai-audit-maintenance\.mjs cleanup/);
+assert.match(auditRetentionService, /NoNewPrivileges=true/);
+assert.match(auditRetentionService, /ProtectSystem=strict/);
+const auditRetentionTimer = await readRequired("ops/systemd/molinword-ai-audit-retention.timer");
+assert.match(auditRetentionTimer, /OnCalendar=\*-\*-\* 03:15:00/);
+assert.match(auditRetentionTimer, /RandomizedDelaySec=30m/);
+assert.match(auditRetentionTimer, /Persistent=true/);
+const auditMigration = await readRequired("database/migrate-ai-audit-privacy.mjs");
+for (const column of ["request_id", "prompt_sha256", "response_sha256", "prompt_chars", "response_chars"]) {
+  assert.match(auditMigration, new RegExp(`\\["${column}"`), `AI 审计迁移缺少 ${column}`);
+}
+assert.match(auditMigration, /idx_ai_logs_created/);
+const auditMaintenance = await readRequired("scripts/ai-audit-maintenance.mjs");
+assert.match(auditMaintenance, /DATE_SUB\(CURRENT_TIMESTAMP, INTERVAL \$\{retentionDays\} DAY\)/);
+assert.match(auditMaintenance, /prompt = NULL/);
+assert.match(auditMaintenance, /response = NULL/);
+assert.doesNotMatch(auditMaintenance, /console\.log\([^\n]*(?:prompt|response)/i, "AI 审计维护日志不得输出客户正文");
 const maintenanceService = await readRequired("ops/systemd/molinword-maintenance@.service");
 for (const expected of [
   "WorkingDirectory=/opt/molinword/candidate",
@@ -81,7 +100,11 @@ for (const expected of [
   "APP_HOST=127.0.0.1",
   "TRUSTED_PROXY_HOPS=1",
   "SESSION_COOKIE_SECURE=true",
-  "BILLING_RECONCILIATION_OUTBOX=/var/lib/molinword/billing-reconciliation-outbox.jsonl"
+  "BILLING_RECONCILIATION_OUTBOX=/var/lib/molinword/billing-reconciliation-outbox.jsonl",
+  "AI_AUDIT_CONTENT_MODE=metadata",
+  "AI_AUDIT_RETENTION_DAYS=30",
+  "AI_AUDIT_CLEANUP_BATCH_SIZE=1000",
+  "AI_AUDIT_CLEANUP_MAX_BATCHES=20"
 ]) {
   assert.ok(productionEnvironment.includes(expected), `生产环境样例缺少 ${expected}`);
 }
@@ -101,11 +124,17 @@ assert.match(runtimeCheck, /APP_ENV 必须设置为 production/);
 const packageJson = JSON.parse(await readRequired("package.json"));
 assert.equal(packageJson.scripts?.["check:runtime-config"], "node scripts/check-runtime-config.mjs");
 assert.equal(packageJson.scripts?.["check:runtime-config:production"], "node scripts/check-runtime-config.mjs --require-production");
+assert.equal(packageJson.scripts?.["db:migrate:ai-audit-privacy"], "node database/migrate-ai-audit-privacy.mjs");
+assert.equal(packageJson.scripts?.["ai-audit:cleanup"], "node scripts/ai-audit-maintenance.mjs cleanup");
+assert.equal(packageJson.scripts?.["ai-audit:redact-existing"], "node scripts/ai-audit-maintenance.mjs redact-existing");
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:deployment-assets/);
 const runbook = await readRequired("ops/README.md");
 assert.doesNotMatch(runbook, /\/bin\/sh\s+-c|\bsource\s+\/etc\/molinword|\. \/etc\/molinword\/molinword\.env/, "运维命令不能用 shell 执行 EnvironmentFile 中的密钥值");
 assert.match(runbook, /molinword-maintenance@check:runtime-config:production\.service/);
 assert.match(runbook, /molinword-maintenance@billing:reconcile:list\.service/);
+assert.match(runbook, /molinword-maintenance@db:migrate:ai-audit-privacy\.service/);
+assert.match(runbook, /molinword-maintenance@ai-audit:redact-existing\.service/);
+assert.match(runbook, /molinword-ai-audit-retention\.timer/);
 assert.match(runbook, /\/etc\/nginx\/sites-enabled\/molinword\.conf/);
 assert.ok(runbook.indexOf("/etc/nginx/sites-enabled/molinword.conf") < runbook.indexOf("sudo nginx -t"), "站点必须先启用再做 Nginx 全量语法检查");
 assert.match(runbook, /sudo systemctl restart molinword-api\.service/, "切换版本后必须重启已运行的 API 服务");
@@ -117,6 +146,7 @@ console.log("生产部署资产契约检查通过。", {
   reverseProxy: true,
   serviceManager: true,
   reconciliationTimer: true,
+  auditRetentionTimer: true,
   ciGate: true,
   rollbackRunbook: true
 });

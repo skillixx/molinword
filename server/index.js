@@ -569,6 +569,8 @@ function validateProductionConfiguration(environment = {}) {
     "LLM_API_URL",
     "LLM_API_KEY",
     "LLM_MODEL",
+    "AI_AUDIT_CONTENT_MODE",
+    "AI_AUDIT_RETENTION_DAYS",
     "STORAGE_ENDPOINT",
     "STORAGE_ACCESS_KEY_ID",
     "STORAGE_SECRET_ACCESS_KEY",
@@ -600,6 +602,9 @@ function validateProductionConfiguration(environment = {}) {
   requireHttps("LLM_READINESS_URL", true);
   requireHttps("STORAGE_ENDPOINT", true);
   if (configuration.SESSION_COOKIE_SECURE !== "true") errors.push("SESSION_COOKIE_SECURE 生产环境必须为 true");
+  if (configuration.AI_AUDIT_CONTENT_MODE !== "metadata") {
+    errors.push("AI_AUDIT_CONTENT_MODE 生产环境必须为 metadata，禁止保存完整提示词和模型回复");
+  }
   if (!isPlaceholder(configuration.BILLING_RECONCILIATION_OUTBOX) && !path.isAbsolute(configuration.BILLING_RECONCILIATION_OUTBOX)) {
     errors.push("BILLING_RECONCILIATION_OUTBOX 生产环境必须指向持久卷绝对路径");
   }
@@ -618,6 +623,9 @@ function validateProductionConfiguration(environment = {}) {
   validateIntegerSetting("LLM_MAX_RETRIES", 0, 1);
   validateIntegerSetting("MOLING_INTERNAL_TIMEOUT_MS", 1000, 30000);
   validateIntegerSetting("SHUTDOWN_TIMEOUT_MS", 1000, 1200000);
+  validateIntegerSetting("AI_AUDIT_RETENTION_DAYS", 1, 365);
+  validateIntegerSetting("AI_AUDIT_CLEANUP_BATCH_SIZE", 1, 10000);
+  validateIntegerSetting("AI_AUDIT_CLEANUP_MAX_BATCHES", 1, 100);
   const productionLlmTimeoutMs = Number(configuration.LLM_TIMEOUT_MS || 30000);
   const productionLlmMaxRetries = Number(configuration.LLM_MAX_RETRIES || 1);
   const productionMolingInternalTimeoutMs = Number(configuration.MOLING_INTERNAL_TIMEOUT_MS || 10000);
@@ -4171,24 +4179,69 @@ async function createDocumentVersion(connection, documentId, outline, content, p
   );
 }
 
-async function logAiRequest({ userId = localUserId, documentId = null, actionType, prompt, responseText, status = "success", errorMessage = null, latencyMs = null }) {
+function resolveAiAuditContentMode(environment = {}) {
+  const configuredMode = String(environment.AI_AUDIT_CONTENT_MODE || "").trim().toLowerCase();
+  if (["full", "metadata", "disabled"].includes(configuredMode)) return configuredMode;
+  const production = [environment.APP_ENV, environment.NODE_ENV]
+    .some((value) => String(value || "").trim().toLowerCase() === "production");
+  // 中文注解：即使生产配置门禁被错误绕过，运行时也默认元数据模式，绝不回退到完整内容日志。
+  return production ? "metadata" : "full";
+}
+
+function buildAiAuditRecord({ requestId = null, actionType, prompt, responseText, status = "success", errorMessage = null, latencyMs = null }, environment = process.env) {
+  const contentMode = resolveAiAuditContentMode(environment);
+  if (contentMode === "disabled") return null;
+  const promptValue = String(prompt || "");
+  const responseValue = String(responseText || "");
+  const hash = (value) => crypto.createHash("sha256").update(value, "utf8").digest("hex");
+  const fullContent = contentMode === "full";
+  const normalizedError = errorMessage == null
+    ? null
+    : (fullContent
+        ? String(errorMessage).slice(0, 4000)
+        : toPublicErrorMessage(new Error(String(errorMessage)), "AI 请求失败，请稍后重试。"));
+
+  return {
+    requestId: String(requestId || "").trim().slice(0, 64) || null,
+    actionType: String(actionType || "unknown").trim().slice(0, 60) || "unknown",
+    prompt: fullContent ? promptValue.slice(0, 262144) : null,
+    responseText: fullContent ? responseValue.slice(0, 262144) : null,
+    promptSha256: hash(promptValue),
+    responseSha256: hash(responseValue),
+    promptChars: Array.from(promptValue).length,
+    responseChars: Array.from(responseValue).length,
+    status: status === "failed" ? "failed" : "success",
+    errorMessage: normalizedError,
+    latencyMs: Number.isInteger(latencyMs) && latencyMs >= 0 ? latencyMs : null
+  };
+}
+
+async function logAiRequest({ userId = localUserId, documentId = null, ...auditInput }) {
   if (!dbPool) return;
+  const auditRecord = buildAiAuditRecord(auditInput);
+  if (!auditRecord) return;
 
   try {
     await dbPool.query(
       `INSERT INTO ai_request_logs
-        (user_id, document_id, action_type, model, prompt, response, status, error_message, latency_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (user_id, document_id, action_type, model, request_id, prompt, response,
+         prompt_sha256, response_sha256, prompt_chars, response_chars, status, error_message, latency_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         userId,
         documentId,
-        actionType,
+        auditRecord.actionType,
         gatewayModel,
-        prompt || "",
-        responseText || "",
-        status,
-        errorMessage,
-        latencyMs
+        auditRecord.requestId,
+        auditRecord.prompt,
+        auditRecord.responseText,
+        auditRecord.promptSha256,
+        auditRecord.responseSha256,
+        auditRecord.promptChars,
+        auditRecord.responseChars,
+        auditRecord.status,
+        auditRecord.errorMessage,
+        auditRecord.latencyMs
       ]
     );
   } catch (error) {
@@ -5914,6 +5967,7 @@ app.post("/api/ai/template-agent", async (request, response) => {
     await settlePoints(pointHold, usageCosts.word_template_agent, { userId: currentUser.userId, usageType: "word_template_agent" });
     pointFinalized = true;
     await logAiRequest({
+      requestId: request.requestId,
       userId: currentUser.userId,
       actionType: "template_agent_plan",
       prompt: requestSummary,
@@ -5924,6 +5978,7 @@ app.post("/api/ai/template-agent", async (request, response) => {
   } catch (error) {
     if (!pointFinalized) await releasePoints(pointHold).catch((releaseError) => console.warn("Moling point release failed:", releaseError.message));
     await logAiRequest({
+      requestId: request.requestId,
       userId: currentUser.userId,
       actionType: "template_agent_plan",
       prompt: requestSummary,
@@ -5963,6 +6018,7 @@ app.post("/api/ai/generate-outline", async (request, response) => {
     const outline = parseOutline(content, topic || "AI Word document");
     await settlePoints(pointHold, 1, { userId: currentUser.userId, usageType: "word_outline_generate" });
     await logAiRequest({
+      requestId: request.requestId,
       userId: currentUser.userId,
       documentId,
       actionType: "generate_outline",
@@ -5974,6 +6030,7 @@ app.post("/api/ai/generate-outline", async (request, response) => {
   } catch (error) {
     await releasePoints(pointHold).catch((releaseError) => console.warn("Moling point release failed:", releaseError.message));
     await logAiRequest({
+      requestId: request.requestId,
       userId: currentUser.userId,
       documentId,
       actionType: "generate_outline",
@@ -6014,6 +6071,7 @@ app.post("/api/ai/generate-body", async (request, response) => {
     const validContent = validateAiText(content, { minLength: 80 });
     await settlePoints(pointHold, 5, { userId: currentUser.userId, usageType: "word_body_generate" });
     await logAiRequest({
+      requestId: request.requestId,
       userId: currentUser.userId,
       documentId,
       actionType: "generate_body",
@@ -6025,6 +6083,7 @@ app.post("/api/ai/generate-body", async (request, response) => {
   } catch (error) {
     await releasePoints(pointHold).catch((releaseError) => console.warn("Moling point release failed:", releaseError.message));
     await logAiRequest({
+      requestId: request.requestId,
       userId: currentUser.userId,
       documentId,
       actionType: "generate_body",
@@ -6076,6 +6135,7 @@ app.post("/api/ai/edit", async (request, response) => {
     const validContent = validateAiText(result, { minLength: action === "shorten" ? 4 : 10 });
     await settlePoints(pointHold, 2, { userId: currentUser.userId, usageType: "word_polish" });
     await logAiRequest({
+      requestId: request.requestId,
       userId: currentUser.userId,
       documentId,
       actionType: action || "polish",
@@ -6087,6 +6147,7 @@ app.post("/api/ai/edit", async (request, response) => {
   } catch (error) {
     await releasePoints(pointHold).catch((releaseError) => console.warn("Moling point release failed:", releaseError.message));
     await logAiRequest({
+      requestId: request.requestId,
       userId: currentUser.userId,
       documentId,
       actionType: action || "polish",
@@ -6129,6 +6190,7 @@ app.post("/api/ai/polish", async (request, response) => {
     const validContent = validateAiText(polished, { minLength: 10 });
     await settlePoints(pointHold, usageCosts.word_polish, { userId: currentUser.userId, usageType: "word_polish" });
     await logAiRequest({
+      requestId: request.requestId,
       userId: currentUser.userId,
       documentId,
       actionType: "polish_legacy",
@@ -6140,6 +6202,7 @@ app.post("/api/ai/polish", async (request, response) => {
   } catch (error) {
     await releasePoints(pointHold).catch((releaseError) => console.warn("Moling point release failed:", releaseError.message));
     await logAiRequest({
+      requestId: request.requestId,
       userId: currentUser.userId,
       documentId,
       actionType: "polish_legacy",
@@ -6170,7 +6233,7 @@ app.use((error, _request, response, next) => {
   sendError(response, error, 500, "服务暂时不可用，请稍后重试。");
 });
 
-export { appendBillingReconciliationOutbox, createBillingReconciliationPayload, createDocxBuffer, createTemplateAgentFallbackPlan, formatGeneratedBodyHtml, legacyDocTextToHtml, loadTemplateAgentCandidates, normalizeTemplateAgentPlan, normalizeTemplateAgentReview, normalizeTemplateBriefAnalysis, parseImportedDocument, parseStyledDocxToHtml, persistBillingReconciliationTask, readSafeImageDimensions, resolveBillableFailureResponse, resolveTemplateAgentFailureStatus, sanitizeImportedHtml, shouldReleasePointHold, validateProductionConfiguration };
+export { appendBillingReconciliationOutbox, buildAiAuditRecord, createBillingReconciliationPayload, createDocxBuffer, createTemplateAgentFallbackPlan, formatGeneratedBodyHtml, legacyDocTextToHtml, loadTemplateAgentCandidates, normalizeTemplateAgentPlan, normalizeTemplateAgentReview, normalizeTemplateBriefAnalysis, parseImportedDocument, parseStyledDocxToHtml, persistBillingReconciliationTask, readSafeImageDimensions, resolveBillableFailureResponse, resolveTemplateAgentFailureStatus, sanitizeImportedHtml, shouldReleasePointHold, validateProductionConfiguration };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const productionConfigurationErrors = validateProductionConfiguration(process.env);

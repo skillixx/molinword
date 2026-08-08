@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Moling AI Word audit log retention cleanup daily
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+RandomizedDelaySec=30m
+AccuracySec=1m
+Persistent=true
+Unit=molinword-ai-audit-retention.service
+
+[Install]
+WantedBy=timers.target

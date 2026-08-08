@@ -154,6 +154,7 @@ npm run billing:reconcile:retry
 - 生产环境建议启用 HTTPS，并把 `SESSION_COOKIE_SECURE=true`。
 - 生产环境设置 `APP_ENV=production` 后会强制要求墨灵会话并禁用 `LOCAL_MOLING_MOCK`；同时建议保留 `REQUIRE_MOLING_SESSION=true`，形成显式双重门禁。
 - 后端接口错误只返回中文用户提示，真实错误保留在服务端日志。
+- 生产 AI 审计强制使用 `AI_AUDIT_CONTENT_MODE=metadata`，仅保存请求 ID、摘要、字符数、状态与耗时；保留期由 `AI_AUDIT_RETENTION_DAYS` 控制。
 - 文档、导出文件下载都按当前用户校验，避免跨用户访问。
 - 生产启动会执行 fail-fast 配置校验；完整步骤见 `docs/production-deployment-checklist.md`。
 - 可审计的 Nginx、systemd、环境变量、计费对账定时器和回滚步骤见 `ops/README.md`；样例不能替代真实域名、证书、密钥和目标环境授权。
@@ -172,8 +173,9 @@ npm run check:editor-workflow
 npm run check:docx-export-format
 npm run check:docx-import-format
 npm run db:migrate:document-page-layout
+npm run db:migrate:ai-audit-privacy
 ```
 
 `check:editor-workflow` 会启动自包含的浏览器测试，验证常用格式编辑、页眉页脚页码、快捷键保存、防并发保存、刷新重开、DOCX 下载与格式一致性，以及 A4 分页、超长结构、模板样式、移动端宽度和长文档固定菜单。原 `check:editor-pagination` 命令保留为兼容别名。
 
-历史数据库首次升级到页面设置功能时运行 `db:migrate:document-page-layout`；新数据库由 `database/init-mysql.sql` 直接创建对应字段。
+历史数据库首次升级到页面设置功能时运行 `db:migrate:document-page-layout`；升级 AI 审计隐私字段时运行 `db:migrate:ai-audit-privacy`。历史 AI 正文只能在备份和隐私审批后显式运行 `ai-audit:redact-existing`，生产日常清理由 systemd 定时器执行。新数据库由 `database/init-mysql.sql` 直接创建对应字段。

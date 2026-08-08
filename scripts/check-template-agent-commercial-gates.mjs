@@ -201,6 +201,8 @@ try {
     MOLING_API_BASE_URL: "http://127.0.0.1:1",
     LLM_API_URL: modelUrl,
     LLM_API_KEY: "commercial-gate-test-key-at-least-32",
+    AI_AUDIT_CONTENT_MODE: "metadata",
+    AI_AUDIT_RETENTION_DAYS: "30",
     STORAGE_ENDPOINT: "http://127.0.0.1:1",
     STORAGE_ACCESS_KEY_ID: "storage-access-key",
     STORAGE_SECRET_ACCESS_KEY: "storage-secret-key-at-least-32-characters",

@@ -14,6 +14,7 @@ npm run check:commercial-readiness
 - `ops/nginx/*`：HTTPS、统一安全响应头、反向代理、带重试头的限流与 SPA 回退。
 - `ops/systemd/molinword-api.service`：运行配置预检、故障重启、优雅退出与最小写目录。
 - `ops/systemd/molinword-reconcile.*`：待对账 outbox 导入和幂等重试定时任务。
+- `ops/systemd/molinword-ai-audit-retention.*`：按批准保留期分批清理 AI 审计元数据。
 - `ops/env/molinword.production.env.example`：不含真实密钥的生产变量清单。
 - `.github/workflows/commercial-readiness.yml`：拉取请求与主分支商业门禁。
 
@@ -36,6 +37,8 @@ npm run check:commercial-readiness
 - `MOLING_INTERNAL_TIMEOUT_MS` 必须覆盖墨灵 SSO、预占、结算和释放的响应正文读取，避免平台仅返回响应头时永久挂起。
 - `SHUTDOWN_TIMEOUT_MS` 应覆盖智能体最多五段模型调用、最多五次平台调用、模型重试与本地结算清理；生产配置门禁会按相关超时计算最小值。进程收到终止信号后先停止接收新请求，再等待在途请求完成。
 - 生产环境默认启用最小化 JSON 访问日志，并通过 `X-Request-Id` 关联请求；日志不应采集 Cookie、查询串和请求体。
+- `AI_AUDIT_CONTENT_MODE=metadata`，只保存请求关联、摘要和统计信息；生产门禁禁止完整提示词和模型回复落库。
+- `AI_AUDIT_RETENTION_DAYS` 必须为 1 至 365 天并经业务、隐私与合规审批；`AI_AUDIT_CLEANUP_BATCH_SIZE`、`AI_AUDIT_CLEANUP_MAX_BATCHES` 控制单轮删除规模。
 
 生产配置不完整时 `server/index.js` 会在监听端口前直接退出，错误只列缺失项，不打印密钥值。
 发布目录切换前应在目标环境加载 `/etc/molinword/molinword.env` 后运行 `npm run check:runtime-config -- --require-production`，不得把变量值展开到命令行参数或日志。
@@ -50,6 +53,7 @@ npm run check:commercial-readiness
 
 - `document_templates` 仅启用已审核模板，正文骨架包含元数据、编制说明、正式章节和行动表。
 - `billing_reconciliation_tasks` 包含 `operation_type`、`claim_token` 和唯一幂等键。
+- `ai_request_logs` 包含请求 ID、SHA-256、字符数与创建时间索引；先执行 `db:migrate:ai-audit-privacy`，再经批准单独执行 `ai-audit:redact-existing` 清理历史原文。
 - MinIO bucket 可读写，前端无法看到 bucket、object key 或访问密钥。
 
 ## 四、真实链路验收
@@ -65,6 +69,7 @@ npm run check:commercial-readiness
 6. 人为制造模型失败，确认返回 503、预占被释放；释放或结算响应不确定时生成对账任务。
 7. 导入包含标题、表格、图片的 DOCX，编辑后导出；在 Microsoft Word 中确认标题与各级标题为规范黑色、正文与行内自定义颜色不被误改。
 8. 在 390px、平板和桌面宽度检查模板库、智能体结果和编辑器，不应横向溢出，所有按钮均有明确反馈。
+9. 发起一次 AI 请求，使用 `X-Request-Id` 关联访问日志和 `ai_request_logs.request_id`；确认 `prompt`、`response` 为空，摘要和字符数存在，且日志不含密钥或客户正文。
 
 ## 五、对账与回滚
 
@@ -77,5 +82,6 @@ sudo systemctl start 'molinword-maintenance@billing:reconcile:retry.service'
 - 先导入 outbox，再查看和重试；脚本使用原幂等键，租约令牌阻止过期进程覆盖新结果。
 - 达到最大次数后进入 `manual_review`，禁止自动释放或手工修改额度表。
 - 回滚应用版本不回滚用户文档或计费账本；数据库结构采用向后兼容新增表/列，回滚前先验证旧版本可忽略新结构。
+- 历史 AI 正文脱敏和过期日志删除不可回滚；执行前必须确认备份、目标库、保留期限审批和影响范围。
 
 完成以上真实链路并保存证据后，才能把该版本标记为生产可用。
