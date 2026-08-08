@@ -127,9 +127,11 @@ async function readSharedUpstreamLicenseFallback(rootDir, candidate, license) {
   return sources.map((item) => ({ ...item, name: `shared-upstream:${rule.packagePath}/${item.name}` }));
 }
 
-function buildStandardFallback(license, packageMetadata, source) {
+function buildStandardFallback(license, candidate, source) {
+  const { packageMetadata, installed } = candidate;
   const factory = standardLicenseFallbacks[license];
-  if (!factory) return [];
+  // 中文注解：当前构建机未安装的目标包没有作者/仓库元数据，除受控共享上游外必须失败，不能把下载地址伪造成版权署名。
+  if (!factory || !installed) return [];
   const attribution = normalizeAuthor(packageMetadata.author) || source || `${packageMetadata.name} contributors`;
   return [{ name: `standard:${license}`, content: factory(attribution) }];
 }
@@ -221,7 +223,7 @@ export async function buildThirdPartyLicenseBundle({ rootDir = process.cwd() } =
       usedFallback = licenseSources.length > 0;
     }
     if (!licenseSources.length) {
-      licenseSources = buildStandardFallback(license, packageMetadata, source);
+      licenseSources = buildStandardFallback(license, first, source);
       usedFallback = licenseSources.length > 0;
     }
     if (!license || !licenseSources.length) {
