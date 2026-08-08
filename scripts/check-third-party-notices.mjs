@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { buildThirdPartyLicenseBundle } from "./third-party-license-bundle.mjs";
+import { buildThirdPartyLicenseBundle, hasValidSha512Integrity, sanitizePublicSource } from "./third-party-license-bundle.mjs";
 
 const result = await buildThirdPartyLicenseBundle({ rootDir: process.cwd() });
 const repeatedResult = await buildThirdPartyLicenseBundle({ rootDir: process.cwd() });
@@ -13,6 +13,10 @@ assert.deepEqual(result.releaseTarget, { os: "linux", cpu: "x64", libc: "glibc" 
 assert.match(result.content, /^MOLINWORD THIRD-PARTY LICENSE BUNDLE/m);
 assert.match(result.content, /^Release target: linux\/x64\/glibc$/m);
 assert.doesNotMatch(result.content, /D:\\|C:\\Users\\/i, "许可证包不能泄露构建机绝对路径");
+assert.equal(hasValidSha512Integrity("sha512-A="), false, "短伪 SRI 不能通过 SHA-512 完整性校验");
+assert.equal(hasValidSha512Integrity(lock.packages["node_modules/@esbuild/linux-x64"].integrity), true);
+assert.equal(sanitizePublicSource("https://token@example.com/source?access_token=secret", "example", "1.0.0"), "https://www.npmjs.com/package/example/v/1.0.0");
+assert.equal(sanitizePublicSource("file:///home/runner/private", "example", "1.0.0"), "https://www.npmjs.com/package/example/v/1.0.0");
 
 for (const packageName of ["react", "minio", "caniuse-lite"]) {
   const lockedVersion = lock.packages?.[`node_modules/${packageName}`]?.version;
@@ -42,6 +46,9 @@ for (const entry of result.entries) {
   const marker = `Package: ${entry.name}@${entry.version}`;
   assert.equal(result.content.split(marker).length - 1, 1, `依赖 ${marker} 必须且只能登记一次`);
   assert.ok(entry.licenseSources.length > 0 && entry.licenseSources.every((source) => source.content.trim()), `${marker} 缺少许可证正文`);
+  const publicSource = new URL(entry.source);
+  assert.equal(publicSource.protocol, "https:", `${marker} 来源必须使用 HTTPS`);
+  assert.equal(publicSource.username || publicSource.password || publicSource.search || publicSource.hash, "", `${marker} 来源不能携带凭据、查询串或片段`);
 }
 
 console.log("第三方许可证发布包检查通过。", {

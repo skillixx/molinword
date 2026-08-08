@@ -1,9 +1,10 @@
 import path from "node:path";
-import { readFile, readdir, stat } from "node:fs/promises";
+import { opendir, readFile, stat } from "node:fs/promises";
 
 const licenseFilePattern = /^(?:licen[cs]e|copying|copyright|notice)(?:[._-].*)?$/i;
 const maximumLicenseFileBytes = 1024 * 1024;
 const maximumLicenseFilesPerPackage = 16;
+const maximumDirectoryEntriesPerPackage = 4096;
 const maximumPackageCoordinates = 2000;
 const maximumTotalLicenseSourceBytes = 12 * 1024 * 1024;
 const maximumBundleBytes = 16 * 1024 * 1024;
@@ -38,6 +39,31 @@ function normalizeRepository(repository) {
   if (!repository || typeof repository !== "object") return "";
   const value = String(repository.url || "").trim();
   return repository.directory ? `${value}#${repository.directory}` : value;
+}
+
+function npmPackageUrl(packageName, version) {
+  const safeName = packageName.split("/").map(encodeURIComponent).join("/");
+  return `https://www.npmjs.com/package/${safeName}/v/${encodeURIComponent(version)}`;
+}
+
+export function sanitizePublicSource(value, packageName, version) {
+  const fallback = npmPackageUrl(packageName, version);
+  const normalized = String(value || "").trim().replace(/^git\+https:/, "https:");
+  if (!normalized || normalized.length > 2048) return fallback;
+  try {
+    const source = new URL(normalized);
+    // 中文注解：公开许可证包只保留无凭据的 HTTPS 来源，并移除可能携带令牌的查询串和片段。
+    if (source.protocol !== "https:" || source.username || source.password) return fallback;
+    source.search = "";
+    source.hash = "";
+    return source.toString();
+  } catch {
+    return fallback;
+  }
+}
+
+export function hasValidSha512Integrity(value) {
+  return String(value || "").split(/\s+/).some((token) => /^sha512-[A-Za-z0-9+/]{86}==$/.test(token));
 }
 
 function normalizeDeclaredLicense(packageMetadata) {
@@ -81,10 +107,15 @@ async function readJson(filePath) {
 }
 
 async function readPackageLicenseFiles(packageDirectory) {
-  const names = (await readdir(packageDirectory, { withFileTypes: true }))
-    .filter((entry) => entry.isFile() && licenseFilePattern.test(entry.name))
-    .map((entry) => entry.name)
-    .sort((left, right) => compareText(left.toLowerCase(), right.toLowerCase()));
+  const names = [];
+  let directoryEntryCount = 0;
+  // 中文注解：流式扫描并限制全部根目录项，避免大量非许可证文件在过滤前占满门禁内存。
+  for await (const entry of await opendir(packageDirectory)) {
+    directoryEntryCount += 1;
+    if (directoryEntryCount > maximumDirectoryEntriesPerPackage) throw new Error(`依赖根目录文件数量异常：${packageDirectory}`);
+    if (entry.isFile() && licenseFilePattern.test(entry.name)) names.push(entry.name);
+  }
+  names.sort((left, right) => compareText(left.toLowerCase(), right.toLowerCase()));
   if (names.length > maximumLicenseFilesPerPackage) throw new Error(`许可证文件数量异常：${packageDirectory}`);
   const sources = [];
   for (const name of names) {
@@ -112,13 +143,15 @@ async function readSharedUpstreamLicenseFallback(rootDir, candidate, license) {
   const resolvedTargetIsValid = /^https:\/\//.test(resolvedUrl)
     && resolvedUrl.includes(`/${packageMetadata.name}/`)
     && resolvedUrl.endsWith(`/${packageBaseName}-${packageMetadata.version}.tgz`)
-    && /^sha512-[A-Za-z0-9+/=]+$/.test(String(lockMetadata.integrity || ""));
+    && hasValidSha512Integrity(lockMetadata.integrity);
+  const declaredByUpstream = upstreamMetadata.optionalDependencies?.[packageMetadata.name] === packageMetadata.version;
   // 中文注解：原生平台包不携带 LICENSE 时，只允许复用同版本、同许可证、同上游仓库主包的原文，避免错配其他项目授权。
   if (
     upstreamMetadata.name !== rule.upstreamName
     || packageMetadata.version !== upstreamMetadata.version
     || license !== upstreamLicense
     || !upstreamRepository.includes(rule.repositoryToken)
+    || !declaredByUpstream
     || (targetRepository ? !targetRepository.includes(rule.repositoryToken) : !resolvedTargetIsValid)
   ) {
     throw new Error(`${packageMetadata.name}@${packageMetadata.version} 的共享上游许可证校验失败`);
@@ -208,7 +241,11 @@ export async function buildThirdPartyLicenseBundle({ rootDir = process.cwd() } =
     const first = candidates[0];
     const { packageMetadata } = first;
     const license = String(first.lockMetadata.license || normalizeDeclaredLicense(packageMetadata)).trim();
-    const source = String(packageMetadata.homepage || normalizeRepository(packageMetadata.repository) || first.lockMetadata.resolved || `https://www.npmjs.com/package/${packageMetadata.name}/v/${packageMetadata.version}`).trim();
+    const source = sanitizePublicSource(
+      packageMetadata.homepage || normalizeRepository(packageMetadata.repository) || first.lockMetadata.resolved,
+      packageMetadata.name,
+      packageMetadata.version
+    );
     const attribution = normalizeAuthor(packageMetadata.author);
     let licenseSources = [];
     for (const candidate of candidates) {

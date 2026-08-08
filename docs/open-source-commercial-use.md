@@ -17,7 +17,7 @@ npm audit --omit=dev --audit-level=high
 
 许可证检查直接读取锁定后的 `package-lock.json`，发现缺失或未审核许可证即失败。依赖升级后必须重新执行，不允许仅检查 `package.json` 中的直接依赖。
 
-需要重点署名的精确包版本还必须登记到 `public/THIRD_PARTY_NOTICES.md`；Vite 构建会复制这份索引，并在构建结束后根据 `package-lock.json` 与 `ops/release-target.json` 声明的生产目标生成 `dist/THIRD_PARTY_LICENSES.txt`。当前基线固定为 Linux x64 glibc，即使在 Windows 构建也必须纳入该目标会安装的可选原生包，不能用构建机平台替代生产平台。完整发布包逐项保留包内 LICENSE、COPYING、COPYRIGHT 和 NOTICE 原文；esbuild、Rollup 的原生平台包未携带许可证文件时，只允许复用经“同版本、同许可证、同上游仓库或锁定归档完整性”校验的主包原文，其他包只能使用受控 SPDX 标准文本并附带目标包元数据署名。门禁在版本变化、许可证缺失、共享上游不一致或无法生成正文时直接失败。
+需要重点署名的精确包版本还必须登记到 `public/THIRD_PARTY_NOTICES.md`；Vite 构建会复制这份索引，并在构建结束后根据 `package-lock.json` 与 `ops/release-target.json` 声明的生产目标生成 `dist/THIRD_PARTY_LICENSES.txt`。当前基线固定为 Linux x64 glibc，即使在 Windows 构建也必须纳入该目标会安装的可选原生包，不能用构建机平台替代生产平台。完整发布包逐项保留包内 LICENSE、COPYING、COPYRIGHT 和 NOTICE 原文；esbuild、Rollup 的原生平台包未携带许可证文件时，只允许复用经“主包 exact optionalDependencies、同版本、同许可证、同上游仓库或完整 SHA-512 锁定归档”校验的主包原文，其他包只能使用受控 SPDX 标准文本并附带目标包元数据署名。公开来源仅允许无凭据 HTTPS URL，查询串和片段会被移除。门禁在版本变化、许可证缺失、共享上游不一致或无法生成正文时直接失败。
 
 目标服务器切换候选版本前必须通过 `npm run check:release-target`。仓库商业门禁执行的是不依赖构建机平台的 `check:release-target-contract`；它不能替代目标服务器上的真实运行时检查。
 
