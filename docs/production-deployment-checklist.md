@@ -26,7 +26,7 @@ npm run check:commercial-readiness
 ## 二、生产配置
 
 - `APP_ENV=production`。服务端会强制要求墨灵会话并关闭本地模拟。
-- `APP_RELEASE_ID` 必须与 `/opt/molinword/releases/<release-id>` 的当前发布标识一致，只允许字母、数字、点、下划线和连字符；它会公开出现在健康检查中用于绑定验收证据，不得包含客户名、工单正文或凭据。
+- `npm run build` 生成 `dist/release-manifest.json`，发布号由 Git 提交与实际前后端制品哈希共同派生；目标目录名、验收命令和健康检查必须使用该发布号，不能通过环境变量手工覆盖。
 - `SESSION_COOKIE_SECURE=true`，`APP_BASE_URL` 使用 HTTPS。
 - 数据库、MinIO、墨灵内部 API、模型网关配置均不得使用占位值。
 - `MOLING_API_BASE_URL`、`LLM_API_URL`、`STORAGE_ENDPOINT` 使用 HTTPS；只有受控内网链路才可显式设置 `ALLOW_INSECURE_INTERNAL_HTTP=true`。
@@ -68,18 +68,17 @@ npm run check:commercial-readiness
 
 ```bash
 cd /opt/molinword/current
-npm run production:collect-acceptance -- \
-  --base-url=https://word.example.com \
-  --release-id=<release-id> \
-  --output=/var/lib/molinword/acceptance/<release-id>-preflight.json
+sudo systemctl start 'molinword-acceptance@<release-id>.service'
+sudo systemctl status 'molinword-acceptance@<release-id>.service' --no-pager
+sudo ls -lt /var/lib/molinword/acceptance/<release-id>-*.json
 ```
 
-采集器校验 HTTPS、HTML 入口及 `no-store` 缓存策略、安全响应头、`APP_ENV=production`、`APP_RELEASE_ID` 与命令发布号一致、强制会话、MySQL/MinIO/模型就绪、JSON 404、未登录 AI 401 和服务端请求 ID。它只保存白名单布尔值、状态码、安全响应头和请求 ID，单个 JSON 正文最多读取 64 KiB，超时、异常状态、版本不符或缺失头部都会失败关闭。自动通过只会得到 `releaseDecision=manual-approval-required`，不能替代以下真实账号、账本、Word 和人工签字验收。
+专用 systemd 单元从受保护的环境文件读取 `APP_BASE_URL`。采集器要求目标与该地址完全一致，拒绝 IP、私网、回环、链路本地、公私混合解析和 DNS 重绑定，并校验 HTTPS、HTML 入口及 `no-store` 缓存策略、安全响应头、`APP_ENV=production`、运行时制品清单发布号与实例发布号一致、强制会话、MySQL/MinIO/模型就绪、JSON 404、无副作用 AI 认证端点 401 和服务端请求 ID。它只保存白名单布尔值、状态码、安全响应头和请求 ID，单个 JSON 正文最多读取 64 KiB，超时、异常状态、制品不符或缺失头部都会失败关闭。自动通过只会得到 `releaseDecision=manual-approval-required`，不能替代以下真实账号、账本、Word 和人工签字验收。
 
 1. 从墨灵平台入口换取会话，直接访问生产 AI 接口应返回 401。
    同时确认 `/api/health` 返回 200，`/api/ready` 会实际探测数据库、MinIO 和模型网关且均可用时返回 200，并确认响应带服务端生成的合法 `X-Request-Id`。
 2. 使用无效 JSON 和不存在的 `/api/*` 路由确认分别返回规范 JSON 400/404；连续超过 AI 限额时返回 429、`Retry-After` 和 `RateLimit-*` 响应头。
-3. 记录调用前积分，运行文档智能体，确认需求分析、启用模板匹配、结构生成、质量审校四阶段完成。
+3. 记录调用前积分，运行文档智能体，确认需求分析、MySQL `status='active'` 白名单模板匹配、结构设计、质量审校四阶段完成。
 4. 确认成功调用只结算一次；同一幂等键重放不重复扣费。
 5. 使用余额不足账户确认返回 402，且不返回大纲、正文、润色或模板规划结果。
 6. 人为制造模型失败，确认返回 503、预占被释放；释放或结算响应不确定时生成对账任务。
@@ -100,4 +99,6 @@ sudo systemctl start 'molinword-maintenance@billing:reconcile:retry.service'
 - 回滚应用版本不回滚用户文档或计费账本；数据库结构采用向后兼容新增表/列，回滚前先验证旧版本可忽略新结构。
 - 历史 AI 正文脱敏和过期日志删除不可回滚；执行前必须确认备份、目标库、保留期限审批和影响范围。
 
-完成以上真实链路、填写自动证据文件中的七项 `manualChecks` 并由业务验收人保存签字证据后，才能把该版本标记为生产可用。
+10. 切换到上一份制品并等待在途请求结束，确认 `/api/health` 自动回显上一制品清单中的发布号，随后恢复当前版本并保存时间线。
+
+完成以上真实链路、填写自动证据文件中的十项 `manualChecks` 并由业务验收人保存签字证据后，才能把该版本标记为生产可用。

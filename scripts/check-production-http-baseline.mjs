@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
+import { verifyReleaseManifest } from "../shared/release-manifest.js";
+
+const expectedReleaseId = verifyReleaseManifest({ rootDir: process.cwd() }).releaseId;
 
 async function freePort() {
   const server = createServer();
@@ -64,7 +67,6 @@ const apiProcess = spawn(process.execPath, ["server/index.js"], {
     ...process.env,
     APP_ENV: "production",
     NODE_ENV: "production",
-    APP_RELEASE_ID: "release-http-baseline-test",
     APP_HOST: "127.0.0.1",
     LOCAL_API_PORT: String(port),
     DATABASE_URL: "mysql://word_app:a-strong-database-password@127.0.0.1:1/moling_word",
@@ -133,6 +135,7 @@ try {
   assert.equal(healthResponse.status, 200, output.join(""));
   assert.match(healthResponse.headers.get("x-request-id") || "", /^[0-9a-f-]{36}$/i);
   assert.notEqual(healthResponse.headers.get("x-request-id"), requestId);
+  assert.equal((await healthResponse.json()).releaseId, expectedReleaseId, "生产健康检查必须暴露已校验制品自己的发布号");
 
   const replacedRequestIdResponse = await fetch(`http://127.0.0.1:${port}/api/health`, {
     headers: { "X-Request-Id": "<script>invalid</script>" }
@@ -177,6 +180,9 @@ try {
   assert.equal(malformedResponse.status, 400);
   assert.match(malformedResponse.headers.get("content-type") || "", /application\/json/);
   assert.match((await malformedResponse.json()).message, /JSON|请求内容/);
+
+  const authCheckResponse = await fetch(`http://127.0.0.1:${port}/api/ai/auth-check`);
+  assert.equal(authCheckResponse.status, 401, "无副作用 AI 认证探针必须稳定返回未登录且不占用 AI 限流配额");
 
   const statuses = [];
   for (let index = 0; index < 3; index += 1) {

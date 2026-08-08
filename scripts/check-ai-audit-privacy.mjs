@@ -42,7 +42,6 @@ assert.equal(normalizeAiEditAction({ action: "expand" }), "polish");
 
 const productionBase = {
   APP_ENV: "production",
-  APP_RELEASE_ID: "release-ai-audit-test",
   DATABASE_URL: "mysql://word_app:a-strong-database-password@db.internal:3306/moling_word",
   INTERNAL_API_TOKEN: "internal-token-at-least-32-characters",
   MOLING_APP_ID: "15",

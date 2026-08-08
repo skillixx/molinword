@@ -1,0 +1,35 @@
+[Unit]
+Description=Moling AI Word production acceptance preflight for release %I
+Wants=network-online.target
+After=network-online.target molinword-api.service
+ConditionPathExists=/opt/molinword/current/package.json
+
+[Service]
+Type=oneshot
+User=molinword
+Group=molinword
+WorkingDirectory=/opt/molinword/current
+EnvironmentFile=/etc/molinword/molinword.env
+ExecStartPre=/usr/bin/node scripts/check-runtime-config.mjs --require-production
+# 中文注解：站点只取受保护环境中的 APP_BASE_URL，实例名只能作为经过脚本校验的发布号和证据文件名。
+ExecStart=/usr/bin/node scripts/production-acceptance-evidence.mjs --release-id=%I --output-dir=/var/lib/molinword/acceptance
+TimeoutStartSec=180
+UMask=0077
+StateDirectory=molinword
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/molinword

@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import {
   collectProductionAcceptanceEvidence,
+  createBlockedAcceptanceEvidence,
+  resolveAcceptanceAddresses,
   validateAcceptanceTarget,
-  writeAcceptanceEvidence
+  writeAcceptanceEvidence,
+  writeAcceptanceEvidenceToDirectory
 } from "./production-acceptance-evidence.mjs";
 
 const securityHeaders = {
@@ -81,14 +84,8 @@ const server = createServer(async (request, response) => {
     response.end(JSON.stringify({ message: "不存在", internalDetail: "missing-body-must-not-enter-evidence" }));
     return;
   }
-  if (request.url === "/api/ai/edit" && request.method === "POST") {
+  if (request.url === "/api/ai/auth-check" && request.method === "GET") {
     authenticationProbeRequests += 1;
-    const bodyChunks = [];
-    for await (const _chunk of request) {
-      // 中文注解：读完固定探针正文，确保采集器未因连接提前关闭而制造服务端噪音。
-      bodyChunks.push(_chunk);
-    }
-    assert.equal(Buffer.concat(bodyChunks).toString("utf8"), "{}", "认证探针不能携带有效 AI 动作或业务正文");
     response.writeHead(401, { "Content-Type": "application/json" });
     response.end(JSON.stringify({ message: "请先登录", internalDetail: "auth-body-must-not-enter-evidence" }));
     return;
@@ -120,7 +117,49 @@ try {
   assert.throws(() => validateAcceptanceTarget("http://example.com", { allowInsecureLoopback: true }), /HTTPS/);
   assert.throws(() => validateAcceptanceTarget("https://user:secret@example.com"), /凭据/);
   assert.throws(() => validateAcceptanceTarget("https://example.com/path?token=secret"), /根路径|查询/);
+  assert.throws(() => validateAcceptanceTarget("https://169.254.169.254"), /公网 DNS/);
+  assert.throws(() => validateAcceptanceTarget("https://localhost"), /公网 DNS/);
+  assert.throws(() => validateAcceptanceTarget("https://word.example.com:444"), /443/);
   assert.equal(validateAcceptanceTarget(baseUrl, { allowInsecureLoopback: true }).origin, baseUrl);
+
+  const publicTarget = validateAcceptanceTarget("https://word.example.com");
+  const fakeLookup = (entries) => async () => entries;
+  await assert.rejects(
+    () => resolveAcceptanceAddresses(publicTarget, { lookup: fakeLookup([{ address: "10.0.0.1", family: 4 }]) }),
+    /公网地址/
+  );
+  await assert.rejects(
+    () => resolveAcceptanceAddresses(publicTarget, { lookup: fakeLookup([{ address: "169.254.169.254", family: 4 }]) }),
+    /公网地址/
+  );
+  await assert.rejects(
+    () => resolveAcceptanceAddresses(publicTarget, {
+      lookup: fakeLookup([{ address: "93.184.216.34", family: 4 }, { address: "10.0.0.1", family: 4 }])
+    }),
+    /公网地址/
+  );
+  assert.deepEqual(
+    await resolveAcceptanceAddresses(publicTarget, { lookup: fakeLookup([{ address: "93.184.216.34", family: 4 }]) }),
+    [{ address: "93.184.216.34", family: 4 }]
+  );
+  await assert.rejects(
+    () => resolveAcceptanceAddresses(publicTarget, { lookup: () => new Promise(() => {}), timeoutMs: 100 }),
+    /解析超时/
+  );
+  let unsafeResolutionError;
+  try {
+    await resolveAcceptanceAddresses(publicTarget, { lookup: fakeLookup([{ address: "10.0.0.1", family: 4 }]) });
+  } catch (error) {
+    unsafeResolutionError = error;
+  }
+  const blockedResolutionEvidence = createBlockedAcceptanceEvidence({ releaseId: "release-unsafe-dns", error: unsafeResolutionError });
+  assert.equal(blockedResolutionEvidence.releaseDecision, "blocked");
+  assert.equal(blockedResolutionEvidence.checks[0].detailCode, "unsafe-dns-resolution");
+  assert.equal(blockedResolutionEvidence.targetOrigin, "", "未通过安全校验的目标 URL 不得进入证据");
+  await assert.rejects(
+    () => collectProductionAcceptanceEvidence({ baseUrl: "https://word.example.com", releaseId: "release-mismatch", approvedBaseUrl: "https://other.example.com" }),
+    /APP_BASE_URL/
+  );
 
   const evidence = await collectProductionAcceptanceEvidence({
     baseUrl,
@@ -145,7 +184,18 @@ try {
   assert.equal(evidence.observations.site.cacheControl, "no-store");
   assert.ok(evidence.requestIds.length >= 4);
   assert.equal(new Set(evidence.requestIds).size, evidence.requestIds.length);
-  assert.ok(evidence.manualChecks.length >= 6);
+  assert.deepEqual(evidence.manualChecks.map((check) => check.id), [
+    "moling-sso",
+    "http-contracts",
+    "agent-workflow",
+    "points-ledger",
+    "insufficient-points",
+    "failure-reconciliation",
+    "word-visual",
+    "multi-device",
+    "audit-correlation",
+    "rollback-drill"
+  ]);
   assert.ok(evidence.manualChecks.every((check) => check.status === "pending"));
   assert.equal(receivedSensitiveHeaders.length, 0, "自动证据采集不得发送 Cookie 或 Authorization");
 
@@ -158,6 +208,10 @@ try {
   await writeAcceptanceEvidence(outputPath, evidence);
   assert.deepEqual(JSON.parse(await readFile(outputPath, "utf8")), evidence);
   await assert.rejects(() => writeAcceptanceEvidence(outputPath, evidence), /已存在/);
+  const appendOnlyOutputA = await writeAcceptanceEvidenceToDirectory(temporaryDirectory, evidence);
+  const appendOnlyOutputB = await writeAcceptanceEvidenceToDirectory(temporaryDirectory, evidence);
+  assert.notEqual(appendOnlyOutputA, appendOnlyOutputB, "同一发布重试必须保留两份不同的证据文件");
+  assert.deepEqual(JSON.parse(await readFile(appendOnlyOutputA, "utf8")), evidence);
 
   const cliOutputPath = join(temporaryDirectory, "acceptance-cli.json");
   deployedReleaseId = "release-cli";
@@ -175,6 +229,20 @@ try {
   const unknownArgumentResult = await runCollectorCli(["--token=command-line-secret"]);
   assert.equal(unknownArgumentResult.exitCode, 1);
   assert.ok(!unknownArgumentResult.output.includes("command-line-secret"), "未知参数错误不能回显可能误传的密钥");
+
+  const blockedOutputDirectory = join(temporaryDirectory, "blocked-initialization");
+  const unsafeTargetResult = await runCollectorCli([
+    "--base-url=https://169.254.169.254",
+    "--release-id=release-private-target",
+    `--output-dir=${blockedOutputDirectory}`
+  ]);
+  assert.equal(unsafeTargetResult.exitCode, 1);
+  const blockedFiles = await readdir(blockedOutputDirectory);
+  assert.equal(blockedFiles.length, 1, "不安全目标被拒绝时仍必须追加一份 blocked 证据");
+  const blockedTargetEvidence = JSON.parse(await readFile(join(blockedOutputDirectory, blockedFiles[0]), "utf8"));
+  assert.equal(blockedTargetEvidence.releaseDecision, "blocked");
+  assert.equal(blockedTargetEvidence.checks[0].detailCode, "collector-initialization-failed");
+  assert.equal(blockedTargetEvidence.targetOrigin, "");
 
   const failedCliOutputPath = join(temporaryDirectory, "acceptance-cli-failed.json");
   const failedCliResult = await runCollectorCli([

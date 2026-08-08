@@ -323,8 +323,8 @@ word_export_docx
 - 完成真实墨灵 SSO、积分预占/结算/释放和异常对账验收
 - 用 Microsoft Word 验收模板结构、标题黑色、正文颜色和导入导出一致性
 - 完成 390px、平板、桌面端视觉与交互验收
-- 配置不可含敏感信息的 `APP_RELEASE_ID`，运行 `production:collect-acceptance` 保存版本绑定、HTTPS、安全头、真实依赖就绪和服务端请求 ID 的自动预检证据
-- 填写预检文件中的七项人工检查，保存日志、积分前后值、Word 样例、截图和回滚演练证据
+- 校验由 Git 提交和实际制品哈希生成的发布清单，通过 `molinword-acceptance@<release-id>.service` 从受保护环境采集版本绑定、HTTPS、安全头、真实依赖就绪和服务端请求 ID 的自动预检证据
+- 填写预检文件中的十项人工检查，保存 HTTP 契约、四阶段智能体、日志、积分前后值、Word 样例、截图和回滚演练证据
 
 ### 验收标准
 

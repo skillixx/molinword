@@ -85,6 +85,11 @@ server {
         try_files $uri =404;
     }
 
+    # 中文注解：发布清单仅供服务器本地完整性校验，公网通过健康接口获取最小发布号，避免暴露完整制品摘要。
+    location = /release-manifest.json {
+        return 404;
+    }
+
     # 中文注解：Vite History 路由统一回退到 index.html，刷新工作台、模板库和编辑器路由不会 404。
     location / {
         try_files $uri $uri/ /index.html;

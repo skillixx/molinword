@@ -8,11 +8,11 @@
 - 已创建无登录权限的 `molinword` 系统用户，代码目录为 `/opt/molinword`。
 - MySQL、MinIO、墨灵内部 API 和模型网关已准备专用生产账号及最小权限。
 - 域名与 TLS 证书已就绪，应用端口 `3001` 仅监听 `127.0.0.1`，不直接暴露公网。
-- 发布前已在 CI 或受控构建机执行 `npm ci`、`npm run check:commercial-readiness` 和 `npm run build`。
+- 发布前已在 CI 或受控构建机执行 `npm ci`、`npm run check:commercial-readiness` 和 `npm run build`；构建生成的 `dist/release-manifest.json` 已通过制品哈希校验。
 
 ## 二、发布
 
-以下命令中的 `<release-id>`、域名和路径必须由部署人员替换。不要把 `.env`、本地日志、截图、测试压缩包或开发缓存复制到服务器。
+以下命令中的 `<release-id>` 必须使用 `npm run check:release-manifest` 输出的发布号，域名和路径由部署人员替换。发布号由 Git 提交与实际前后端制品哈希共同生成，不能手工指定。不要把 `.env`、本地日志、截图、测试压缩包或开发缓存复制到服务器。
 
 ```bash
 sudo install -d -m 0755 /opt/molinword/releases
@@ -21,6 +21,7 @@ sudo install -d -m 0750 -o root -g molinword /etc/molinword
 sudo install -m 0640 -o root -g molinword ops/env/molinword.production.env.example /etc/molinword/molinword.env
 sudo install -m 0644 ops/systemd/molinword-api.service /etc/systemd/system/molinword-api.service
 sudo install -m 0644 ops/systemd/molinword-maintenance@.service /etc/systemd/system/molinword-maintenance@.service
+sudo install -m 0644 ops/systemd/molinword-acceptance@.service /etc/systemd/system/molinword-acceptance@.service
 sudo install -m 0644 ops/systemd/molinword-reconcile.service /etc/systemd/system/molinword-reconcile.service
 sudo install -m 0644 ops/systemd/molinword-reconcile.timer /etc/systemd/system/molinword-reconcile.timer
 sudo install -m 0644 ops/systemd/molinword-ai-audit-retention.service /etc/systemd/system/molinword-ai-audit-retention.service
@@ -31,7 +32,7 @@ sudo install -m 0644 ops/nginx/molinword-proxy.conf /etc/nginx/snippets/molinwor
 sudo install -m 0644 ops/nginx/molinword.conf.example /etc/nginx/sites-available/molinword.conf
 ```
 
-先编辑 `/etc/molinword/molinword.env`，将非敏感的 `APP_RELEASE_ID` 设置为当前 `<release-id>`，并按 systemd `EnvironmentFile` 语法通过密钥管理系统注入其他真实值；发布标识只能使用字母、数字、点、下划线和连字符，不能包含客户名、工单正文或凭据。再编辑 Nginx 配置中的域名和证书路径。禁止把密钥直接写入命令历史。将已通过门禁且包含 `dist/` 的发布目录复制到 `/opt/molinword/releases/<release-id>`，确认文件归属 `molinword:molinword`，然后在服务器安装纯生产依赖。候选软链接让维护单元验证新版本，同时不影响当前服务：
+先编辑 `/etc/molinword/molinword.env`，按 systemd `EnvironmentFile` 语法通过密钥管理系统注入真实值；再编辑 Nginx 配置中的域名和证书路径。禁止把密钥直接写入命令历史。将已通过门禁且包含 `dist/` 的发布目录复制到与清单发布号同名的 `/opt/molinword/releases/<release-id>`，确认文件归属 `molinword:molinword`，然后在服务器安装纯生产依赖。候选软链接让维护单元验证新版本，同时不影响当前服务：
 
 ```bash
 cd /opt/molinword/releases/<release-id>
@@ -40,6 +41,7 @@ sudo -u molinword npm ci --omit=dev
 sudo ln -sfn /opt/molinword/releases/<release-id> /opt/molinword/candidate
 sudo systemctl daemon-reload
 sudo systemctl start 'molinword-maintenance@check:release-target.service'
+sudo systemctl start 'molinword-maintenance@check:release-manifest.service'
 sudo systemctl start 'molinword-maintenance@check:runtime-config:production.service'
 ```
 
@@ -87,18 +89,16 @@ systemctl status molinword-ai-audit-retention.timer --no-pager
 journalctl -u molinword-api.service -n 100 --no-pager
 ```
 
-先运行只读、自动脱敏的生产预检。命令不会发送 Cookie、Authorization 或客户正文，只访问固定的首页、健康、就绪、404 和未登录 AI 探针；证据文件采用独占创建，禁止覆盖旧记录：
+先运行只读、自动脱敏的生产预检。专用 systemd 单元只从受保护的 `EnvironmentFile` 读取批准过的 `APP_BASE_URL`，不会发送 Cookie、Authorization 或客户正文，只访问固定的首页、健康、就绪、404 和未登录认证探针；证据文件采用独占创建，禁止覆盖旧记录：
 
 ```bash
 sudo install -d -m 0700 -o molinword -g molinword /var/lib/molinword/acceptance
-cd /opt/molinword/current
-sudo -u molinword npm run production:collect-acceptance -- \
-  --base-url=https://word.example.com \
-  --release-id=<release-id> \
-  --output=/var/lib/molinword/acceptance/<release-id>-preflight.json
+sudo systemctl start 'molinword-acceptance@<release-id>.service'
+sudo systemctl status 'molinword-acceptance@<release-id>.service' --no-pager
+sudo ls -lt /var/lib/molinword/acceptance/<release-id>-*.json
 ```
 
-采集器会要求命令中的 `--release-id` 与运行服务 `/api/health` 返回的 `APP_RELEASE_ID` 完全一致。自动检查通过时，证据中的 `automaticStatus` 为 `passed`，但 `releaseDecision` 固定为 `manual-approval-required`。随后仍须逐项执行 `docs/production-deployment-checklist.md` 的真实链路验收，填写证据中七项 `manualChecks`，保存测试账号、调用前后积分、对账任务、Word 样例、三端截图、审计关联和回滚演练记录。`/api/ready` 必须为 200；仅 `/api/health` 为 200 或自动预检通过都不能证明业务已获准上线。
+采集器会要求运行服务重新校验制品后由 `/api/health` 返回的发布号与 systemd 实例中的发布号完全一致；生产域名必须与 `APP_BASE_URL` 完全一致，所有 DNS 结果都必须是公网地址，连接还会固定到已检查的地址以阻止 DNS 重绑定。每次运行都会以发布时间、采集时间和随机标识追加新证据，不覆盖同一版本的历史失败记录；域名解析超时、失败或出现非公网结果时也会写入不含目标 URL 的结构化 `blocked` 证据。自动检查通过时，证据中的 `automaticStatus` 为 `passed`，但 `releaseDecision` 固定为 `manual-approval-required`。随后仍须逐项执行 `docs/production-deployment-checklist.md` 的真实链路验收，填写证据中十项人工 `manualChecks`，保存测试账号、HTTP 契约、四阶段智能体、调用前后积分、对账任务、Word 样例、三端截图、审计关联和回滚演练记录。`/api/ready` 必须为 200；仅 `/api/health` 为 200 或自动预检通过都不能证明业务已获准上线。
 
 ## 四、对账
 

@@ -31,6 +31,7 @@ for (const mimeType of ["application/javascript", "text/javascript", "text/css"]
 assert.match(nginx, /try_files\s+\$uri\s+\$uri\/\s+\/index\.html;/);
 assert.match(nginx, /location = \/index\.html \{[\s\S]*?Cache-Control "no-store" always;/, "SPA 入口必须禁止缓存以发现新版本");
 assert.match(nginx, /location \^~ \/assets\/ \{[\s\S]*?Cache-Control "public, max-age=31536000, immutable" always;/, "哈希静态资源必须启用长期不可变缓存");
+assert.match(nginx, /location = \/release-manifest\.json \{[\s\S]*?return 404;/, "完整制品摘要不能由静态站点直接公开");
 assert.match(nginx, /error_page\s+429\s+=\s+@molinword_ai_rate_limited;/);
 assert.match(nginx, /error_page\s+429\s+=\s+@molinword_api_rate_limited;/);
 for (const header of ["Retry-After", "RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset"]) {
@@ -111,12 +112,23 @@ for (const expected of [
 ]) {
   assert.ok(maintenanceService.includes(expected), `维护 systemd 模板缺少 ${expected}`);
 }
+const acceptanceService = await readRequired("ops/systemd/molinword-acceptance@.service");
+for (const expected of [
+  "WorkingDirectory=/opt/molinword/current",
+  "EnvironmentFile=/etc/molinword/molinword.env",
+  "ExecStartPre=/usr/bin/node scripts/check-runtime-config.mjs --require-production",
+  "ExecStart=/usr/bin/node scripts/production-acceptance-evidence.mjs --release-id=%I --output-dir=/var/lib/molinword/acceptance",
+  "NoNewPrivileges=true",
+  "ProtectSystem=strict",
+  "ReadWritePaths=/var/lib/molinword"
+]) {
+  assert.ok(acceptanceService.includes(expected), `验收 systemd 模板缺少 ${expected}`);
+}
 
 const productionEnvironment = await readRequired("ops/env/molinword.production.env.example");
 for (const expected of [
   "APP_ENV=production",
   "NODE_ENV=production",
-  "APP_RELEASE_ID=replace-with-release-id",
   "APP_HOST=127.0.0.1",
   "TRUSTED_PROXY_HOPS=1",
   "SESSION_COOKIE_SECURE=true",
@@ -143,9 +155,22 @@ const runtimeCheck = await readRequired("scripts/check-runtime-config.mjs");
 assert.match(runtimeCheck, /validateProductionConfiguration\(process\.env\)/);
 assert.match(runtimeCheck, /process\.argv\.includes\("--require-production"\)/);
 assert.match(runtimeCheck, /APP_ENV 必须设置为 production/);
+assert.match(runtimeCheck, /verifyReleaseManifest/, "生产运行配置预检必须同时校验实际制品清单");
+const releaseManifestImplementation = await readRequired("shared/release-manifest.js");
+for (const artifactRoot of [".agents", "database", "ops", "scripts", "server", "shared", "dist"]) {
+  assert.match(releaseManifestImplementation, new RegExp(`artifactRoots[\\s\\S]*?"${artifactRoot.replace(".", "\\.")}"`), `发布清单必须覆盖 ${artifactRoot}`);
+}
+assert.match(releaseManifestImplementation, /status", "--porcelain=v1"/, "构建发布清单前必须拒绝受覆盖源码未提交");
+assert.match(releaseManifestImplementation, /"ls-files", "--others", "--ignored", "--exclude-standard"/, "构建发布清单前必须拒绝被 ignore 隐藏的未提交源码");
+assert.match(releaseManifestImplementation, /"ls-files", "-v", "-z"/, "构建发布清单前必须拒绝 skip-worktree 与 assume-unchanged 隐藏源码改动");
+assert.match(releaseManifestImplementation, /checkoutCommit && checkoutCommit !== manifest\.gitCommit/, "存在 Git 元数据时必须校验清单提交号与 HEAD 一致");
 const productionAcceptanceCollector = await readRequired("scripts/production-acceptance-evidence.mjs");
 assert.match(productionAcceptanceCollector, /target\.protocol !== "https:"/, "生产验收证据采集必须默认强制 HTTPS");
 assert.match(productionAcceptanceCollector, /target\.username \|\| target\.password/, "生产验收地址必须拒绝 URL 凭据");
+assert.match(productionAcceptanceCollector, /process\.env\.APP_BASE_URL/, "生产验收地址必须绑定受保护环境中的批准域名");
+assert.match(productionAcceptanceCollector, /lookup: createPinnedLookup\(addresses\)/, "生产验收连接必须固定到已校验的 DNS 结果");
+assert.match(productionAcceptanceCollector, /addresses\.some\(\(entry\) => !isPublicAddress/, "生产验收域名任一非公网解析都必须失败关闭");
+assert.match(productionAcceptanceCollector, /createBlockedAcceptanceEvidence/, "生产验收初始化失败必须生成结构化 blocked 证据");
 assert.match(productionAcceptanceCollector, /maximumJsonBytes\s*=\s*64 \* 1024/, "生产验收响应正文必须设置读取上限");
 assert.match(productionAcceptanceCollector, /flag: "wx"/, "生产验收证据必须拒绝覆盖历史文件");
 assert.match(productionAcceptanceCollector, /health\.releaseId === normalizedReleaseId/, "生产验收证据必须绑定运行服务的发布标识");
@@ -156,9 +181,11 @@ assert.equal(packageJson.scripts?.["check:production-acceptance"], "node scripts
 assert.equal(packageJson.scripts?.["production:collect-acceptance"], "node scripts/production-acceptance-evidence.mjs");
 assert.equal(packageJson.scripts?.["check:release-target"], "node scripts/check-release-target.mjs");
 assert.equal(packageJson.scripts?.["check:release-target-contract"], "node scripts/check-release-target.mjs --self-test");
+assert.equal(packageJson.scripts?.["check:release-manifest"], "node scripts/check-release-manifest.mjs");
+assert.equal(packageJson.scripts?.["check:release-manifest-contract"], "node scripts/check-release-manifest-contract.mjs");
 assert.equal(packageJson.scripts?.["check:frontend-performance"], "npm run build && node scripts/check-frontend-performance-budget.mjs");
 assert.equal(packageJson.scripts?.["check:third-party-notices"], "node scripts/check-third-party-notices.mjs");
-assert.match(packageJson.scripts?.build ?? "", /vite build && node scripts\/generate-third-party-notices\.mjs$/);
+assert.match(packageJson.scripts?.build ?? "", /vite build && node scripts\/generate-third-party-notices\.mjs && node scripts\/generate-release-manifest\.mjs$/);
 assert.equal(packageJson.scripts?.["db:migrate:ai-audit-privacy"], "node database/migrate-ai-audit-privacy.mjs");
 assert.equal(packageJson.scripts?.["ai-audit:cleanup"], "node scripts/ai-audit-maintenance.mjs cleanup");
 assert.equal(packageJson.scripts?.["ai-audit:redact-existing"], "node scripts/ai-audit-maintenance.mjs redact-existing");
@@ -167,6 +194,8 @@ assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:f
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:third-party-notices/);
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:release-target-contract/);
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:production-acceptance/);
+assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:release-manifest-contract/);
+assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:release-manifest/);
 const thirdPartyNoticeIndex = await readRequired("public/THIRD_PARTY_NOTICES.md");
 assert.match(thirdPartyNoticeIndex, /THIRD_PARTY_LICENSES\.txt/);
 const releaseTarget = JSON.parse(await readRequired("ops/release-target.json"));
@@ -216,14 +245,15 @@ assert.match(runbook, /molinword-maintenance@billing:reconcile:list\.service/);
 assert.match(runbook, /molinword-maintenance@db:migrate:ai-audit-privacy\.service/);
 assert.match(runbook, /molinword-maintenance@ai-audit:redact-existing\.service/);
 assert.match(runbook, /molinword-maintenance@check:release-target\.service/, "候选版本切换前必须验证服务器发布目标");
+assert.match(runbook, /molinword-maintenance@check:release-manifest\.service/, "候选版本切换前必须验证实际发布制品清单");
 assert.match(runbook, /test -s dist\/THIRD_PARTY_LICENSES\.txt/, "发布切换前必须确认完整第三方许可证包存在");
 assert.match(runbook, /molinword-ai-audit-retention\.timer/);
 assert.match(runbook, /\/etc\/nginx\/sites-enabled\/molinword\.conf/);
 assert.ok(runbook.indexOf("/etc/nginx/sites-enabled/molinword.conf") < runbook.indexOf("sudo nginx -t"), "站点必须先启用再做 Nginx 全量语法检查");
 assert.match(runbook, /sudo systemctl restart molinword-api\.service/, "切换版本后必须重启已运行的 API 服务");
-assert.match(runbook, /production:collect-acceptance/, "部署手册必须提供自动脱敏的生产验收证据采集命令");
+assert.match(runbook, /molinword-acceptance@<release-id>\.service/, "部署手册必须通过受保护环境运行生产验收采集器");
 assert.match(runbook, /manual-approval-required/, "部署手册必须说明自动预检后仍需人工批准");
-assert.match(runbook, /APP_RELEASE_ID.*<release-id>/, "部署手册必须要求运行版本与发布目录使用同一发布标识");
+assert.match(runbook, /Git 提交与实际前后端制品哈希共同生成/, "部署手册必须说明发布号由实际制品派生而非环境变量自报");
 for (const heading of ["发布", "验收", "回滚", "对账", "证据边界"]) {
   assert.match(runbook, new RegExp(`## .*${heading}`), `部署手册缺少“${heading}”章节`);
 }

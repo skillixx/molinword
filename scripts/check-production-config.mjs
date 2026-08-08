@@ -14,7 +14,6 @@ const invalidErrors = validateProductionConfiguration({
   APP_BASE_URL: "http://word.example.com"
 });
 for (const expectedKey of [
-  "APP_RELEASE_ID",
   "DATABASE_URL",
   "INTERNAL_API_TOKEN",
   "MOLING_APP_ID",
@@ -37,7 +36,6 @@ for (const expectedKey of [
 
 const validProductionConfiguration = {
   APP_ENV: "production",
-  APP_RELEASE_ID: "release-20260808",
   DATABASE_URL: "mysql://word_app:a-strong-database-password@db.internal:3306/moling_word",
   INTERNAL_API_TOKEN: "internal-token-at-least-32-characters",
   MOLING_APP_ID: "15",
@@ -73,12 +71,6 @@ const placeholderModelErrors = validateProductionConfiguration({
   LLM_MODEL: "replace-with-approved-model"
 });
 assert.ok(placeholderModelErrors.some((message) => message.includes("LLM_MODEL")), "生产模型名不能保留占位值");
-
-const invalidReleaseErrors = validateProductionConfiguration({
-  ...validProductionConfiguration,
-  APP_RELEASE_ID: "release/customer secret"
-});
-assert.ok(invalidReleaseErrors.some((message) => message.includes("APP_RELEASE_ID")), "生产发布标识必须是可公开的受限格式");
 
 for (const reusedKey of ["INTERNAL_API_TOKEN", "LLM_API_KEY", "STORAGE_SECRET_ACCESS_KEY"]) {
   const reusedAuditKeyErrors = validateProductionConfiguration({
