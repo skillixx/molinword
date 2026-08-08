@@ -9,8 +9,6 @@ const maximumPackageCoordinates = 2000;
 const maximumTotalLicenseSourceBytes = 12 * 1024 * 1024;
 const maximumBundleBytes = 16 * 1024 * 1024;
 const trustedPackageArchiveHosts = new Set(["registry.npmjs.org", "registry.npmmirror.com"]);
-const trustedPublicSourceHosts = new Set(["github.com", "gitlab.com", "bitbucket.org", "www.npmjs.com", ...trustedPackageArchiveHosts]);
-const sensitiveCredentialPattern = /(?:gh[pousr]_|github_pat_|npm_|sk-|AKIA)[A-Za-z0-9_+/=-]{12,}/i;
 const sharedUpstreamLicenseFallbacks = [
   { prefix: "@esbuild/", upstreamName: "esbuild", packagePath: "node_modules/esbuild", repositoryToken: "github.com/evanw/esbuild" },
   { prefix: "@rollup/rollup-", upstreamName: "rollup", packagePath: "node_modules/rollup", repositoryToken: "github.com/rollup/rollup" }
@@ -49,32 +47,9 @@ function npmPackageUrl(packageName, version) {
   return `https://www.npmjs.com/package/${safeName}/v/${encodeURIComponent(version)}`;
 }
 
-export function sanitizePublicSource(value, packageName, version) {
-  const fallback = npmPackageUrl(packageName, version);
-  const normalized = String(value || "").trim().replace(/^git\+https:/, "https:");
-  if (!normalized || normalized.length > 2048) return fallback;
-  try {
-    const source = new URL(normalized);
-    // 中文注解：公开许可证包只保留无凭据的 HTTPS 来源，并移除可能携带令牌的查询串和片段。
-    let decodedPath = source.pathname;
-    try {
-      decodedPath = decodeURIComponent(source.pathname);
-    } catch {
-      return fallback;
-    }
-    if (
-      source.protocol !== "https:"
-      || source.username
-      || source.password
-      || !trustedPublicSourceHosts.has(source.hostname.toLowerCase())
-      || sensitiveCredentialPattern.test(decodedPath)
-    ) return fallback;
-    source.search = "";
-    source.hash = "";
-    return source.toString();
-  } catch {
-    return fallback;
-  }
+export function sanitizePublicSource(_value, packageName, version) {
+  // 中文注解：依赖元数据属于不可信输入，公开产物统一输出由包名和锁定版本构造的 npm 页面，杜绝任意 URL 泄露凭据。
+  return npmPackageUrl(packageName, version);
 }
 
 export function hasValidSha512Integrity(value) {
@@ -84,16 +59,17 @@ export function hasValidSha512Integrity(value) {
 export function isTrustedLockedArchive(lockMetadata, packageName, version) {
   const resolvedUrl = String(lockMetadata.resolved || "");
   const packageBaseName = packageName.split("/").at(-1);
+  const expectedPath = `/${packageName}/-/${packageBaseName}-${version}.tgz`;
   try {
     const archive = new URL(resolvedUrl);
     return archive.protocol === "https:"
       && trustedPackageArchiveHosts.has(archive.hostname.toLowerCase())
+      && archive.port === ""
       && !archive.username
       && !archive.password
       && !archive.search
       && !archive.hash
-      && archive.pathname.includes(`/${packageName}/`)
-      && archive.pathname.endsWith(`/${packageBaseName}-${version}.tgz`)
+      && archive.pathname === expectedPath
       && hasValidSha512Integrity(lockMetadata.integrity);
   } catch {
     return false;
