@@ -3276,7 +3276,7 @@ function App() {
         <div className="sidebar-head">
           <div className="brand">
             <div className="brand-mark"><FileText size={22} /></div>
-            <div className="brand-copy"><strong>AI Word</strong><span>本地开发版</span></div>
+            <div className="brand-copy"><strong>AI Word</strong><span>企业文档助手</span></div>
           </div>
           <button className="collapse-button" onClick={() => setIsSidebarCollapsed((value) => !value)} title={isSidebarCollapsed ? "展开主导航" : "收起主导航"} aria-label={isSidebarCollapsed ? "展开主导航" : "收起主导航"}>
             {isSidebarCollapsed ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
@@ -3294,6 +3294,17 @@ function App() {
           {pointsSummary?.error ? <small className="platform-error">{pointsSummary.error}</small> : null}
           {sessionUser?.isMolingUser ? <button className="points-refresh" onClick={refreshPoints} disabled={pointsRefreshing}><RefreshCw size={14} />{pointsRefreshing ? "刷新中" : "刷新积分"}</button> : null}
         </div>
+        <a
+          className="open-source-notice-link"
+          href="/THIRD_PARTY_LICENSES.txt"
+          target="_blank"
+          rel="noreferrer"
+          aria-label="查看第三方开源许可证全文"
+          title="查看第三方开源许可证全文"
+        >
+          <FileText size={15} />
+          <span>开源许可</span>
+        </a>
       </aside>
 
       {activePanel === "workspace" ? (

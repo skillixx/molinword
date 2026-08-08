@@ -185,6 +185,6 @@ npm run db:migrate:ai-audit-privacy
 
 `check:frontend-performance` 会先生成 Vite manifest，再沿入口静态依赖计算初始 JavaScript/CSS gzip 闭包、单块大小和资源请求总数；其压缩级别与生产 Nginx 基线一致。React、图标、Tiptap 与 ProseMirror 使用独立长期缓存块，业务代码变化不再生成 800KB 以上单文件。
 
-`check:third-party-notices` 会验证所有已安装生产依赖都能形成许可证正文；`npm run build` 还会生成随发布物交付的 `dist/THIRD_PARTY_LICENSES.txt`。项目自身仍为 `private: true`，该文件只履行第三方依赖告知义务，不授予 molinword 源码许可证。
+`check:third-party-notices` 会验证所有已安装生产依赖都能形成许可证正文；`npm run build` 还会生成随发布物交付的 `dist/THIRD_PARTY_LICENSES.txt`。产品侧栏的“开源许可”入口会打开当前构建的许可证全文，桌面、折叠侧栏和 390px 窄屏行为由浏览器回归覆盖。项目自身仍为 `private: true`，该文件只履行第三方依赖告知义务，不授予 molinword 源码许可证。
 
 历史数据库首次升级到页面设置功能时运行 `db:migrate:document-page-layout`；升级 AI 审计隐私字段时运行 `db:migrate:ai-audit-privacy`。历史 AI 正文只能在备份和隐私审批后显式运行 `ai-audit:redact-existing`，生产日常清理由 systemd 定时器执行。新数据库由 `database/init-mysql.sql` 直接创建对应字段。

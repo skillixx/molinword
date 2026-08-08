@@ -63,7 +63,8 @@ const mimeTypes = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".png": "image/png",
-  ".svg": "image/svg+xml"
+  ".svg": "image/svg+xml",
+  ".txt": "text/plain; charset=utf-8"
 };
 
 function sendJson(response, value, statusCode = 200) {
@@ -142,6 +143,20 @@ const browser = await chromium.launch(playwrightLaunchOptions());
 try {
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
   await page.goto(`http://127.0.0.1:${address.port}/`, { waitUntil: "networkidle" });
+  assert.equal(await page.getByText("企业文档助手", { exact: true }).count(), 1, "产品品牌区必须使用正式商业标识");
+  assert.equal(await page.getByText("本地开发版", { exact: true }).count(), 0, "生产前端不能固定展示开发版标识");
+  const mobileLicenseLink = page.getByRole("link", { name: "查看第三方开源许可证全文" });
+  await mobileLicenseLink.waitFor();
+  const mobileLicenseBox = await mobileLicenseLink.boundingBox();
+  assert.ok(mobileLicenseBox && mobileLicenseBox.x >= 0 && mobileLicenseBox.x + mobileLicenseBox.width <= 390, "390px 窄屏下开源许可入口不能横向溢出");
+  for (let index = 0; index < 8 && await page.evaluate(() => document.activeElement?.getAttribute("aria-label") !== "查看第三方开源许可证全文"); index += 1) {
+    await page.keyboard.press("Tab");
+  }
+  const licenseFocusStyle = await mobileLicenseLink.evaluate((node) => {
+    const style = getComputedStyle(node);
+    return { outlineStyle: style.outlineStyle, outlineWidth: style.outlineWidth, outlineColor: style.outlineColor };
+  });
+  assert.deepEqual(licenseFocusStyle, { outlineStyle: "solid", outlineWidth: "2px", outlineColor: "rgb(47, 125, 112)" }, "键盘 Tab 聚焦开源许可时必须显示高对比双像素轮廓");
   await page.getByRole("button", { name: "模板库", exact: true }).click();
   const agentPanel = page.locator(".template-agent");
   await agentPanel.waitFor();
@@ -157,6 +172,21 @@ try {
   }
   const desktopPage = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   await desktopPage.goto(`http://127.0.0.1:${address.port}/`, { waitUntil: "networkidle" });
+  const desktopLicenseLink = desktopPage.getByRole("link", { name: "查看第三方开源许可证全文" });
+  await desktopLicenseLink.waitFor();
+  const [licensePage] = await Promise.all([
+    desktopPage.waitForEvent("popup"),
+    desktopLicenseLink.click()
+  ]);
+  await licensePage.waitForLoadState("domcontentloaded");
+  const licenseText = await licensePage.locator("body").innerText();
+  assert.match(licenseText, /MOLINWORD THIRD-PARTY LICENSE BUNDLE/);
+  assert.match(licenseText, /Package: react@\d+\.\d+\.\d+[\s\S]*?License: MIT/);
+  assert.doesNotMatch(licenseText, /release-manifest|artifactSha256/i, "公开许可证全文不能混入内部发布清单");
+  await licensePage.close();
+  await desktopPage.getByRole("button", { name: "收起主导航" }).click();
+  await desktopLicenseLink.waitFor();
+  assert.equal(await desktopLicenseLink.getAttribute("href"), "/THIRD_PARTY_LICENSES.txt");
   await desktopPage.getByRole("button", { name: "模板库", exact: true }).click();
   await desktopPage.getByRole("button", { name: /运行智能体/ }).click();
   await desktopPage.getByText("产品上线评审会议纪要", { exact: true }).waitFor();

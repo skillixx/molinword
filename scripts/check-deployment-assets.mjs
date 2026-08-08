@@ -30,6 +30,7 @@ for (const mimeType of ["application/javascript", "text/javascript", "text/css"]
 }
 assert.match(nginx, /try_files\s+\$uri\s+\$uri\/\s+\/index\.html;/);
 assert.match(nginx, /location = \/index\.html \{[\s\S]*?Cache-Control "no-store" always;/, "SPA 入口必须禁止缓存以发现新版本");
+assert.match(nginx, /location = \/THIRD_PARTY_LICENSES\.txt \{[\s\S]*?molinword-security-headers\.conf;[\s\S]*?Cache-Control "no-store" always;[\s\S]*?default_type text\/plain;[\s\S]*?charset utf-8;[\s\S]*?try_files \$uri =404;/, "用户可见许可证全文必须带安全头、UTF-8 且禁止缓存旧版本");
 assert.match(nginx, /location \^~ \/assets\/ \{[\s\S]*?Cache-Control "public, max-age=31536000, immutable" always;/, "哈希静态资源必须启用长期不可变缓存");
 assert.match(nginx, /location = \/release-manifest\.json \{[\s\S]*?return 404;/, "完整制品摘要不能由静态站点直接公开");
 assert.match(nginx, /error_page\s+429\s+=\s+@molinword_ai_rate_limited;/);
