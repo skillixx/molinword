@@ -31,8 +31,13 @@ const modelServer = createServer(async (request, response) => {
   modelRequestCount += 1;
   notifyModelRequest?.();
   notifyModelRequest = null;
-  if (modelRequestCount === 1 || modelRequestCount === 3) {
+  if (modelRequestCount === 1 || modelRequestCount === 4) {
     pendingModelResponses.push(response);
+    return;
+  }
+  if (modelRequestCount === 3) {
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.write('{"choices":[');
     return;
   }
   response.setHeader("Content-Type", "application/json");
@@ -55,7 +60,7 @@ const apiProcess = spawn(process.execPath, ["server/index.js"], {
     LLM_API_URL: `http://127.0.0.1:${modelPort}/v1/chat/completions`,
     LLM_API_KEY: "local-lifecycle-test-key",
     LLM_MAX_RETRIES: "0",
-    LLM_TIMEOUT_MS: "5000",
+    LLM_TIMEOUT_MS: "1000",
     AI_MAX_CONCURRENT_REQUESTS: "1",
     AI_RATE_LIMIT_MAX: "20",
     ACCESS_LOG_ENABLED: "true",
@@ -130,6 +135,13 @@ try {
   assert.equal(secondResponse.status, 200);
   assert.equal(modelRequestCount, 2);
 
+  const hangingBodyStartedAt = Date.now();
+  const hangingBodyResponse = await callAi("模型只返回响应头时必须超时");
+  assert.equal(hangingBodyResponse.status, 200);
+  assert.equal((await hangingBodyResponse.json()).fallback, true);
+  assert.ok(Date.now() - hangingBodyStartedAt < 3000, "模型响应体挂起时必须按 LLM_TIMEOUT_MS 失败并降级");
+  assert.equal(modelRequestCount, 3);
+
   const shutdownModelRequest = waitForNextModelRequest();
   const inFlightResponsePromise = callAi("收到 SIGTERM 时完成在途模型请求");
   await shutdownModelRequest;
@@ -142,7 +154,7 @@ try {
   assert.equal(inFlightResponse.status, 200);
   assert.equal(await exited, 0);
 
-  console.log("AI 并发槽与优雅退出检查通过。", { disconnectedClientHeldSlot: true, inFlightShutdownStatus: 200, exitCode: 0 });
+  console.log("AI 并发槽、上游正文超时与优雅退出检查通过。", { disconnectedClientHeldSlot: true, modelBodyTimeout: true, inFlightShutdownStatus: 200, exitCode: 0 });
 } finally {
   if (apiProcess.exitCode === null) apiProcess.kill();
   for (const response of pendingModelResponses.splice(0)) response.destroy();

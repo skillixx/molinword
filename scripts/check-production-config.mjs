@@ -51,8 +51,9 @@ const validProductionConfiguration = {
   AI_RATE_LIMIT_MAX: "30",
   LLM_TIMEOUT_MS: "30000",
   LLM_MAX_RETRIES: "1",
+  MOLING_INTERNAL_TIMEOUT_MS: "10000",
   ACCESS_LOG_ENABLED: "true",
-  SHUTDOWN_TIMEOUT_MS: "360000"
+  SHUTDOWN_TIMEOUT_MS: "420000"
 };
 const validErrors = validateProductionConfiguration(validProductionConfiguration);
 assert.deepEqual(validErrors, []);
@@ -75,8 +76,9 @@ const invalidRuntimeBoundaryErrors = validateProductionConfiguration({
   AI_RATE_LIMIT_MAX: "1.5",
   LLM_TIMEOUT_MS: "60001",
   LLM_MAX_RETRIES: "2",
+  MOLING_INTERNAL_TIMEOUT_MS: "30001",
   ACCESS_LOG_ENABLED: "yes",
-  SHUTDOWN_TIMEOUT_MS: "900001"
+  SHUTDOWN_TIMEOUT_MS: "1200001"
 });
 for (const expectedKey of [
   "TRUSTED_PROXY_HOPS",
@@ -85,6 +87,7 @@ for (const expectedKey of [
   "AI_RATE_LIMIT_MAX",
   "LLM_TIMEOUT_MS",
   "LLM_MAX_RETRIES",
+  "MOLING_INTERNAL_TIMEOUT_MS",
   "ACCESS_LOG_ENABLED",
   "SHUTDOWN_TIMEOUT_MS"
 ]) {
@@ -93,9 +96,9 @@ for (const expectedKey of [
 
 const shortShutdownWindowErrors = validateProductionConfiguration({
   ...validProductionConfiguration,
-  SHUTDOWN_TIMEOUT_MS: "329999"
+  SHUTDOWN_TIMEOUT_MS: "379999"
 });
-assert.ok(shortShutdownWindowErrors.some((message) => message.includes("最坏链路 330000")), "退出窗口必须覆盖五段模型调用及其重试");
+assert.ok(shortShutdownWindowErrors.some((message) => message.includes("最坏链路 380000")), "退出窗口必须覆盖模型与平台调用及其重试");
 
 const insecureInternalErrors = validateProductionConfiguration({
   APP_ENV: "production",

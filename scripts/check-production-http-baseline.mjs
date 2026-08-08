@@ -14,16 +14,34 @@ async function freePort() {
 const port = await freePort();
 const output = [];
 let gatewayAuthorized = true;
-const gatewayServer = createServer((request, response) => {
+let gatewayBodyHangs = false;
+const hangingGatewayResponses = new Set();
+const gatewayServer = createServer(async (request, response) => {
   response.setHeader("Connection", "close");
+  if (request.method === "POST" && request.url === "/api/internal/app-launch/verify") {
+    for await (const _chunk of request) {
+      // 中文注解：完整读取平台请求体后模拟“已返回 200 响应头但正文挂起”。
+    }
+    assert.equal(request.headers["x-internal-token"], "internal-token-at-least-32-characters");
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.write('{"code":0,"data":');
+    hangingGatewayResponses.add(response);
+    response.once("close", () => hangingGatewayResponses.delete(response));
+    return;
+  }
   if (request.method === "GET" && request.url === "/v1/models") {
     if (!gatewayAuthorized || request.headers.authorization !== "Bearer model-key-at-least-32-characters") {
       response.statusCode = 401;
       response.end();
       return;
     }
-    response.setHeader("Content-Type", "application/json");
-    response.statusCode = 200;
+    response.writeHead(200, { "Content-Type": "application/json" });
+    if (gatewayBodyHangs) {
+      response.write('{"data":[');
+      hangingGatewayResponses.add(response);
+      response.once("close", () => hangingGatewayResponses.delete(response));
+      return;
+    }
     response.end(JSON.stringify({ data: [{ id: "test-model" }] }));
     return;
   }
@@ -52,7 +70,7 @@ const apiProcess = spawn(process.execPath, ["server/index.js"], {
     INTERNAL_API_TOKEN: "internal-token-at-least-32-characters",
     MOLING_APP_ID: "15",
     MOLING_PRODUCT_ID: "73",
-    MOLING_API_BASE_URL: "https://platform.example.test",
+    MOLING_API_BASE_URL: gatewayOrigin,
     LLM_API_URL: `${gatewayOrigin}/v1/chat/completions`,
     LLM_API_KEY: "model-key-at-least-32-characters",
     STORAGE_ENDPOINT: gatewayOrigin,
@@ -68,6 +86,8 @@ const apiProcess = spawn(process.execPath, ["server/index.js"], {
     RATE_LIMIT_WINDOW_MS: "60000",
     API_RATE_LIMIT_MAX: "100",
     AI_RATE_LIMIT_MAX: "2",
+    READINESS_TIMEOUT_MS: "500",
+    MOLING_INTERNAL_TIMEOUT_MS: "1000",
     ACCESS_LOG_ENABLED: "false"
   },
   stdio: ["ignore", "pipe", "pipe"],
@@ -86,6 +106,7 @@ async function stopApi() {
 async function stopGateway() {
   if (gatewayClosed) return;
   gatewayClosed = true;
+  for (const response of hangingGatewayResponses) response.destroy();
   await new Promise((resolve) => gatewayServer.close(resolve));
 }
 
@@ -120,6 +141,23 @@ try {
   const readyWithoutGatewayResponse = await fetch(`http://127.0.0.1:${port}/api/ready`);
   const readyWithoutGateway = await readyWithoutGatewayResponse.json();
   assert.equal(readyWithoutGateway.checks.gateway, false);
+  gatewayAuthorized = true;
+  gatewayBodyHangs = true;
+  const hangingReadyStartedAt = Date.now();
+  const hangingReadyResponse = await fetch(`http://127.0.0.1:${port}/api/ready`);
+  const hangingReady = await hangingReadyResponse.json();
+  assert.equal(hangingReady.checks.gateway, false);
+  assert.ok(Date.now() - hangingReadyStartedAt < 2500, "挂起的就绪响应必须在配置超时内被取消");
+  gatewayBodyHangs = false;
+
+  const internalStartedAt = Date.now();
+  const hangingInternalResponse = await fetch(`http://127.0.0.1:${port}/api/molin/launch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: "https://word.example.test" },
+    body: JSON.stringify({ ticket: "hanging-platform-response" })
+  });
+  assert.equal(hangingInternalResponse.status, 401);
+  assert.ok(Date.now() - internalStartedAt < 3000, "墨灵内部接口响应体挂起时必须按时失败");
 
   const missingResponse = await fetch(`http://127.0.0.1:${port}/api/not-found`);
   assert.equal(missingResponse.status, 404);
@@ -151,7 +189,7 @@ try {
   }
   assert.deepEqual(statuses, [401, 401, 429]);
 
-  console.log("生产 HTTP 基线检查通过。", { requestId: "server-generated", gatewayReadiness: ["authorized", "unauthorized"], malformedJson: 400, missingRoute: 404, aiRateLimit: statuses });
+  console.log("生产 HTTP 基线检查通过。", { requestId: "server-generated", gatewayReadiness: ["authorized", "unauthorized", "hanging-body"], internalBodyTimeout: true, malformedJson: 400, missingRoute: 404, aiRateLimit: statuses });
 } finally {
   await stopApi();
   await stopGateway();

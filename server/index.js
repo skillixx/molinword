@@ -364,9 +364,10 @@ const apiRateLimitMaximum = readBoundedInteger(process.env.API_RATE_LIMIT_MAX, 3
 const aiRateLimitMaximum = readBoundedInteger(process.env.AI_RATE_LIMIT_MAX, 30, 1, 10000);
 const llmTimeoutMs = readBoundedInteger(process.env.LLM_TIMEOUT_MS, 30000, 1000, 60000);
 const llmMaxRetries = readBoundedInteger(process.env.LLM_MAX_RETRIES, 1, 0, 1);
-// 中文注解：智能体返修路径最多执行五段模型调用，默认退出窗口覆盖全部超时与重试，再留出结算清理时间。
-const inferredShutdownTimeoutMs = llmTimeoutMs * (llmMaxRetries + 1) * 5 + 30000;
-const shutdownTimeoutMs = readBoundedInteger(process.env.SHUTDOWN_TIMEOUT_MS, inferredShutdownTimeoutMs, inferredShutdownTimeoutMs, 900000);
+const molingInternalTimeoutMs = readBoundedInteger(process.env.MOLING_INTERNAL_TIMEOUT_MS, 10000, 1000, 30000);
+// 中文注解：智能体返修路径最多执行五段模型调用和五次平台调用，默认退出窗口覆盖全部超时与重试，再留出本地结算清理时间。
+const inferredShutdownTimeoutMs = llmTimeoutMs * (llmMaxRetries + 1) * 5 + molingInternalTimeoutMs * 5 + 30000;
+const shutdownTimeoutMs = readBoundedInteger(process.env.SHUTDOWN_TIMEOUT_MS, inferredShutdownTimeoutMs, inferredShutdownTimeoutMs, 1200000);
 const accessLogEnabled = process.env.ACCESS_LOG_ENABLED === "true"
   || (process.env.ACCESS_LOG_ENABLED !== "false" && (process.env.APP_ENV === "production" || process.env.NODE_ENV === "production"));
 let activeAiRequests = 0;
@@ -613,14 +614,17 @@ function validateProductionConfiguration(environment = {}) {
   validateIntegerSetting("AI_RATE_LIMIT_MAX", 1, 10000);
   validateIntegerSetting("LLM_TIMEOUT_MS", 1000, 60000);
   validateIntegerSetting("LLM_MAX_RETRIES", 0, 1);
-  validateIntegerSetting("SHUTDOWN_TIMEOUT_MS", 1000, 900000);
+  validateIntegerSetting("MOLING_INTERNAL_TIMEOUT_MS", 1000, 30000);
+  validateIntegerSetting("SHUTDOWN_TIMEOUT_MS", 1000, 1200000);
   const productionLlmTimeoutMs = Number(configuration.LLM_TIMEOUT_MS || 30000);
   const productionLlmMaxRetries = Number(configuration.LLM_MAX_RETRIES || 1);
+  const productionMolingInternalTimeoutMs = Number(configuration.MOLING_INTERNAL_TIMEOUT_MS || 10000);
   const productionShutdownTimeoutMs = Number(configuration.SHUTDOWN_TIMEOUT_MS || 0);
   if (Number.isInteger(productionLlmTimeoutMs) && productionLlmTimeoutMs >= 1000 && productionLlmTimeoutMs <= 60000
       && Number.isInteger(productionLlmMaxRetries) && productionLlmMaxRetries >= 0 && productionLlmMaxRetries <= 1
+      && Number.isInteger(productionMolingInternalTimeoutMs) && productionMolingInternalTimeoutMs >= 1000 && productionMolingInternalTimeoutMs <= 30000
       && configuration.SHUTDOWN_TIMEOUT_MS !== undefined) {
-    const minimumShutdownTimeoutMs = productionLlmTimeoutMs * (productionLlmMaxRetries + 1) * 5 + 30000;
+    const minimumShutdownTimeoutMs = productionLlmTimeoutMs * (productionLlmMaxRetries + 1) * 5 + productionMolingInternalTimeoutMs * 5 + 30000;
     if (productionShutdownTimeoutMs < minimumShutdownTimeoutMs) {
       errors.push(`SHUTDOWN_TIMEOUT_MS 必须不少于当前模型配置最坏链路 ${minimumShutdownTimeoutMs} 毫秒`);
     }
@@ -4301,26 +4305,37 @@ async function callMolingInternal(path, options = {}) {
   }
 
   const url = new URL(path, molingApiBaseUrl);
-  const response = await fetch(url, {
-    method: options.method || "GET",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Internal-Token": internalApiToken,
-      ...(options.headers || {})
-    },
-    body: options.body ? JSON.stringify(options.body) : undefined
-  });
-  const result = await response.json().catch(() => null);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), molingInternalTimeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: options.method || "GET",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Token": internalApiToken,
+        ...(options.headers || {})
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      signal: controller.signal
+    });
+    // 中文注解：超时覆盖响应正文读取，不能在仅收到响应头时提前撤销保护。
+    const result = await response.json().catch((error) => {
+      if (controller.signal.aborted) throw error;
+      return null;
+    });
 
-  if (!response.ok) {
-    const message = result?.message || result?.error || `墨灵平台接口调用失败：${response.status}`;
-    const error = new Error(message);
-    error.status = response.status;
-    error.code = result?.code;
-    throw error;
+    if (!response.ok) {
+      const message = result?.message || result?.error || `墨灵平台接口调用失败：${response.status}`;
+      const error = new Error(message);
+      error.status = response.status;
+      error.code = result?.code;
+      throw error;
+    }
+
+    return unwrapMolingData(result);
+  } finally {
+    clearTimeout(timeout);
   }
-
-  return unwrapMolingData(result);
 }
 
 async function verifyMolingLaunchTicket(ticket) {
@@ -4814,9 +4829,11 @@ async function callMolinChat(messages) {
           temperature: 0.4
         })
       });
-      clearTimeout(timeout);
-
-      const result = await response.json().catch(() => null);
+      // 中文注解：模型超时必须覆盖响应正文读取，防止网关只返回响应头后无限挂起。
+      const result = await response.json().catch((error) => {
+        if (controller.signal.aborted) throw error;
+        return null;
+      });
 
       if (!response.ok) {
         const message = result?.message || result?.error?.message || "AI 网关请求失败";
@@ -4830,8 +4847,9 @@ async function callMolinChat(messages) {
 
       return text;
     } catch (error) {
-      clearTimeout(timeout);
       lastError = error;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
@@ -5138,6 +5156,25 @@ async function boundedReadinessCheck(check) {
   }
 }
 
+async function consumeResponseBodyWithinLimit(response, maximumBytes) {
+  if (!response.body) return true;
+  const reader = response.body.getReader();
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) return true;
+      totalBytes += value?.byteLength || 0;
+      if (totalBytes > maximumBytes) {
+        await reader.cancel("readiness response too large");
+        return false;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 async function checkGatewayReadiness() {
   if (!hasGatewayConfig()) return false;
   const controller = new AbortController();
@@ -5149,7 +5186,12 @@ async function checkGatewayReadiness() {
       headers: { Authorization: `Bearer ${llmApiKey}` },
       signal: controller.signal
     });
-    return response.ok;
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      return false;
+    }
+    // 中文注解：完整消费并限制就绪响应体，挂起或异常超大的网关响应都必须失败并释放连接。
+    return await consumeResponseBodyWithinLimit(response, 1024 * 1024);
   } catch {
     return false;
   } finally {

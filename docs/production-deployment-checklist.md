@@ -22,7 +22,8 @@ npm run check:commercial-readiness
 - `RATE_LIMIT_WINDOW_MS`、`API_RATE_LIMIT_MAX` 和 `AI_RATE_LIMIT_MAX` 设置单实例 IP 限流；网关层仍需配置按用户、IP 和总量的多层限流。
 - `AI_MAX_CONCURRENT_REQUESTS` 设置单实例模型并发上限；客户端断开不会提前释放仍在执行的模型槽位。
 - `LLM_READINESS_URL` 留空时从 `LLM_API_URL` 推导 OpenAI 兼容 `/models` 地址；自定义时必须使用验证同一凭据且不产生模型用量的 HTTPS 接口。
-- `SHUTDOWN_TIMEOUT_MS` 应覆盖智能体最多五段模型调用、模型重试与积分结算清理；生产配置门禁会按 `LLM_TIMEOUT_MS` 和 `LLM_MAX_RETRIES` 校验最小值。进程收到终止信号后先停止接收新请求，再等待在途请求完成。
+- `MOLING_INTERNAL_TIMEOUT_MS` 必须覆盖墨灵 SSO、预占、结算和释放的响应正文读取，避免平台仅返回响应头时永久挂起。
+- `SHUTDOWN_TIMEOUT_MS` 应覆盖智能体最多五段模型调用、最多五次平台调用、模型重试与本地结算清理；生产配置门禁会按相关超时计算最小值。进程收到终止信号后先停止接收新请求，再等待在途请求完成。
 - 生产环境默认启用最小化 JSON 访问日志，并通过 `X-Request-Id` 关联请求；日志不应采集 Cookie、查询串和请求体。
 
 生产配置不完整时 `server/index.js` 会在监听端口前直接退出，错误只列缺失项，不打印密钥值。
