@@ -43,6 +43,8 @@ assert.match(reconcileService, /StateDirectory=molinword/);
 const reconcileTimer = await readRequired("ops/systemd/molinword-reconcile.timer");
 assert.match(reconcileTimer, /OnUnitActiveSec=5m/);
 assert.match(reconcileTimer, /Persistent=true/);
+const reconciliationWorker = await readRequired("scripts/billing-reconciliation.mjs");
+assert.match(reconciliationWorker, /error\?\.code === "ENOENT"/, "outbox 尚未创建时必须按零条记录处理，不能阻断数据库对账重试");
 
 const productionEnvironment = await readRequired("ops/env/molinword.production.env.example");
 for (const expected of [

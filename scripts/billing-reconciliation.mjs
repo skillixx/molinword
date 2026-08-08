@@ -132,7 +132,17 @@ async function retryTasks() {
 }
 
 async function importOutbox() {
-  const source = await readFile(outboxPath, "utf8");
+  let source = "";
+  try {
+    source = await readFile(outboxPath, "utf8");
+  } catch (error) {
+    // 中文注解：新环境尚未产生降级记录属于正常空状态，不能阻断同一轮数据库待办重试。
+    if (error?.code === "ENOENT") {
+      console.log("计费对账 outbox 尚未创建，按零条记录处理。", { records: 0, imported: 0, invalid: 0 });
+      return;
+    }
+    throw error;
+  }
   const records = source.split(/\r?\n/).filter(Boolean);
   let imported = 0;
   let invalid = 0;
