@@ -191,7 +191,11 @@ const server = createServer(async (request, response) => {
 await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
 const address = server.address();
 assert.ok(address && typeof address === "object");
-const browser = await chromium.launch({ headless: true });
+// 中文注解：CI 默认使用 Playwright 浏览器，本地可显式复用已安装的 Chrome，避免仅因浏览器缓存缺失而跳过回归。
+const browser = await chromium.launch({
+  headless: true,
+  ...(process.env.PLAYWRIGHT_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH } : {})
+});
 
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
@@ -205,6 +209,8 @@ try {
   const editor = page.locator(".word-editor");
   await editor.waitFor();
   assert.equal(await editor.isEditable(), true);
+  // 中文注解：模板可以控制字体、字号和行距，但标题颜色必须保持办公文档的规范黑色，不能继承模板强调色。
+  assert.equal(await page.locator(".editor-document-title").evaluate((node) => getComputedStyle(node).color), "rgb(0, 0, 0)");
   const formatBarGeometry = await page.locator(".format-bar").evaluate((bar) => ({
     height: bar.getBoundingClientRect().height,
     clientWidth: bar.clientWidth,
@@ -889,6 +895,7 @@ try {
   const downloadedBuffer = await readFile(downloadedPath);
   const archive = await JSZip.loadAsync(downloadedBuffer);
   const documentXml = await archive.file("word/document.xml")?.async("string");
+  const stylesXml = await archive.file("word/styles.xml")?.async("string") || "";
   const documentRelationshipsXml = await archive.file("word/_rels/document.xml.rels")?.async("string") || "";
   const numberingXml = await archive.file("word/numbering.xml")?.async("string") || "";
   const settingsXml = await archive.file("word/settings.xml")?.async("string");
@@ -899,6 +906,14 @@ try {
   const commentsXml = await archive.file("word/comments.xml")?.async("string") || "";
   const headerMedia = archive.file(/^word\/media\/.+\.png$/);
   assert.ok(documentXml, "导出的 DOCX 应包含 document.xml");
+  // 中文注解：即使历史模板样式仍携带主题色，导出的标题样式也统一落为黑色，避免 Word 中出现绿色或蓝绿色字体。
+  for (const styleId of ["Title", "Heading1", "Heading2", "Heading3"]) {
+    const styleXml = [...stylesXml.matchAll(/<w:style[^>]+w:styleId="([^"]+)"[^>]*>[\s\S]*?<\/w:style>/g)]
+      .find((match) => match[1] === styleId)?.[0] || "";
+    const color = styleXml.match(/<w:color w:val="([0-9A-Fa-f]{6})"\/>/)?.[1].toUpperCase();
+    // Word 内置样式省略颜色时使用“自动”黑色；显式颜色也只能是黑色。
+    assert.ok(!color || color === "000000", `${styleId} 不应携带模板强调色，实际为 ${color}`);
+  }
   assert.equal(headerXmlParts.length, 5, "导出的 DOCX 应包含首节三类页眉和第二节默认/偶数页眉");
   assert.equal(footerXmlParts.length, 5, "导出的 DOCX 应包含首节三类页脚和第二节默认/偶数页脚");
   assert.ok(headerXmlParts.some((xml) => /<w:drawing>/.test(xml)) && headerMedia.length > 0, "在线页眉图片应进入导出的 DOCX 媒体部件");

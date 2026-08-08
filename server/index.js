@@ -3236,18 +3236,14 @@ function extractDocxSectionsFromHtml(html = "", firstPageLayout = defaultPageLay
   }));
 }
 
-function cleanDocxColor(value, fallback) {
-  const text = String(value || "").replace("#", "").trim();
-  return /^[0-9a-fA-F]{6}$/.test(text) ? text : fallback;
-}
-
 function createDocxStyles(templateStyle = {}) {
   const fontFamily = templateStyle.fontFamily || "Microsoft YaHei";
   const bodySize = Number(templateStyle.bodySize || 22);
   const titleSize = Number(templateStyle.titleSize || 36);
   const headingSize = Number(templateStyle.headingSize || 28);
-  const titleColor = cleanDocxColor(templateStyle.titleColor, "17212B");
-  const headingColor = cleanDocxColor(templateStyle.headingColor, "245F55");
+  // 中文注解：模板强调色仅用于封面等视觉素材；Word 标题样式固定为黑色，避免历史模板把绿色字体带入正式文档。
+  const titleColor = "000000";
+  const headingColor = "000000";
 
   return {
     default: {

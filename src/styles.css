@@ -1551,7 +1551,7 @@ textarea {
 
 .editor-document-title {
   margin: 0 0 17.33px;
-  color: var(--document-title-color, #17212b);
+  color: var(--document-title-color, #000000);
   font-family: var(--document-font-family, "Microsoft YaHei"), sans-serif;
   text-align: center;
   font-size: var(--document-title-size, 24px);
@@ -1768,7 +1768,7 @@ textarea {
 .page-body .export-title,
 .pagination-measurer .export-title {
   margin: 0 0 17.33px;
-  color: var(--document-title-color, #17212b);
+  color: var(--document-title-color, #000000);
   text-align: center;
   font-size: var(--document-title-size, 24px);
   line-height: var(--document-line-height, 1.5);
@@ -1797,7 +1797,7 @@ textarea {
 .pagination-measurer h5,
 .pagination-measurer h6 {
   margin: 22px 0 10px;
-  color: var(--document-heading-color, #245f55);
+  color: var(--document-heading-color, #000000);
   letter-spacing: 0;
   line-height: var(--document-line-height, 1.5);
 }
@@ -2125,7 +2125,7 @@ textarea {
 .word-editor h5,
 .word-editor h6 {
   margin: 22px 0 10px;
-  color: var(--document-heading-color, #245f55);
+  color: var(--document-heading-color, #000000);
   letter-spacing: 0;
   line-height: var(--document-line-height, 1.5);
 }

@@ -12,6 +12,7 @@
     "check:ai-body-format": "node scripts/check-ai-body-format.mjs",
     "check:upload-file-name-encoding": "node scripts/check-upload-file-name-encoding.mjs",
     "check:legacy-doc-heading-color": "node scripts/check-legacy-doc-heading-color.mjs",
+    "check:editor-insert-format": "node scripts/check-editor-insert-format.mjs",
     "check:editor-workflow": "npm run build && node scripts/check-editor-workflow.mjs",
     "check:editor-pagination": "npm run check:editor-workflow",
     "db:migrate:document-template": "node database/migrate-document-template-binding.mjs",

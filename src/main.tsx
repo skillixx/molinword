@@ -537,6 +537,14 @@ type AiEditResult = {
   content: string;
   from: number;
   to: number;
+  formatContext: AiTextFormatContext;
+};
+
+type AiTextFormatMark = { type: string; attrs?: Record<string, unknown> };
+type AiTextFormatContext = {
+  blockType: "paragraph" | "heading";
+  blockAttrs: Record<string, unknown>;
+  marks: AiTextFormatMark[];
 };
 
 type SessionUser = {
@@ -2211,18 +2219,61 @@ function plainTextToHtml(text: string) {
   return html || "<p></p>";
 }
 
-function textToParagraphHtml(text: string) {
+function normalizedAiResultLines(text: string) {
   return text
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => `<p>${escapeHtml(line)}</p>`)
-    .join("");
+    .filter(Boolean);
 }
 
-function aiResultToHtml(text: string) {
-  // 中文注解：AI 常返回多行文本，应用到编辑器时必须转成段落，否则保存和导出会丢失段落结构。
-  return text.includes("\n") ? textToParagraphHtml(text) : escapeHtml(text);
+const inheritableAiMarkNames = new Set([
+  "importedTextStyle",
+  "bold",
+  "italic",
+  "underline",
+  "strike",
+  "textHighlight",
+  "superscriptText",
+  "subscriptText",
+  "doubleStrikeText"
+]);
+
+function captureAiTextFormatContext(editor: TiptapEditor, from: number, to: number): AiTextFormatContext {
+  const resolved = editor.state.doc.resolve(Math.max(0, Math.min(from, editor.state.doc.content.size)));
+  let blockType: AiTextFormatContext["blockType"] = "paragraph";
+  let blockAttrs: Record<string, unknown> = {};
+  for (let depth = resolved.depth; depth > 0; depth -= 1) {
+    const node = resolved.node(depth);
+    if (!node.isTextblock || !["paragraph", "heading"].includes(node.type.name)) continue;
+    blockType = node.type.name as AiTextFormatContext["blockType"];
+    blockAttrs = { ...node.attrs };
+    break;
+  }
+
+  let selectedTextMarks: readonly { type: { name: string }; attrs: Record<string, unknown> }[] | null = null;
+  // 中文注解：选区起点位于格式边界时 resolved.marks() 可能指向左侧文字，优先读取真正被选中的首个文字节点。
+  editor.state.doc.nodesBetween(from, to, (node) => {
+    if (!node.isText || selectedTextMarks) return;
+    selectedTextMarks = node.marks;
+  });
+  const sourceMarks = selectedTextMarks || resolved.marks();
+  const marks = sourceMarks
+    .filter((mark) => inheritableAiMarkNames.has(mark.type.name))
+    .map((mark) => ({ type: mark.type.name, ...(Object.keys(mark.attrs).length ? { attrs: { ...mark.attrs } } : {}) }));
+  return { blockType, blockAttrs, marks };
+}
+
+function formattedAiTextNode(text: string, context: AiTextFormatContext) {
+  return { type: "text", text, ...(context.marks.length ? { marks: context.marks } : {}) };
+}
+
+function formattedAiTextBlocks(text: string, context: AiTextFormatContext) {
+  // 中文注解：AI 多行结果用源段落的节点类型、全部段落属性和字符标记构造，缩进、行距、字号、颜色等一次继承。
+  return normalizedAiResultLines(text).map((line) => ({
+    type: context.blockType,
+    attrs: { ...context.blockAttrs },
+    content: [formattedAiTextNode(line, context)]
+  }));
 }
 
 function buildExportPreviewHtml(title: string, content: string) {
@@ -2508,15 +2559,12 @@ function safeTemplateWordStyle(value: unknown): TemplateWordStyle | undefined {
     const number = Number(source[key]);
     return Number.isFinite(number) && number >= minimum && number <= maximum ? number : undefined;
   };
-  const color = (key: string) => {
-    const text = String(source[key] || "").replace(/^#/, "");
-    return /^[0-9a-f]{6}$/i.test(text) ? `#${text}` : undefined;
-  };
   const fontFamily = String(source.fontFamily || "").trim().slice(0, 80);
   return {
     fontFamily: fontFamily || undefined,
-    titleColor: color("titleColor"),
-    headingColor: color("headingColor"),
+    // 中文注解：历史模板可能携带绿色等营销强调色；文档文字统一使用规范黑色，模板只控制字体、字号和行距。
+    titleColor: "#000000",
+    headingColor: "#000000",
     titleSize: numeric("titleSize", 16, 96),
     headingSize: numeric("headingSize", 16, 72),
     bodySize: numeric("bodySize", 12, 48),
@@ -2536,8 +2584,8 @@ function documentPreviewStyle(template: TemplateItem | null) {
     "--document-heading-2-size": `${Math.round(Math.max(headingHalfPoints - 2, bodyHalfPoints) * 2 / 3 * 100) / 100}px`,
     "--document-heading-3-size": `${Math.round(Math.max(headingHalfPoints - 4, bodyHalfPoints) * 2 / 3 * 100) / 100}px`,
     "--document-line-height": String(Math.round((style?.lineSpacing || 360) / 240 * 10000) / 10000),
-    "--document-title-color": style?.titleColor || "#17212b",
-    "--document-heading-color": style?.headingColor || "#245f55"
+    "--document-title-color": "#000000",
+    "--document-heading-color": "#000000"
   };
   return variables as React.CSSProperties;
 }
@@ -3907,8 +3955,10 @@ function Editor(props: {
       setSelectionHint("当前没有选中文本。");
       return;
     }
+    // 中文注解：AI 请求返回前用户焦点会离开编辑器，必须在发起请求时保存选区格式，不能等应用结果时再猜测。
+    const formatContext = captureAiTextFormatContext(editor, selection.from, selection.to);
     const result = await props.editContent(action, selectedText);
-    if (result) setAiResult({ action, source: selectedText, content: result, from: selection.from, to: selection.to });
+    if (result) setAiResult({ action, source: selectedText, content: result, from: selection.from, to: selection.to, formatContext });
   };
 
   const changeSelectedTextCase = (mode: TextCaseMode) => {
@@ -4314,8 +4364,15 @@ function Editor(props: {
 
   const applyAiResult = (mode: AiApplyMode) => {
     if (!editor || !aiResult) return;
-    if (mode === "replace") editor.chain().focus().setTextSelection({ from: aiResult.from, to: aiResult.to }).insertContent(aiResultToHtml(aiResult.content)).run();
-    else editor.chain().focus().setTextSelection(aiResult.to).insertContent(textToParagraphHtml(aiResult.content)).run();
+    const lines = normalizedAiResultLines(aiResult.content);
+    if (!lines.length) return;
+    if (mode === "replace" && lines.length === 1) {
+      // 中文注解：单行替换只替换字符，保留原段落结构；字符节点显式携带源格式，避免依赖光标边界的偶然继承。
+      editor.chain().focus().setTextSelection({ from: aiResult.from, to: aiResult.to }).insertContent(formattedAiTextNode(lines[0], aiResult.formatContext)).run();
+    } else {
+      const selection = mode === "replace" ? { from: aiResult.from, to: aiResult.to } : aiResult.to;
+      editor.chain().focus().setTextSelection(selection).insertContent(formattedAiTextBlocks(aiResult.content, aiResult.formatContext)).run();
+    }
     setAiResult(null);
   };
 
