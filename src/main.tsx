@@ -4416,26 +4416,50 @@ function Editor(props: {
     reader.readAsDataURL(file);
   };
 
-  const insertManualPageBreak = () => {
+  const insertManualBreak = (breakType: "pageBreak" | "columnBreak", successMessage: string) => {
     if (!editor) return;
-    // 中文注解：分页符后立刻补一个空段落，用户继续输入时会落在下一页，而不是替换分页符本身。
-    editor.chain().focus().insertContent([{ type: "pageBreak" }, { type: "paragraph" }]).run();
-    setSelectionHint("已插入分页符。");
+    const insertionPosition = editor.state.selection.from;
+    editor.chain().focus().insertContent([{ type: breakType }, { type: "paragraph" }]).run();
+
+    let insertedBreakPosition = -1;
+    let followingTextPosition = -1;
+    editor.state.doc.descendants((node, position) => {
+      // 中文注解：块节点插入会拆分当前段落，按原选区之后的首个同类分隔符定位本次新增节点。
+      if (insertedBreakPosition < 0 && position >= Math.max(0, insertionPosition - 1) && node.type.name === breakType) {
+        insertedBreakPosition = position;
+        return false;
+      }
+      if (insertedBreakPosition >= 0 && followingTextPosition < 0 && position > insertedBreakPosition && node.isTextblock) {
+        followingTextPosition = position + 1;
+        return false;
+      }
+      return followingTextPosition < 0;
+    });
+    if (followingTextPosition >= 0) {
+      editor.commands.setTextSelection(followingTextPosition);
+      // 中文注解：Tiptap 的 focus 命令可能延后到下一帧；直接聚焦 ProseMirror 视图可避免快速输入的首字符仍落在分隔符前。
+      editor.view.focus();
+    }
+    setSelectionHint(successMessage);
+  };
+
+  const insertManualPageBreak = () => {
+    // 中文注解：分页符后立刻补一个空段落并显式移动光标，用户继续输入会稳定落在下一页。
+    insertManualBreak("pageBreak", "已插入分页符。");
   };
 
   const insertManualColumnBreak = () => {
-    if (!editor) return;
-    // 中文注解：插入后补空段落，用户可以立即在下一栏继续输入，操作方式与桌面办公软件一致。
-    editor.chain().focus().insertContent([{ type: "columnBreak" }, { type: "paragraph" }]).run();
-    setSelectionHint("已插入分栏符。");
+    // 中文注解：分栏符与分页符共用选区修正规则，操作方式与桌面办公软件一致。
+    insertManualBreak("columnBreak", "已插入分栏符。");
   };
 
   const insertSpecialHyphen = (value: string, label: string) => {
     if (!editor) return;
     const character = value === "soft" ? "\u00AD" : value === "nonbreaking" ? "\u2011" : "";
     if (!character) return;
-    // 中文注解：直接插入 Unicode 对等字符，在线换行由浏览器原生排版，导出时后端再映射为 OOXML 专用节点。
-    editor.chain().focus().insertContent(character).run();
+    // 中文注解：下拉框会暂时夺走焦点；先按编辑器模型选区插入，再同步聚焦视图，避免紧接输入的字符丢失。
+    editor.commands.insertContent(character);
+    editor.view.focus();
     setSelectionHint(`已插入${label}。`);
   };
 

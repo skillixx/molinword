@@ -4,6 +4,7 @@ import { readFile, stat } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
 import JSZip from "jszip";
 import { chromium } from "playwright";
+import { playwrightLaunchOptions } from "./playwright-browser.mjs";
 import { createDocxBuffer } from "../server/index.js";
 
 const listText = "这是一个需要跨页显示的超长编号列表项，必须保持同一个编号并在续页继续排版。".repeat(180);
@@ -192,10 +193,7 @@ await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen
 const address = server.address();
 assert.ok(address && typeof address === "object");
 // 中文注解：CI 默认使用 Playwright 浏览器，本地可显式复用已安装的 Chrome，避免仅因浏览器缓存缺失而跳过回归。
-const browser = await chromium.launch({
-  headless: true,
-  ...(process.env.PLAYWRIGHT_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH } : {})
-});
+const browser = await chromium.launch(playwrightLaunchOptions());
 
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
@@ -365,23 +363,19 @@ try {
   assert.equal(await editorLink.getAttribute("target"), "_blank");
   assert.equal(await editorLink.getAttribute("rel"), "noopener noreferrer");
   const tabKeyboardParagraph = editor.locator("p").filter({ hasText: "Tab keyboard" });
-  await tabKeyboardParagraph.evaluate((paragraph) => {
-    const range = document.createRange();
-    range.selectNodeContents(paragraph);
-    range.collapse(false);
-    const selection = window.getSelection();
-    selection?.removeAllRanges();
-    selection?.addRange(range);
-    (paragraph.closest(".word-editor"))?.focus();
-    // 中文注解：显式通知 ProseMirror 同步浏览器光标，避免工具栏操作沿用上一段的文字选区。
-    document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
-  });
+  assert.equal(await editor.locator('.docx-tab[data-docx-tab="true"]').count(), 2);
+  // 中文注解：通过真实点击和 End 键同步浏览器与 ProseMirror 选区，避免直接改 DOM Range 后模型选区仍滞后。
+  await tabKeyboardParagraph.click();
+  await page.keyboard.press("End");
   await page.waitForTimeout(50);
   await page.keyboard.press("Tab");
-  await page.keyboard.type("Keyboard aligned");
+  // 中文注解：一次性派发文本输入，避免系统 Chrome 在高速逐键事件与 Tiptap 事务交错时重复末尾字符。
+  await page.keyboard.insertText("Keyboard aligned");
+  assert.equal(await editor.locator('.docx-tab[data-docx-tab="true"]').count(), 3);
   await page.locator('button[title="插入制表符"]').click();
   await page.keyboard.type("Toolbar aligned");
-  assert.equal(await editor.locator('.docx-tab[data-docx-tab="true"]').count(), 4);
+  const tabContexts = await editor.locator('.docx-tab[data-docx-tab="true"]').evaluateAll((tabs) => tabs.map((tab) => tab.parentElement?.textContent || ""));
+  assert.equal(tabContexts.length, 4, JSON.stringify(tabContexts));
   const editorTabWidths = await editor.locator(".docx-tab").evaluateAll((tabs) => tabs.map((tab) => tab.getBoundingClientRect().width));
   assert.ok(editorTabWidths.every((width) => width >= 2), "编辑器中的制表位应获得稳定可见宽度");
   await page.getByRole("tab", { name: "布局" }).click();
@@ -403,20 +397,20 @@ try {
   await page.getByRole("tab", { name: "格式" }).click();
   const specialHyphenParagraph = editor.locator("p").filter({ hasText: "特殊连字符工具" });
   await specialHyphenParagraph.click();
-  await specialHyphenParagraph.press("End");
-  await editor.type(" inter");
+  await page.keyboard.press("End");
+  await page.keyboard.insertText(" inter");
   await page.getByLabel("特殊连字符", { exact: true }).selectOption("soft");
-  await editor.type("national code");
+  await page.keyboard.insertText("national code");
   await page.getByLabel("特殊连字符", { exact: true }).selectOption("nonbreaking");
-  await editor.type("2026");
+  await page.keyboard.insertText("2026");
   assert.equal(await specialHyphenParagraph.textContent(), "特殊连字符工具 inter\u00ADnational code\u20112026");
 
   const manualLineBreakParagraph = editor.locator("p").filter({ hasText: "手动换行工具" });
   await manualLineBreakParagraph.click();
-  await manualLineBreakParagraph.press("End");
-  await editor.type(" 第一行");
+  await page.keyboard.press("End");
+  await page.keyboard.insertText(" 第一行");
   await page.keyboard.press("Shift+Enter");
-  await editor.type("第二行");
+  await page.keyboard.insertText("第二行");
   assert.match(await manualLineBreakParagraph.innerHTML(), /第一行[\s\S]*?<br[^>]*>[\s\S]*?第二行/);
 
   await page.getByRole("tab", { name: "审阅" }).click();
@@ -714,7 +708,8 @@ try {
   await secondSectionParagraph.click();
   await secondSectionParagraph.press("End");
   await page.getByRole("button", { name: "分栏符", exact: true }).click();
-  await editor.type("分栏符后内容");
+  // 中文注解：工具栏已把光标放进分栏符后的新段落；直接发送键盘输入，避免 locator.type 再次聚焦编辑器根节点而覆盖光标。
+  await page.keyboard.type("分栏符后内容");
   const editorColumnBreak = editor.locator('[data-column-break="true"]');
   assert.equal(await editorColumnBreak.count(), 1);
   assert.deepEqual(await editorColumnBreak.evaluate((marker) => ({ before: marker.previousElementSibling?.textContent || "", after: marker.nextElementSibling?.textContent || "" })), { before: "第二节横向内容", after: "分栏符后内容" });

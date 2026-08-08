@@ -150,10 +150,13 @@ npm run billing:reconcile:retry
 - 生产环境设置 `APP_ENV=production` 后会强制要求墨灵会话并禁用 `LOCAL_MOLING_MOCK`；同时建议保留 `REQUIRE_MOLING_SESSION=true`，形成显式双重门禁。
 - 后端接口错误只返回中文用户提示，真实错误保留在服务端日志。
 - 文档、导出文件下载都按当前用户校验，避免跨用户访问。
+- 生产启动会执行 fail-fast 配置校验；完整步骤见 `docs/production-deployment-checklist.md`。
+- 开源依赖商业使用边界和许可证门禁见 `docs/open-source-commercial-use.md`。
 
 ## 构建验证
 
 ```bash
+npm run check:commercial-readiness
 npm run build
 npm run check:template-agent
 npm run check:template-agent-api

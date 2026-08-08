@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
 import { chromium } from "playwright";
+import { playwrightLaunchOptions } from "./playwright-browser.mjs";
 import JSZip from "jszip";
 import { createDocxBuffer } from "../server/index.js";
 
@@ -93,10 +94,7 @@ const server = createServer(async (request, response) => {
 await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
 const address = server.address();
 assert.ok(address && typeof address === "object");
-const browser = await chromium.launch({
-  headless: true,
-  ...(process.env.PLAYWRIGHT_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH } : {})
-});
+const browser = await chromium.launch(playwrightLaunchOptions());
 
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });

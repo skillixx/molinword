@@ -1013,4 +1013,46 @@ const continuousRoundTripXml = await continuousRoundTripZip.file("word/document.
 assert.match(continuousRoundTripXml, /<w:type w:val="nextPage"\/>/);
 assert.doesNotMatch(continuousRoundTripXml, /<w:type w:val="continuous"\/>/);
 
+// 中文注解：DOCX 本质是 ZIP；商业服务必须在解压正文前拒绝异常多的条目，避免小体积压缩包耗尽内存或 CPU。
+const excessiveEntriesZip = await JSZip.loadAsync(buffer);
+for (let index = 0; index < 2100; index += 1) {
+  excessiveEntriesZip.file(`customXml/stress-${index}.xml`, "<stress />");
+}
+const excessiveEntriesBuffer = await excessiveEntriesZip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+await assert.rejects(
+  () => parseImportedDocument({
+    originalname: "too-many-entries.docx",
+    buffer: excessiveEntriesBuffer,
+    mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    size: excessiveEntriesBuffer.length
+  }),
+  /文件结构过大/
+);
+
+const oversizedEntryZip = await JSZip.loadAsync(buffer);
+oversizedEntryZip.file("word/oversized.xml", "x".repeat(20 * 1024 * 1024 + 1));
+const oversizedEntryBuffer = await oversizedEntryZip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+await assert.rejects(
+  () => parseImportedDocument({
+    originalname: "oversized-entry.docx",
+    buffer: oversizedEntryBuffer,
+    mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    size: oversizedEntryBuffer.length
+  }),
+  /文件结构过大/
+);
+
+const unsafePathZip = await JSZip.loadAsync(buffer);
+unsafePathZip.file("../outside.xml", "<outside />");
+const unsafePathBuffer = await unsafePathZip.generateAsync({ type: "nodebuffer" });
+await assert.rejects(
+  () => parseImportedDocument({
+    originalname: "unsafe-path.docx",
+    buffer: unsafePathBuffer,
+    mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    size: unsafePathBuffer.length
+  }),
+  /不安全的内部路径/
+);
+
 console.log("DOCX import format check passed");

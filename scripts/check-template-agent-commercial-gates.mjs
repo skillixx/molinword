@@ -6,6 +6,7 @@ import {
   createBillingReconciliationPayload,
   loadTemplateAgentCandidates,
   persistBillingReconciliationTask,
+  resolveBillableFailureResponse,
   resolveTemplateAgentFailureStatus,
   shouldReleasePointHold
 } from "../server/index.js";
@@ -93,6 +94,12 @@ const modelCalls = [];
 const modelServer = createServer(async (request, response) => {
   const body = await readJson(request);
   modelCalls.push(body);
+  if (modelMode === "slow") {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    response.end(JSON.stringify({ choices: [{ message: { content: "这是经过正式润色且符合交付要求的完整文本。" } }] }));
+    return;
+  }
   if (modelMode === "failure") {
     response.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
     response.end(JSON.stringify({ message: "模拟模型故障" }));
@@ -148,26 +155,98 @@ await new Promise((resolve) => modelServer.listen(0, "127.0.0.1", resolve));
 const modelAddress = modelServer.address();
 assert.ok(modelAddress && typeof modelAddress === "object");
 const modelUrl = `http://127.0.0.1:${modelAddress.port}/v1/chat/completions`;
+const billableAiRequests = [
+  { path: "/api/ai/template-agent", body: { brief: "生成上线评审会议纪要", candidates } },
+  { path: "/api/ai/generate-outline", body: { topic: "上线评审", documentType: "会议纪要" } },
+  { path: "/api/ai/generate-body", body: { topic: "上线评审", outline: ["一、会议结论"] } },
+  { path: "/api/ai/edit", body: { action: "polish", content: "需要润色的正式内容。" } },
+  { path: "/api/ai/polish", body: { content: "需要润色的正式内容。" } }
+];
+
+// 中文注解：结算状态未知必须覆盖底层网络错误文案，避免用户按普通失败提示重复提交并再次扣费。
+const settlementUnknownResponse = resolveBillableFailureResponse(
+  new Error("fetch timeout"),
+  { isMolingUser: true },
+  { state: "settlement_unknown" },
+  "Word 导出"
+);
+assert.match(settlementUnknownResponse.message, /已完成.*待平台对账.*请勿重复提交/);
+const insufficientPointsError = Object.assign(new Error("insufficient points"), { code: 60005 });
+const insufficientExportResponse = resolveBillableFailureResponse(
+  insufficientPointsError,
+  { isMolingUser: true },
+  { state: "failed" },
+  "Word 导出"
+);
+assert.equal(insufficientExportResponse.status, 402);
+assert.match(insufficientExportResponse.message, /积分不足/);
+const releaseUnknownResponse = resolveBillableFailureResponse(
+  new Error("release fetch timeout"),
+  { isMolingUser: true },
+  { state: "release_unknown" },
+  "Word 导出"
+);
+assert.match(releaseUnknownResponse.message, /释放状态待平台对账.*请勿重复提交/);
 
 try {
   // 中文注解：生产环境即使把两个安全变量误配为 false/true，也必须强制会话门禁并关闭本地身份模拟。
   const productionApi = await startApi({
     APP_ENV: "production",
     REQUIRE_MOLING_SESSION: "false",
-    LOCAL_MOLING_MOCK: "true"
+    LOCAL_MOLING_MOCK: "true",
+    DATABASE_URL: "mysql://word_app:a-strong-database-password@127.0.0.1:1/moling_word",
+    INTERNAL_API_TOKEN: "internal-token-at-least-32-characters",
+    MOLING_APP_ID: "15",
+    MOLING_PRODUCT_ID: "73",
+    MOLING_API_BASE_URL: "http://127.0.0.1:1",
+    LLM_API_URL: modelUrl,
+    LLM_API_KEY: "commercial-gate-test-key-at-least-32",
+    STORAGE_ENDPOINT: "http://127.0.0.1:1",
+    STORAGE_ACCESS_KEY_ID: "storage-access-key",
+    STORAGE_SECRET_ACCESS_KEY: "storage-secret-key-at-least-32-characters",
+    SESSION_COOKIE_SECURE: "true",
+    APP_BASE_URL: "https://word.example.test",
+    BILLING_RECONCILIATION_OUTBOX: "D:\\moling-data\\billing-reconciliation-outbox.jsonl",
+    ALLOW_INSECURE_INTERNAL_HTTP: "true"
   }, modelUrl);
   try {
-    const health = await fetch(`http://127.0.0.1:${productionApi.port}/api/health`).then((response) => response.json());
+    const healthResponse = await fetch(`http://127.0.0.1:${productionApi.port}/api/health`);
+    assert.equal(healthResponse.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(healthResponse.headers.get("x-frame-options"), "DENY");
+    assert.equal(healthResponse.headers.get("referrer-policy"), "no-referrer");
+    const health = await healthResponse.json();
     assert.equal(health.environment, "production");
     assert.equal(health.sessionRequired, true);
-    const before = modelCalls.length;
-    const response = await fetch(`http://127.0.0.1:${productionApi.port}/api/ai/template-agent`, {
+    for (const forbiddenField of ["molingApiBaseUrl", "storageBucket", "model"]) {
+      assert.equal(forbiddenField in health, false, `公开健康检查不得泄露 ${forbiddenField}`);
+    }
+    // 中文注解：会话和积分接口的未登录语义必须保持为 401，供前端跳转登录并让监控准确分类。
+    for (const path of ["/api/session", "/api/billing/points"]) {
+      const response = await fetch(`http://127.0.0.1:${productionApi.port}${path}`);
+      assert.equal(response.status, 401, `${path} 未登录时必须返回 401`);
+    }
+    const crossOriginResponse = await fetch(`http://127.0.0.1:${productionApi.port}/api/ai/edit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "https://evil.example" },
+      body: JSON.stringify({ action: "polish", content: "跨站请求" })
+    });
+    assert.equal(crossOriginResponse.status, 403);
+    for (const requestCase of billableAiRequests) {
+      const before = modelCalls.length;
+      const response = await fetch(`http://127.0.0.1:${productionApi.port}${requestCase.path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestCase.body)
+      });
+      assert.equal(response.status, 401, `${requestCase.path} 必须拒绝生产环境未登录请求`);
+      assert.equal(modelCalls.length, before, `${requestCase.path} 未登录时不得调用模型`);
+    }
+    const exportResponse = await fetch(`http://127.0.0.1:${productionApi.port}/api/documents/1/export-docx`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ brief: "生成上线评审会议纪要", candidates })
+      body: JSON.stringify({ content: "未登录导出" })
     });
-    assert.equal(response.status, 401);
-    assert.equal(modelCalls.length, before, "未登录请求不得调用模型");
+    assert.equal(exportResponse.status, 401, "Word 导出必须先校验生产会话，不能被数据库或存储错误覆盖");
   } finally {
     await stopApi(productionApi);
   }
@@ -210,16 +289,53 @@ try {
     LOCAL_MOLING_MOCK: "true"
   }, modelUrl);
   try {
-    const response = await fetch(`http://127.0.0.1:${failureApi.port}/api/ai/template-agent`, {
+    for (const requestCase of billableAiRequests) {
+      const response = await fetch(`http://127.0.0.1:${failureApi.port}${requestCase.path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestCase.body)
+      });
+      assert.equal(response.status, 503, `${requestCase.path} 模型故障必须返回 503`);
+      const result = await response.json();
+      assert.equal(result.fallback, undefined, `${requestCase.path} 商业模式不得返回免费兜底`);
+      assert.equal(result.plan, undefined, `${requestCase.path} 商业模式不得返回规划结果`);
+      assert.equal(result.content, undefined, `${requestCase.path} 商业模式不得返回正文或润色结果`);
+      assert.equal(result.outline, undefined, `${requestCase.path} 商业模式不得返回大纲`);
+    }
+    const exportResponse = await fetch(`http://127.0.0.1:${failureApi.port}/api/documents/1/export-docx`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ brief: "生成上线评审会议纪要", candidates })
+      body: JSON.stringify({ content: "商业导出失败" })
     });
-    assert.equal(response.status, 503);
-    const result = await response.json();
-    assert.equal("plan" in result, false);
+    assert.equal(exportResponse.status, 503, "商业导出依赖故障必须返回可重试的服务不可用状态");
   } finally {
     await stopApi(failureApi);
+  }
+
+  // 中文注解：单实例并发闸门保护模型和积分上游；达到上限时必须在调用模型前返回 429。
+  modelMode = "slow";
+  const concurrencyApi = await startApi({
+    APP_ENV: "development",
+    REQUIRE_MOLING_SESSION: "false",
+    LOCAL_MOLING_MOCK: "true",
+    AI_MAX_CONCURRENT_REQUESTS: "1"
+  }, modelUrl);
+  try {
+    const firstRequest = fetch(`http://127.0.0.1:${concurrencyApi.port}/api/ai/polish`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: "第一条需要润色的文档内容。" })
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const secondResponse = await fetch(`http://127.0.0.1:${concurrencyApi.port}/api/ai/polish`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: "第二条并发文档内容。" })
+    });
+    assert.equal(secondResponse.status, 429);
+    assert.equal((await firstRequest).status, 200);
+  } finally {
+    await stopApi(concurrencyApi);
   }
 
   let capturedSql = "";

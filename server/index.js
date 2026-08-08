@@ -6,7 +6,6 @@ import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import express from "express";
 import { AlignmentType, BorderStyle, Column, ColumnBreak as DocxColumnBreak, CommentRangeEnd, CommentRangeStart, CommentReference, DeletedTextRun, Document, EndnoteReferenceRun, ExternalHyperlink, Footer, FootnoteReferenceRun, Header, HeadingLevel, HeightRule, ImageRun, InsertedTextRun, LevelFormat, LineRuleType, NoBreakHyphen, Packer, PageBreak as DocxPageBreak, PageOrientation, Paragraph, SectionType, SimpleField, SoftHyphen, Tab, Table, TableCell, TableLayoutType, TableRow, TextDirection, TextRun, TextWrappingSide, TextWrappingType, VerticalAlignTable, WidthType } from "docx";
-import { imageSize } from "image-size";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
 import mammoth from "mammoth";
@@ -308,8 +307,56 @@ const app = express();
 const port = Number(process.env.LOCAL_API_PORT || process.env.APP_PORT || process.env.PORT || 3001);
 const localUserId = process.env.LOCAL_USER_ID || "local-dev-user";
 const sessionCookieName = "moling_word_session";
+const maximumConcurrentAiRequests = Math.min(100, Math.max(1, Number(process.env.AI_MAX_CONCURRENT_REQUESTS || 8) || 8));
+const readinessTimeoutMs = Math.min(15000, Math.max(500, Number(process.env.READINESS_TIMEOUT_MS || 3000) || 3000));
+let activeAiRequests = 0;
 
+app.disable("x-powered-by");
 app.use(express.json({ limit: "1mb" }));
+app.use((request, response, next) => {
+  // 中文注解：API 默认使用收敛的浏览器安全头；具体文件下载路由仍可覆盖自己的缓存与内容类型。
+  response.setHeader("X-Content-Type-Options", "nosniff");
+  response.setHeader("X-Frame-Options", "DENY");
+  response.setHeader("Referrer-Policy", "no-referrer");
+  response.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  response.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
+  next();
+});
+app.use((request, response, next) => {
+  if (!isProductionRuntime || ["GET", "HEAD", "OPTIONS"].includes(request.method)) return next();
+  const origin = String(request.headers.origin || "").trim();
+  if (!origin) return next();
+  const trustedOrigins = new Set(
+    [process.env.APP_BASE_URL, ...String(process.env.TRUSTED_ORIGINS || "").split(",")]
+      .map((value) => {
+        try { return new URL(String(value || "").trim()).origin; } catch { return ""; }
+      })
+      .filter(Boolean)
+  );
+  response.setHeader("Vary", "Origin");
+  if (trustedOrigins.has(origin)) return next();
+  // 中文注解：浏览器携带会话 cookie 的跨站写请求必须在进入业务和计费逻辑前被拒绝。
+  response.status(403).json({ message: "请求来源不受信任，请从正式应用入口重试。" });
+});
+app.use("/api/ai", (request, response, next) => {
+  if (activeAiRequests >= maximumConcurrentAiRequests) {
+    response.setHeader("Retry-After", "2");
+    response.status(429).json({ message: "AI 服务当前请求较多，请稍后重试。" });
+    return;
+  }
+  activeAiRequests += 1;
+  let released = false;
+  const releaseSlot = () => {
+    if (released) return;
+    released = true;
+    activeAiRequests = Math.max(0, activeAiRequests - 1);
+  };
+  // 中文注解：finish 与异常断连 close 都释放并发槽位，双事件通过幂等标志避免重复扣减。
+  response.once("finish", releaseSlot);
+  response.once("close", releaseSlot);
+  next();
+});
 
 const documentUpload = multer({
   storage: multer.memoryStorage(),
@@ -370,8 +417,10 @@ const molingAppId = process.env.MOLING_APP_ID || process.env.WORD_APP_ID || "";
 const molingProductId = process.env.MOLING_PRODUCT_ID || process.env.WORD_PRODUCT_ID || "";
 const sessionTtlSeconds = Number(process.env.SESSION_TTL_SECONDS || 86400);
 const sessionCookieSecure = process.env.SESSION_COOKIE_SECURE === "true";
-const appEnvironment = String(process.env.APP_ENV || process.env.NODE_ENV || "development").trim().toLowerCase();
-const isProductionRuntime = appEnvironment === "production";
+const configuredAppEnvironment = String(process.env.APP_ENV || "").trim().toLowerCase();
+const configuredNodeEnvironment = String(process.env.NODE_ENV || "").trim().toLowerCase();
+const isProductionRuntime = configuredAppEnvironment === "production" || configuredNodeEnvironment === "production";
+const appEnvironment = isProductionRuntime ? "production" : (configuredAppEnvironment || configuredNodeEnvironment || "development");
 // 中文注解：生产环境强制关闭本地身份模拟，即使部署变量误配也不能绕过登录和积分计费。
 const localMolingMock = !isProductionRuntime && process.env.LOCAL_MOLING_MOCK === "true";
 // 中文注解：生产环境默认且强制要求墨灵会话；开发环境可显式开启同等门禁做联调。
@@ -382,6 +431,62 @@ const dbPool = process.env.DATABASE_URL
   ? mysql.createPool(process.env.DATABASE_URL)
   : null;
 const minioClient = createMinioClient();
+
+function validateProductionConfiguration(environment = {}) {
+  const appRuntime = String(environment.APP_ENV || "").trim().toLowerCase();
+  const nodeRuntime = String(environment.NODE_ENV || "").trim().toLowerCase();
+  if (appRuntime !== "production" && nodeRuntime !== "production") return [];
+  // 中文注解：与运行时保持同一兼容规则，让仍使用历史 WORD_* 变量名的合规部署可以平滑升级。
+  const configuration = {
+    ...environment,
+    MOLING_APP_ID: environment.MOLING_APP_ID || environment.WORD_APP_ID,
+    MOLING_PRODUCT_ID: environment.MOLING_PRODUCT_ID || environment.WORD_PRODUCT_ID
+  };
+  const errors = [];
+  const allowInsecureInternalHttp = configuration.ALLOW_INSECURE_INTERNAL_HTTP === "true";
+  const requiredValues = [
+    "DATABASE_URL",
+    "INTERNAL_API_TOKEN",
+    "MOLING_APP_ID",
+    "MOLING_PRODUCT_ID",
+    "MOLING_API_BASE_URL",
+    "LLM_API_URL",
+    "LLM_API_KEY",
+    "STORAGE_ENDPOINT",
+    "STORAGE_ACCESS_KEY_ID",
+    "STORAGE_SECRET_ACCESS_KEY",
+    "APP_BASE_URL",
+    "BILLING_RECONCILIATION_OUTBOX"
+  ];
+  const isPlaceholder = (value) => !String(value || "").trim()
+    || /replace-with|请替换|changeme|example-key|your[-_]/i.test(String(value));
+  for (const key of requiredValues) {
+    if (isPlaceholder(configuration[key])) errors.push(`${key} 未配置或仍为占位值`);
+  }
+  for (const key of ["INTERNAL_API_TOKEN", "LLM_API_KEY", "STORAGE_SECRET_ACCESS_KEY"]) {
+    if (!isPlaceholder(configuration[key]) && String(configuration[key]).length < 16) errors.push(`${key} 长度不足 16 个字符`);
+  }
+  const requireHttps = (key, allowInternalOverride = false) => {
+    if (isPlaceholder(configuration[key])) return;
+    try {
+      const value = new URL(configuration[key]);
+      if (value.protocol !== "https:" && !(allowInternalOverride && allowInsecureInternalHttp)) {
+        errors.push(`${key} 生产环境必须使用 HTTPS${allowInternalOverride ? "；可信内网例外需显式设置 ALLOW_INSECURE_INTERNAL_HTTP=true" : ""}`);
+      }
+    } catch {
+      errors.push(`${key} 不是有效 URL`);
+    }
+  };
+  requireHttps("APP_BASE_URL");
+  requireHttps("MOLING_API_BASE_URL", true);
+  requireHttps("LLM_API_URL", true);
+  requireHttps("STORAGE_ENDPOINT", true);
+  if (configuration.SESSION_COOKIE_SECURE !== "true") errors.push("SESSION_COOKIE_SECURE 生产环境必须为 true");
+  if (!isPlaceholder(configuration.BILLING_RECONCILIATION_OUTBOX) && !path.isAbsolute(configuration.BILLING_RECONCILIATION_OUTBOX)) {
+    errors.push("BILLING_RECONCILIATION_OUTBOX 生产环境必须指向持久卷绝对路径");
+  }
+  return [...new Set(errors)];
+}
 
 const usageCosts = {
   word_template_agent: 2,
@@ -1941,8 +2046,53 @@ function renderDocxParagraphs(parsedParagraphs) {
   return chunks.join("");
 }
 
-async function parseStyledDocxToHtml(buffer, sectionLayouts = [], sectionBreakTypes = []) {
-  const zip = await JSZip.loadAsync(buffer);
+const DOCX_ARCHIVE_LIMITS = Object.freeze({
+  maximumEntries: 2000,
+  maximumEntryBytes: 20 * 1024 * 1024,
+  maximumTotalBytes: 80 * 1024 * 1024,
+  maximumPathLength: 512
+});
+
+async function loadSafeDocxArchive(buffer) {
+  let zip;
+  try {
+    // 中文注解：JSZip 此时只读取中央目录，不展开每个文件；先校验声明体积，再允许正文、媒体和页眉页脚解压。
+    zip = await JSZip.loadAsync(buffer);
+  } catch {
+    throw createPublicError("该 DOCX 文件已损坏或不是有效的 Word 文档。", 400);
+  }
+  const entries = Object.values(zip.files);
+  if (entries.length > DOCX_ARCHIVE_LIMITS.maximumEntries) {
+    throw createPublicError("该 DOCX 文件结构过大，包含的内部文件数量超过安全限制。", 400);
+  }
+  let totalBytes = 0;
+  for (const entry of entries) {
+    const originalPath = String(entry.unsafeOriginalName || entry.name || "");
+    if (
+      originalPath.length > DOCX_ARCHIVE_LIMITS.maximumPathLength
+      || /(^|[\\/])\.\.([\\/]|$)|^[\\/]|^[A-Za-z]:|\\/.test(originalPath)
+      || /[\u0000-\u001F\u007F]/.test(originalPath)
+    ) {
+      throw createPublicError("该 DOCX 文件包含不安全的内部路径，无法导入。", 400);
+    }
+    if (entry.dir) continue;
+    const uncompressedBytes = Number(entry._data?.uncompressedSize);
+    if (!Number.isSafeInteger(uncompressedBytes) || uncompressedBytes < 0) {
+      throw createPublicError("该 DOCX 文件无法完成安全校验，可能已损坏。", 400);
+    }
+    if (uncompressedBytes > DOCX_ARCHIVE_LIMITS.maximumEntryBytes) {
+      throw createPublicError("该 DOCX 文件结构过大，单个内部文件超过安全限制。", 400);
+    }
+    totalBytes += uncompressedBytes;
+    if (totalBytes > DOCX_ARCHIVE_LIMITS.maximumTotalBytes) {
+      throw createPublicError("该 DOCX 文件结构过大，解压后的总体积超过安全限制。", 400);
+    }
+  }
+  return zip;
+}
+
+async function parseStyledDocxToHtml(buffer, sectionLayouts = [], sectionBreakTypes = [], archive = null) {
+  const zip = archive || await loadSafeDocxArchive(buffer);
   const documentXml = await zip.file("word/document.xml")?.async("string");
   if (!documentXml) return "";
   const stylesXml = await zip.file("word/styles.xml")?.async("string");
@@ -2274,8 +2424,8 @@ function parseDocxPageGeometry(section, fallback = defaultPageLayout, themeColor
   };
 }
 
-async function parseDocxPageLayout(buffer) {
-  const zip = await JSZip.loadAsync(buffer);
+async function parseDocxPageLayout(buffer, archive = null) {
+  const zip = archive || await loadSafeDocxArchive(buffer);
   const documentXml = await zip.file("word/document.xml")?.async("string");
   const relationshipsXml = await zip.file("word/_rels/document.xml.rels")?.async("string");
   if (!documentXml) return { pageLayout: normalizePageLayout(defaultPageLayout), sectionLayouts: [normalizePageLayout(defaultPageLayout)], sectionBreakTypes: [], warnings: [] };
@@ -2397,7 +2547,9 @@ async function parseImportedDocument(file) {
     return { content: legacyDocTextToHtml(text), outline: extractPlainTextOutline(text), documentType: "Word 文档", pageLayout: { ...defaultPageLayout }, warnings: [] };
   }
   if (extension === "docx") {
-    const pageLayoutResult = await parseDocxPageLayout(file.buffer).catch(() => ({
+    // 中文注解：先在统一入口完成 ZIP 结构与声明解压体积校验，避免异常包进入任一解析回退路径。
+    const archive = await loadSafeDocxArchive(file.buffer);
+    const pageLayoutResult = await parseDocxPageLayout(file.buffer, archive).catch(() => ({
       pageLayout: normalizePageLayout(defaultPageLayout),
       sectionLayouts: [normalizePageLayout(defaultPageLayout)],
       sectionBreakTypes: [],
@@ -2405,7 +2557,7 @@ async function parseImportedDocument(file) {
     }));
     let rawHtml = "";
     try {
-      rawHtml = await parseStyledDocxToHtml(file.buffer, pageLayoutResult.sectionLayouts, pageLayoutResult.sectionBreakTypes);
+      rawHtml = await parseStyledDocxToHtml(file.buffer, pageLayoutResult.sectionLayouts, pageLayoutResult.sectionBreakTypes, archive);
     } catch (error) {
       // 中文注解：少数 DOCX 结构异常时回退 Mammoth，优先保证用户能导入并继续编辑。
       console.error("Styled DOCX import fallback to mammoth", error);
@@ -3051,14 +3203,82 @@ function cssLengthToPixel(value = "") {
   return undefined;
 }
 
-function imageSizeFromNode(node, data) {
-  const styles = parseStyleMap(node?.attribs?.style);
-  let intrinsic = {};
-  try {
-    intrinsic = imageSize(data) || {};
-  } catch {
-    intrinsic = {};
+const maximumSafeImageDimension = 20000;
+const maximumSafeImagePixels = 100000000;
+
+function normalizeSafeImageDimensions(widthValue, heightValue) {
+  const width = Number(widthValue);
+  const height = Number(heightValue);
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) return null;
+  if (width > maximumSafeImageDimension || height > maximumSafeImageDimension || width * height > maximumSafeImagePixels) return null;
+  return { width, height };
+}
+
+function readJpegDimensions(data) {
+  if (data.length < 4 || data[0] !== 0xff || data[1] !== 0xd8) return null;
+  // 中文注解：JPEG 仅在 SOF 段声明像素尺寸；跳过 APP、量化表等可变长段，拒绝越界或在扫描数据前仍找不到 SOF 的文件。
+  const startOfFrameMarkers = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
+  let offset = 2;
+  while (offset + 4 <= data.length) {
+    while (offset < data.length && data[offset] !== 0xff) offset += 1;
+    while (offset < data.length && data[offset] === 0xff) offset += 1;
+    if (offset >= data.length) return null;
+    const marker = data[offset];
+    offset += 1;
+    if (marker === 0xd8 || marker === 0x01) continue;
+    if (marker === 0xd9 || marker === 0xda || offset + 2 > data.length) return null;
+    const segmentLength = data.readUInt16BE(offset);
+    if (segmentLength < 2 || offset + segmentLength > data.length) return null;
+    if (startOfFrameMarkers.has(marker)) {
+      if (segmentLength < 7) return null;
+      // 中文注解：SOF 载荷按“大端高度、宽度”排列，先交给统一像素上限校验再返回。
+      return normalizeSafeImageDimensions(data.readUInt16BE(offset + 5), data.readUInt16BE(offset + 3));
+    }
+    offset += segmentLength;
   }
+  return null;
+}
+
+function readWebpDimensions(data) {
+  if (data.length < 30 || data.toString("ascii", 0, 4) !== "RIFF" || data.toString("ascii", 8, 12) !== "WEBP") return null;
+  const chunkType = data.toString("ascii", 12, 16);
+  // 中文注解：扩展、有损和无损 WebP 使用三套固定头布局；只读取首个规范图像头，不扫描或解码压缩像素数据。
+  if (chunkType === "VP8X") {
+    return normalizeSafeImageDimensions(data.readUIntLE(24, 3) + 1, data.readUIntLE(27, 3) + 1);
+  }
+  if (chunkType === "VP8 " && data.length >= 30 && data[23] === 0x9d && data[24] === 0x01 && data[25] === 0x2a) {
+    return normalizeSafeImageDimensions(data.readUInt16LE(26) & 0x3fff, data.readUInt16LE(28) & 0x3fff);
+  }
+  if (chunkType === "VP8L" && data.length >= 25 && data[20] === 0x2f) {
+    // 中文注解：VP8L 将宽高减一后交错打包进 4 字节，按规范位宽还原后仍执行统一尺寸与总像素限制。
+    const width = 1 + data[21] + ((data[22] & 0x3f) << 8);
+    const height = 1 + (data[22] >> 6) + (data[23] << 2) + ((data[24] & 0x0f) << 10);
+    return normalizeSafeImageDimensions(width, height);
+  }
+  return null;
+}
+
+function readSafeImageDimensions(value, mimeType = "") {
+  const data = Buffer.isBuffer(value) ? value : Buffer.from(value || []);
+  const normalizedMimeType = String(mimeType).toLowerCase();
+  if (normalizedMimeType === "image/png") {
+    if (data.length < 24 || data.toString("hex", 0, 8) !== "89504e470d0a1a0a" || data.toString("ascii", 12, 16) !== "IHDR") return null;
+    return normalizeSafeImageDimensions(data.readUInt32BE(16), data.readUInt32BE(20));
+  }
+  if (normalizedMimeType === "image/gif") {
+    const signature = data.length >= 10 ? data.toString("ascii", 0, 6) : "";
+    if (signature !== "GIF87a" && signature !== "GIF89a") return null;
+    return normalizeSafeImageDimensions(data.readUInt16LE(6), data.readUInt16LE(8));
+  }
+  if (normalizedMimeType === "image/jpeg" || normalizedMimeType === "image/jpg") return readJpegDimensions(data);
+  if (normalizedMimeType === "image/webp") return readWebpDimensions(data);
+  return null;
+}
+
+function imageSizeFromNode(node, data, mimeType) {
+  const styles = parseStyleMap(node?.attribs?.style);
+  const intrinsic = readSafeImageDimensions(data, mimeType);
+  if (!intrinsic) return null;
   const intrinsicWidth = Number(intrinsic.width) || 420;
   const intrinsicHeight = Number(intrinsic.height) || Math.round(intrinsicWidth * 0.62);
   let width = cssLengthToPixel(styles.width) || Number(node?.attribs?.width) || intrinsicWidth;
@@ -3105,11 +3325,14 @@ function docxFloatingOptionsFromNode(node) {
 function imageRunFromNode(node) {
   const image = dataUrlToImage(node?.attribs?.src);
   if (!image) return null;
+  const mimeType = image.extension === "jpg" ? "image/jpeg" : `image/${image.extension}`;
+  const transformation = imageSizeFromNode(node, image.data, mimeType);
+  if (!transformation) return null;
   const alt = String(node?.attribs?.alt || "正文图片").trim().slice(0, 200) || "正文图片";
   return new ImageRun({
     data: image.data,
     type: image.extension,
-    transformation: imageSizeFromNode(node, image.data),
+    transformation,
     altText: { name: alt, description: alt, title: alt },
     floating: docxFloatingOptionsFromNode(node)
   });
@@ -4547,6 +4770,29 @@ function resolveTemplateAgentFailureStatus(error, currentUser, pointHold) {
   return 503;
 }
 
+function resolveBillableFailureResponse(error, currentUser, pointHold, actionLabel = "计费操作") {
+  if (!currentUser?.isMolingUser && !requireMolingSession) return null;
+  const status = resolveTemplateAgentFailureStatus(error, currentUser, pointHold);
+  const fallbackMessage = pointHold?.state === "settlement_unknown"
+    ? `${actionLabel}已完成，但积分结算状态待平台对账，请勿重复提交并联系管理员。`
+    : pointHold?.state === "release_unknown"
+      ? `${actionLabel}失败，积分预占释放状态待平台对账，请勿重复提交并联系管理员。`
+      : `${actionLabel}暂时不可用，本次未扣除积分，请稍后重试。`;
+  // 中文注解：待对账状态必须使用确定文案，不能再被底层 fetch/timeout 的普通错误模式覆盖而诱导用户重试。
+  const message = ["settlement_unknown", "release_unknown"].includes(pointHold?.state)
+    ? fallbackMessage
+    : toPublicErrorMessage(error, fallbackMessage);
+  return { status, message };
+}
+
+function sendBillableActionError(response, error, currentUser, pointHold, actionLabel) {
+  const failure = resolveBillableFailureResponse(error, currentUser, pointHold, actionLabel);
+  if (!failure) return false;
+  console.error(error);
+  response.status(failure.status).json({ message: failure.message });
+  return true;
+}
+
 function scoreTemplateAgentCandidate(brief, candidate) {
   const input = cleanTemplateAgentText(brief, 1200).toLowerCase();
   const searchable = `${candidate.name} ${candidate.category} ${candidate.documentType} ${candidate.topic} ${candidate.requirement}`.toLowerCase();
@@ -4728,16 +4974,43 @@ app.get("/api/health", (_request, response) => {
   response.json({
     ok: true,
     gatewayConfigured: hasGatewayConfig(),
-    model: gatewayModel,
     appName: process.env.APP_NAME || "moling_word",
     environment: appEnvironment,
-    molingApiBaseUrl,
-    llmProvider: process.env.LLM_PROVIDER || "http",
+    maximumConcurrentAiRequests,
     sessionRequired: requireMolingSession,
     databaseConfigured: Boolean(dbPool),
-    storageConfigured: Boolean(minioClient),
-    storageBucket
+    storageConfigured: Boolean(minioClient)
   });
+});
+
+async function boundedReadinessCheck(check) {
+  try {
+    const result = await Promise.race([
+      Promise.resolve().then(check),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("readiness timeout")), readinessTimeoutMs))
+    ]);
+    return Boolean(result);
+  } catch {
+    return false;
+  }
+}
+
+app.get("/api/ready", async (_request, response) => {
+  const [databaseReady, storageReady] = await Promise.all([
+    dbPool ? boundedReadinessCheck(async () => {
+      await dbPool.query("SELECT 1");
+      return true;
+    }) : false,
+    minioClient ? boundedReadinessCheck(() => minioClient.bucketExists(storageBucket)) : false
+  ]);
+  const checks = {
+    configuration: validateProductionConfiguration(process.env).length === 0,
+    database: databaseReady,
+    storage: storageReady,
+    gateway: hasGatewayConfig()
+  };
+  const ready = Object.values(checks).every(Boolean);
+  response.status(ready ? 200 : 503).json({ ready, checks });
 });
 
 app.post("/api/molin/launch", async (request, response) => {
@@ -5008,6 +5281,8 @@ app.post("/api/documents/import", authenticateDocumentImport, receiveImportedDoc
 app.post("/api/documents/:id/images", authenticateDocumentImport, receivePageImage, async (request, response) => {
   try {
     if (!request.file || !supportedPageImageMimeTypes.has(request.file.mimetype)) throw createPublicError("请选择 PNG、JPEG、GIF 或 WebP 图片。", 400);
+    const dimensions = readSafeImageDimensions(request.file.buffer, request.file.mimetype);
+    if (!dimensions) throw createPublicError("图片内容无效、尺寸过大或与文件类型不匹配。", 400);
     const pool = await ensureDb();
     const storage = await ensureStorage();
     const currentUser = request.importUser;
@@ -5032,8 +5307,6 @@ app.post("/api/documents/:id/images", authenticateDocumentImport, receivePageIma
       await storage.removeObject(storageBucket, objectKey).catch(() => undefined);
       throw error;
     }
-    let dimensions = {};
-    try { dimensions = imageSize(request.file.buffer) || {}; } catch { dimensions = {}; }
     response.status(201).json({
       image: {
         id: `file-${result.insertId}`,
@@ -5226,12 +5499,14 @@ app.post("/api/documents/:id/duplicate", async (request, response) => {
 
 app.post("/api/documents/:id/export-docx", async (request, response) => {
   const { content } = request.body;
+  let currentUser = { userId: localUserId, appId: normalizeMolingId(molingAppId), productId: normalizeMolingId(molingProductId), isMolingUser: false };
   let pointHold = null;
 
   try {
+    // 中文注解：计费导出先验登录，再连接数据库和存储；未登录必须稳定返回 401，不能被下游故障掩盖。
+    currentUser = await getCurrentUser(request);
     const pool = await ensureDb();
     const storage = await ensureStorage();
-    const currentUser = await getCurrentUser(request);
     const [[documentRow]] = await pool.query(
       "SELECT * FROM documents WHERE id = ? AND user_id = ? AND status <> 'deleted'",
       [request.params.id, currentUser.userId]
@@ -5290,7 +5565,8 @@ app.post("/api/documents/:id/export-docx", async (request, response) => {
     });
   } catch (error) {
     await releasePoints(pointHold).catch((releaseError) => console.warn("Moling point release failed:", releaseError.message));
-    sendError(response, error, 500, "导出 Word 失败，请稍后重试。");
+    if (sendBillableActionError(response, error, currentUser, pointHold, "Word 导出")) return;
+    sendError(response, error, error?.httpStatus || 500, "导出 Word 失败，请稍后重试。");
   }
 });
 app.get("/api/files/:id/download", async (request, response) => {
@@ -5344,6 +5620,14 @@ app.get("/api/files/:id/content", async (request, response) => {
 
 app.post("/api/ai/template-agent", async (request, response) => {
   const { brief, audience, expectedPages, candidates: candidateValue } = request.body || {};
+  let currentUser = { userId: localUserId, appId: normalizeMolingId(molingAppId), productId: normalizeMolingId(molingProductId), isMolingUser: false };
+  try {
+    // 中文注解：先验登录再读取模板白名单，避免未认证请求触发数据库查询和模型准备工作。
+    currentUser = await getCurrentUser(request);
+  } catch (error) {
+    sendError(response, error, error?.httpStatus || 401, "请从墨灵平台进入应用后再使用文档智能体。");
+    return;
+  }
   let candidates = [];
   let fallback;
   try {
@@ -5354,13 +5638,11 @@ app.post("/api/ai/template-agent", async (request, response) => {
     return;
   }
   const startedAt = Date.now();
-  let currentUser = { userId: localUserId, appId: normalizeMolingId(molingAppId), productId: normalizeMolingId(molingProductId), isMolingUser: false };
   let pointHold = null;
   let pointFinalized = false;
   const requestSummary = `用户需求：${cleanTemplateAgentText(brief, 1200)}\n交付对象：${cleanTemplateAgentText(audience, 120) || "未指定"}\n期望篇幅：${validExpectedPages(expectedPages) || "由智能体判断"}`;
 
   try {
-    currentUser = await getCurrentUser(request);
     pointHold = await reservePoints(currentUser, "word_template_agent", usageCosts.word_template_agent, brief || "template-agent");
     const analysisPrompt = `${requestSummary}\n请只返回 JSON：{"intent":"文档交付意图","audience":"交付对象","priorities":["关键要求"],"constraints":["约束"],"summary":"分析摘要"}。priorities 至少 2 项，不得编造数据。`;
     const analysisText = await callMolinChat([
@@ -5443,14 +5725,7 @@ app.post("/api/ai/template-agent", async (request, response) => {
       errorMessage: error instanceof Error ? error.message : "模板智能体规划失败",
       latencyMs: Date.now() - startedAt
     });
-    if (currentUser.isMolingUser || requireMolingSession) {
-      const status = resolveTemplateAgentFailureStatus(error, currentUser, pointHold);
-      const publicMessage = pointHold?.state === "settlement_unknown"
-        ? "模板已生成，但积分结算状态待平台对账，请勿重复提交并联系管理员。"
-        : "模板智能体暂时不可用，本次未扣除积分，请稍后重试。";
-      sendError(response, error, status, publicMessage);
-      return;
-    }
+    if (sendBillableActionError(response, error, currentUser, pointHold, "模板智能体")) return;
     response.json({
       plan: fallback,
       fallback: true,
@@ -5501,6 +5776,7 @@ app.post("/api/ai/generate-outline", async (request, response) => {
       errorMessage: error instanceof Error ? error.message : "大纲生成失败",
       latencyMs: Date.now() - startedAt
     });
+    if (sendBillableActionError(response, error, currentUser, pointHold, "AI 大纲生成")) return;
     response.json({
       outline: fallbackOutline(topic || "AI Word document"),
       fallback: true,
@@ -5552,6 +5828,7 @@ app.post("/api/ai/generate-body", async (request, response) => {
       latencyMs: Date.now() - startedAt
     });
     const fallbackContent = `${topic || "AI Word 文档"}\n\n当前 AI 服务暂时不可用，请检查模型配置或稍后重试。你可以先基于已有大纲继续手动编辑文档。`;
+    if (sendBillableActionError(response, error, currentUser, pointHold, "AI 正文生成")) return;
     response.json({
       content: fallbackContent,
       contentHtml: formatGeneratedBodyHtml(fallbackContent, normalizedOutline, topic),
@@ -5612,6 +5889,7 @@ app.post("/api/ai/edit", async (request, response) => {
       errorMessage: error instanceof Error ? error.message : "AI 编辑失败",
       latencyMs: Date.now() - startedAt
     });
+    if (sendBillableActionError(response, error, currentUser, pointHold, "AI 编辑")) return;
     response.json({
       content: sourceContent,
       fallback: true,
@@ -5620,10 +5898,17 @@ app.post("/api/ai/edit", async (request, response) => {
   }
 });
 app.post("/api/ai/polish", async (request, response) => {
-  const { content } = request.body;
+  const { content, documentId } = request.body;
   const sourceContent = typeof content === "string" ? content : "";
+  const startedAt = Date.now();
+  let currentUser = { userId: localUserId, appId: normalizeMolingId(molingAppId), productId: normalizeMolingId(molingProductId), isMolingUser: false };
+  let pointHold = null;
+  const prompt = `Polish the following content in Simplified Chinese:\n\n${sourceContent}`;
 
   try {
+    // 中文注解：兼容旧客户端的 polish 路由必须复用与新版编辑接口相同的登录、预占和结算边界，不能成为免费模型旁路。
+    currentUser = await getCurrentUser(request);
+    pointHold = await reservePoints(currentUser, "word_polish", usageCosts.word_polish, documentId || "legacy-polish");
     const polished = await callMolinChat([
       {
         role: "system",
@@ -5631,12 +5916,33 @@ app.post("/api/ai/polish", async (request, response) => {
       },
       {
         role: "user",
-        content: `Polish the following content in Simplified Chinese:\n\n${sourceContent}`
+        content: prompt
       }
     ]);
-
-    response.json({ content: validateAiText(polished, { minLength: 10 }) });
+    const validContent = validateAiText(polished, { minLength: 10 });
+    await settlePoints(pointHold, usageCosts.word_polish, { userId: currentUser.userId, usageType: "word_polish" });
+    await logAiRequest({
+      userId: currentUser.userId,
+      documentId,
+      actionType: "polish_legacy",
+      prompt,
+      responseText: validContent,
+      latencyMs: Date.now() - startedAt
+    });
+    response.json({ content: validContent });
   } catch (error) {
+    await releasePoints(pointHold).catch((releaseError) => console.warn("Moling point release failed:", releaseError.message));
+    await logAiRequest({
+      userId: currentUser.userId,
+      documentId,
+      actionType: "polish_legacy",
+      prompt,
+      responseText: "",
+      status: "failed",
+      errorMessage: error instanceof Error ? error.message : "AI 润色失败",
+      latencyMs: Date.now() - startedAt
+    });
+    if (sendBillableActionError(response, error, currentUser, pointHold, "AI 润色")) return;
     response.json({
       content: sourceContent,
       fallback: true,
@@ -5644,9 +5950,13 @@ app.post("/api/ai/polish", async (request, response) => {
     });
   }
 });
-export { appendBillingReconciliationOutbox, createBillingReconciliationPayload, createDocxBuffer, createTemplateAgentFallbackPlan, formatGeneratedBodyHtml, legacyDocTextToHtml, loadTemplateAgentCandidates, normalizeTemplateAgentPlan, normalizeTemplateAgentReview, normalizeTemplateBriefAnalysis, parseImportedDocument, parseStyledDocxToHtml, persistBillingReconciliationTask, resolveTemplateAgentFailureStatus, sanitizeImportedHtml, shouldReleasePointHold };
+export { appendBillingReconciliationOutbox, createBillingReconciliationPayload, createDocxBuffer, createTemplateAgentFallbackPlan, formatGeneratedBodyHtml, legacyDocTextToHtml, loadTemplateAgentCandidates, normalizeTemplateAgentPlan, normalizeTemplateAgentReview, normalizeTemplateBriefAnalysis, parseImportedDocument, parseStyledDocxToHtml, persistBillingReconciliationTask, readSafeImageDimensions, resolveBillableFailureResponse, resolveTemplateAgentFailureStatus, sanitizeImportedHtml, shouldReleasePointHold, validateProductionConfiguration };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const productionConfigurationErrors = validateProductionConfiguration(process.env);
+  if (productionConfigurationErrors.length) {
+    throw new Error(`生产配置校验失败：\n- ${productionConfigurationErrors.join("\n- ")}`);
+  }
   app.listen(port, "127.0.0.1", () => {
     console.log(`Local API server running at http://127.0.0.1:${port}`);
   });

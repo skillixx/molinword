@@ -68,6 +68,9 @@ const apiProcess = spawn(process.execPath, ["server/index.js"], {
     ...process.env,
     LOCAL_API_PORT: String(apiPort),
     DATABASE_URL: "",
+    STORAGE_ENDPOINT: "",
+    STORAGE_ACCESS_KEY_ID: "",
+    STORAGE_SECRET_ACCESS_KEY: "",
     LOCAL_MOLING_MOCK: "true",
     REQUIRE_MOLING_SESSION: "false",
     LLM_API_URL: `http://127.0.0.1:${modelAddress.port}/v1/chat/completions`,
@@ -94,6 +97,13 @@ try {
     }
   }
   assert.ok(ready, `API 未在期限内启动：${serverOutput.join("")}`);
+
+  const readinessResponse = await fetch(`http://127.0.0.1:${apiPort}/api/ready`);
+  assert.equal(readinessResponse.status, 503, "未配置数据库和存储时就绪检查必须失败");
+  const readiness = await readinessResponse.json();
+  assert.equal(readiness.ready, false);
+  assert.equal(readiness.checks.database, false);
+  assert.equal(readiness.checks.storage, false);
 
   const response = await fetch(`http://127.0.0.1:${apiPort}/api/ai/template-agent`, {
     method: "POST",
