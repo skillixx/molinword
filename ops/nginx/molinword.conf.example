@@ -53,7 +53,7 @@ server {
         add_header RateLimit-Remaining "0" always;
         add_header RateLimit-Reset "1" always;
         default_type application/json;
-        return 429 '{"error":"AI 请求过于频繁，请稍后重试。"}';
+        return 429 '{"message":"AI 请求过于频繁，请稍后重试。"}';
     }
 
     location @molinword_api_rate_limited {
@@ -63,7 +63,7 @@ server {
         add_header RateLimit-Remaining "0" always;
         add_header RateLimit-Reset "1" always;
         default_type application/json;
-        return 429 '{"error":"请求过于频繁，请稍后重试。"}';
+        return 429 '{"message":"请求过于频繁，请稍后重试。"}';
     }
 
     location = /index.html {

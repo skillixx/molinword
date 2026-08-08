@@ -159,13 +159,13 @@ async function importOutbox() {
           (user_id, usage_type, operation_type, hold_id, idempotency_key, actual_amount, settlement_state, status, attempt_count, last_error, next_retry_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, CURRENT_TIMESTAMP)
          ON DUPLICATE KEY UPDATE
-           operation_type = IF(status IN ('resolved', 'manual_review', 'processing'), operation_type, VALUES(operation_type)),
-           actual_amount = IF(status IN ('resolved', 'manual_review', 'processing'), actual_amount, VALUES(actual_amount)),
-           settlement_state = IF(status IN ('resolved', 'manual_review', 'processing'), settlement_state, VALUES(settlement_state)),
-           last_error = IF(status IN ('resolved', 'manual_review', 'processing'), last_error, VALUES(last_error)),
-           next_retry_at = IF(status IN ('resolved', 'manual_review', 'processing'), next_retry_at, CURRENT_TIMESTAMP),
-           claim_token = IF(status IN ('resolved', 'manual_review', 'processing'), claim_token, NULL),
-           status = IF(status IN ('resolved', 'manual_review', 'processing'), status, 'pending')`,
+           operation_type = IF(status IN ('resolved', 'manual_review', 'processing', 'retry'), operation_type, VALUES(operation_type)),
+           actual_amount = IF(status IN ('resolved', 'manual_review', 'processing', 'retry'), actual_amount, VALUES(actual_amount)),
+           settlement_state = IF(status IN ('resolved', 'manual_review', 'processing', 'retry'), settlement_state, VALUES(settlement_state)),
+           last_error = IF(status IN ('resolved', 'manual_review', 'processing', 'retry'), last_error, VALUES(last_error)),
+           next_retry_at = IF(status IN ('resolved', 'manual_review', 'processing', 'retry'), next_retry_at, CURRENT_TIMESTAMP),
+           claim_token = IF(status IN ('resolved', 'manual_review', 'processing', 'retry'), claim_token, NULL),
+           status = IF(status IN ('resolved', 'manual_review', 'processing', 'retry'), status, 'pending')`,
         [
           String(item.userId || "unknown").slice(0, 64),
           String(item.usageType || "unknown").slice(0, 60),

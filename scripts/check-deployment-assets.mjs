@@ -22,6 +22,7 @@ assert.match(nginx, /error_page\s+429\s+=\s+@molinword_api_rate_limited;/);
 for (const header of ["Retry-After", "RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset"]) {
   assert.match(nginx, new RegExp(`add_header\\s+${header}\\s+`), `Nginx 自身限流响应缺少 ${header}`);
 }
+assert.equal((nginx.match(/return 429 '\{"message":/g) || []).length, 2, "Nginx 限流 JSON 必须使用前端可识别的 message 字段");
 const securityHeadersInclude = "include /etc/nginx/snippets/molinword-security-headers.conf;";
 assert.ok(nginx.split(securityHeadersInclude).length - 1 >= 5, "服务器、缓存与限流 location 必须统一加载安全响应头");
 const securityHeaders = await readRequired("ops/nginx/molinword-security-headers.conf");
@@ -60,7 +61,7 @@ assert.match(reconcileTimer, /OnUnitActiveSec=5m/);
 assert.match(reconcileTimer, /Persistent=true/);
 const reconciliationWorker = await readRequired("scripts/billing-reconciliation.mjs");
 assert.match(reconciliationWorker, /error\?\.code === "ENOENT"/, "outbox 尚未创建时必须按零条记录处理，不能阻断数据库对账重试");
-assert.match(reconciliationWorker, /status IN \('resolved', 'manual_review', 'processing'\)/, "重复导入 outbox 时必须保留已完成、人工复核和租约处理中状态");
+assert.match(reconciliationWorker, /status IN \('resolved', 'manual_review', 'processing', 'retry'\)/, "重复导入 outbox 时必须保留已完成、人工复核、租约处理中和退避状态");
 const maintenanceService = await readRequired("ops/systemd/molinword-maintenance@.service");
 for (const expected of [
   "WorkingDirectory=/opt/molinword/candidate",
@@ -105,6 +106,9 @@ const runbook = await readRequired("ops/README.md");
 assert.doesNotMatch(runbook, /\/bin\/sh\s+-c|\bsource\s+\/etc\/molinword|\. \/etc\/molinword\/molinword\.env/, "运维命令不能用 shell 执行 EnvironmentFile 中的密钥值");
 assert.match(runbook, /molinword-maintenance@check:runtime-config:production\.service/);
 assert.match(runbook, /molinword-maintenance@billing:reconcile:list\.service/);
+assert.match(runbook, /\/etc\/nginx\/sites-enabled\/molinword\.conf/);
+assert.ok(runbook.indexOf("/etc/nginx/sites-enabled/molinword.conf") < runbook.indexOf("sudo nginx -t"), "站点必须先启用再做 Nginx 全量语法检查");
+assert.match(runbook, /sudo systemctl restart molinword-api\.service/, "切换版本后必须重启已运行的 API 服务");
 for (const heading of ["发布", "验收", "回滚", "对账", "证据边界"]) {
   assert.match(runbook, new RegExp(`## .*${heading}`), `部署手册缺少“${heading}”章节`);
 }

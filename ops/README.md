@@ -48,13 +48,15 @@ sudo systemctl start 'molinword-maintenance@db:migrate:billing-reconciliation.se
 sudo systemctl start 'molinword-maintenance@db:seed:templates.service'
 ```
 
-迁移完成后再切换原子软链接并启动服务：
+迁移完成后先启用并验证 Nginx 站点；语法通过后再切换原子软链接，并明确重启 API，避免已运行服务继续使用旧版本：
 
 ```bash
+sudo ln -sfn /etc/nginx/sites-available/molinword.conf /etc/nginx/sites-enabled/molinword.conf
+sudo nginx -t
 sudo ln -sfn /opt/molinword/releases/<release-id> /opt/molinword/current
 sudo systemctl daemon-reload
-sudo nginx -t
-sudo systemctl enable --now molinword-api.service
+sudo systemctl enable molinword-api.service
+sudo systemctl restart molinword-api.service
 sudo systemctl enable --now molinword-reconcile.timer
 sudo systemctl reload nginx
 ```
