@@ -4216,6 +4216,22 @@ function buildAiAuditRecord({ requestId = null, actionType, prompt, responseText
   };
 }
 
+const aiEditInstructions = Object.freeze({
+  continue: "Continue writing based on the selected text.",
+  expand: "Expand the selected text with more detail.",
+  shorten: "Shorten the selected text while keeping key information.",
+  correct: "Correct typos, grammar issues, and unnatural expressions.",
+  format: "Optimize the selected text as a professional Word document section. Keep the original meaning, improve paragraph hierarchy, normalize section titles, split long paragraphs, convert obvious enumerations into clear numbered or bullet-style lines, and make the structure easier to read.",
+  polish: "Polish the selected text to be more formal, clear, and suitable for an office Word document."
+});
+
+function normalizeAiEditAction(action) {
+  // 中文注解：客户端动作只允许固定业务枚举；未知值按润色执行且不得进入审计、计费幂等键等持久字段。
+  return typeof action === "string" && Object.prototype.hasOwnProperty.call(aiEditInstructions, action)
+    ? action
+    : "polish";
+}
+
 async function logAiRequest({ userId = localUserId, documentId = null, ...auditInput }) {
   if (!dbPool) return;
   const auditRecord = buildAiAuditRecord(auditInput);
@@ -6107,23 +6123,16 @@ app.post("/api/ai/generate-body", async (request, response) => {
 app.post("/api/ai/edit", async (request, response) => {
   const { action, content, documentId } = request.body;
   const sourceContent = typeof content === "string" ? content : "";
+  const normalizedAction = normalizeAiEditAction(action);
   const startedAt = Date.now();
   let currentUser = { userId: localUserId, appId: normalizeMolingId(molingAppId), productId: normalizeMolingId(molingProductId), isMolingUser: false };
   let pointHold = null;
-  const actionMap = {
-    continue: "Continue writing based on the selected text.",
-    expand: "Expand the selected text with more detail.",
-    shorten: "Shorten the selected text while keeping key information.",
-    correct: "Correct typos, grammar issues, and unnatural expressions.",
-    format: "Optimize the selected text as a professional Word document section. Keep the original meaning, improve paragraph hierarchy, normalize section titles, split long paragraphs, convert obvious enumerations into clear numbered or bullet-style lines, and make the structure easier to read.",
-    polish: "Polish the selected text to be more formal, clear, and suitable for an office Word document."
-  };
-  const instruction = actionMap[action] || actionMap.polish;
+  const instruction = aiEditInstructions[normalizedAction];
   const prompt = `${instruction}\nReturn only the revised Simplified Chinese text.\n\n<<<TEXT_START\n${sourceContent}\nTEXT_END>>>`;
 
   try {
     currentUser = await getCurrentUser(request);
-    pointHold = await reservePoints(currentUser, "word_polish", 2, documentId || action || "edit");
+    pointHold = await reservePoints(currentUser, "word_polish", 2, documentId || normalizedAction);
     const result = await callMolinChat([
       {
         role: "system",
@@ -6132,13 +6141,13 @@ app.post("/api/ai/edit", async (request, response) => {
       { role: "user", content: prompt }
     ]);
 
-    const validContent = validateAiText(result, { minLength: action === "shorten" ? 4 : 10 });
+    const validContent = validateAiText(result, { minLength: normalizedAction === "shorten" ? 4 : 10 });
     await settlePoints(pointHold, 2, { userId: currentUser.userId, usageType: "word_polish" });
     await logAiRequest({
       requestId: request.requestId,
       userId: currentUser.userId,
       documentId,
-      actionType: action || "polish",
+      actionType: normalizedAction,
       prompt,
       responseText: validContent,
       latencyMs: Date.now() - startedAt
@@ -6150,7 +6159,7 @@ app.post("/api/ai/edit", async (request, response) => {
       requestId: request.requestId,
       userId: currentUser.userId,
       documentId,
-      actionType: action || "polish",
+      actionType: normalizedAction,
       prompt,
       responseText: "",
       status: "failed",
@@ -6233,7 +6242,7 @@ app.use((error, _request, response, next) => {
   sendError(response, error, 500, "服务暂时不可用，请稍后重试。");
 });
 
-export { appendBillingReconciliationOutbox, buildAiAuditRecord, createBillingReconciliationPayload, createDocxBuffer, createTemplateAgentFallbackPlan, formatGeneratedBodyHtml, legacyDocTextToHtml, loadTemplateAgentCandidates, normalizeTemplateAgentPlan, normalizeTemplateAgentReview, normalizeTemplateBriefAnalysis, parseImportedDocument, parseStyledDocxToHtml, persistBillingReconciliationTask, readSafeImageDimensions, resolveBillableFailureResponse, resolveTemplateAgentFailureStatus, sanitizeImportedHtml, shouldReleasePointHold, validateProductionConfiguration };
+export { appendBillingReconciliationOutbox, buildAiAuditRecord, createBillingReconciliationPayload, createDocxBuffer, createTemplateAgentFallbackPlan, formatGeneratedBodyHtml, legacyDocTextToHtml, loadTemplateAgentCandidates, normalizeAiEditAction, normalizeTemplateAgentPlan, normalizeTemplateAgentReview, normalizeTemplateBriefAnalysis, parseImportedDocument, parseStyledDocxToHtml, persistBillingReconciliationTask, readSafeImageDimensions, resolveBillableFailureResponse, resolveTemplateAgentFailureStatus, sanitizeImportedHtml, shouldReleasePointHold, validateProductionConfiguration };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const productionConfigurationErrors = validateProductionConfiguration(process.env);

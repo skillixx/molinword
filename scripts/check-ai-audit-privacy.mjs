@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { buildAiAuditRecord, validateProductionConfiguration } from "../server/index.js";
+import { buildAiAuditRecord, normalizeAiEditAction, validateProductionConfiguration } from "../server/index.js";
 
 const prompt = "客户手机号 138****0000 与项目预算";
 const responseText = "建议按已确认范围执行。";
@@ -28,6 +28,11 @@ const developmentRecord = buildAiAuditRecord({ actionType: "polish", prompt, res
 assert.equal(developmentRecord.prompt, prompt);
 assert.equal(developmentRecord.responseText, responseText);
 assert.equal(buildAiAuditRecord({ actionType: "polish", prompt, responseText }, { APP_ENV: "development", AI_AUDIT_CONTENT_MODE: "disabled" }), null);
+for (const action of ["continue", "expand", "shorten", "correct", "format", "polish"]) {
+  assert.equal(normalizeAiEditAction(action), action);
+}
+assert.equal(normalizeAiEditAction("客户机密正文"), "polish", "未知客户端动作不得进入 AI 审计和计费幂等字段");
+assert.equal(normalizeAiEditAction({ action: "expand" }), "polish");
 
 const productionBase = {
   APP_ENV: "production",
