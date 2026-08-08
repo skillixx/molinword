@@ -509,14 +509,23 @@ const formalTemplateBuffer = await createDocxBuffer({ title: "商业化评审报
 const formalTemplateZip = await JSZip.loadAsync(formalTemplateBuffer);
 const formalTemplateXml = await formalTemplateZip.file("word/document.xml")?.async("string") || "";
 const formalTemplateTables = formalTemplateXml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/g) || [];
+const pageWidth = Number(formalTemplateXml.match(/<w:pgSz[^>]*w:w="(\d+)"/)?.[1] || 0);
+const pageMargins = formalTemplateXml.match(/<w:pgMar[^>]*\/>/)?.[0] || "";
+const pageContentWidth = pageWidth
+  - Number(pageMargins.match(/w:left="(\d+)"/)?.[1] || 0)
+  - Number(pageMargins.match(/w:right="(\d+)"/)?.[1] || 0);
 assert.equal(formalTemplateTables.length, 3, "元数据表和两个行动表都必须导出");
+assert.equal(pageContentWidth, 9026, "默认 A4 页面正文宽度应保持稳定");
 for (const tableXml of formalTemplateTables) {
   // 中文注解：正式模板使用固定 DXA 表格几何和可重复表头，避免 Word 版本差异导致列宽漂移并提升辅助技术可读性。
-  assert.match(tableXml, /<w:tblW w:type="dxa" w:w="9360"\/>/);
+  const tableWidth = Number(tableXml.match(/<w:tblW w:type="dxa" w:w="(\d+)"\/>/)?.[1] || 0);
+  const tableIndent = Number(tableXml.match(/<w:tblInd w:type="dxa" w:w="(\d+)"\/>/)?.[1] || 0);
+  assert.equal(tableWidth, 8880);
   assert.match(tableXml, /<w:tblInd w:type="dxa" w:w="120"\/>/);
   assert.match(tableXml, /<w:tblLayout w:type="fixed"\/>/);
   assert.match(tableXml.match(/<w:tr>[\s\S]*?<\/w:tr>/)?.[0] || "", /<w:tblHeader\/>/);
   assert.doesNotMatch(tableXml, /<w:tblW w:type="pct"/);
+  assert.ok(tableWidth + tableIndent <= pageContentWidth, "固定表格及缩进不能越过 A4 正文区");
 }
 
 console.log("DOCX export format check passed");
