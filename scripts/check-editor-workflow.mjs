@@ -1199,6 +1199,15 @@ try {
     : "");
   assert.equal(previewHighlightColor, "rgb(0, 128, 128)");
 
+  // 中文注解：分页器会在图片完成测量后替换表格克隆；等待最终左缩进和自动右余量同时生效，避免读取过渡帧造成偶发误报。
+  await page.waitForFunction(() => Array.from(document.querySelectorAll(".page-body table")).some((table) => {
+    if (!table.isConnected || !table.textContent?.includes("商务评审")) return false;
+    const style = getComputedStyle(table);
+    return Math.round(table.getBoundingClientRect().width) === 504
+      && Math.abs(Number.parseFloat(style.marginLeft) - 37.8) < 0.2
+      && Number.parseFloat(style.marginRight) > 50;
+  }));
+
   const result = await page.evaluate(() => {
     const pages = Array.from(document.querySelectorAll(".page-sheet"));
     const sourceListItems = Array.from(document.querySelectorAll(".word-editor > ol > li"));
@@ -1384,7 +1393,7 @@ try {
   assert.equal(result.tableGeometry.borderCollapse, "separate");
   assert.equal(result.tableGeometry.borderSpacing, "8px");
   assert.ok(Math.abs(result.tableGeometry.marginLeft - 37.8) < 0.2);
-  assert.ok(result.tableGeometry.marginRight > 50);
+  assert.ok(result.tableGeometry.marginRight > 50, `分页表格右侧自动余量未稳定: ${JSON.stringify(result.tableGeometry)}`);
   assert.deepEqual(result.previewBusinessCellFormat, {
     paddingTop: "12px",
     paddingRight: "12px",
