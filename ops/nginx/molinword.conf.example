@@ -25,6 +25,13 @@ server {
     index index.html;
     client_max_body_size 20m;
 
+    # 中文注解：与仓库性能门禁统一使用六级 gzip，确保预算反映生产实际传输而不是只在构建机压缩。
+    gzip on;
+    gzip_comp_level 6;
+    gzip_min_length 1024;
+    gzip_vary on;
+    gzip_types application/javascript text/javascript text/css application/json image/svg+xml;
+
     include /etc/nginx/snippets/molinword-security-headers.conf;
 
     # 中文注解：AI 路由同时受通用 API 和更严格 AI 桶约束，且必须写在 /api/ 之前。

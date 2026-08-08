@@ -11,7 +11,7 @@ npm run check:commercial-readiness
 
 仓库同时提供以下可审计部署基线：
 
-- `ops/nginx/*`：HTTPS、统一安全响应头、反向代理、带重试头的限流与 SPA 回退。
+- `ops/nginx/*`：HTTPS、统一安全响应头、反向代理、带重试头的限流、SPA 回退与性能预算一致的 JS/CSS gzip。
 - `ops/systemd/molinword-api.service`：运行配置预检、故障重启、优雅退出与最小写目录。
 - `ops/systemd/molinword-reconcile.*`：待对账 outbox 导入和幂等重试定时任务。
 - `ops/systemd/molinword-ai-audit-retention.*`：按批准保留期分批清理 AI 审计元数据。

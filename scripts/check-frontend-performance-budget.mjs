@@ -35,7 +35,7 @@ for (const key of initialKeys) {
   chunkMetrics.push({
     file: item.file,
     rawBytes: content.length,
-    gzipBytes: gzipSync(content, { level: 9 }).length
+    gzipBytes: gzipSync(content, { level: 6 }).length
   });
 }
 
@@ -45,7 +45,7 @@ for (const cssFile of initialCssFiles) {
   cssMetrics.push({
     file: cssFile,
     rawBytes: content.length,
-    gzipBytes: gzipSync(content, { level: 9 }).length
+    gzipBytes: gzipSync(content, { level: 6 }).length
   });
 }
 

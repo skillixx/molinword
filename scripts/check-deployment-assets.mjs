@@ -16,6 +16,12 @@ assert.match(nginx, /limit_req_zone\s+\$binary_remote_addr\s+zone=molinword_ai:/
 assert.ok(nginx.indexOf("location ^~ /api/ai/ {") < nginx.indexOf("location ^~ /api/ {"), "AI 限流 location 必须优先于通用 API location");
 assert.match(nginx, /client_max_body_size\s+20m;/);
 assert.match(nginx, /http2\s+on;/);
+assert.match(nginx, /gzip\s+on;/, "生产入口必须实际启用 gzip 才能兑现传输预算");
+assert.match(nginx, /gzip_comp_level\s+6;/, "生产 gzip 级别必须与性能门禁一致");
+const gzipTypes = nginx.match(/gzip_types\s+([^;]+);/)?.[1] ?? "";
+for (const mimeType of ["application/javascript", "text/javascript", "text/css"]) {
+  assert.match(gzipTypes, new RegExp(`(?:^|\\s)${mimeType.replace("/", "\\/")}(?:\\s|$)`), `生产 gzip 类型缺少 ${mimeType}`);
+}
 assert.match(nginx, /try_files\s+\$uri\s+\$uri\/\s+\/index\.html;/);
 assert.match(nginx, /location = \/index\.html \{[\s\S]*?Cache-Control "no-store" always;/, "SPA 入口必须禁止缓存以发现新版本");
 assert.match(nginx, /location \^~ \/assets\/ \{[\s\S]*?Cache-Control "public, max-age=31536000, immutable" always;/, "哈希静态资源必须启用长期不可变缓存");
@@ -148,6 +154,7 @@ for (const chunkName of ["vendor-react", "vendor-icons", "editor-tiptap", "edito
 const frontendPerformanceCheck = await readRequired("scripts/check-frontend-performance-budget.mjs");
 assert.match(frontendPerformanceCheck, /maximumInitialGzipBytes/);
 assert.match(frontendPerformanceCheck, /maximumInitialCssGzipBytes/);
+assert.equal(frontendPerformanceCheck.match(/gzipSync\(content, \{ level: 6 \}\)/g)?.length, 2, "JS 与 CSS 都必须按生产 gzip 级别计算");
 assert.match(frontendPerformanceCheck, /initialRequestCount\s*=\s*chunkMetrics\.length\s*\+\s*cssMetrics\.length/);
 assert.match(frontendPerformanceCheck, /collectInitialImports/);
 const runbook = await readRequired("ops/README.md");
