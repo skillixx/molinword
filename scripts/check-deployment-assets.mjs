@@ -17,6 +17,8 @@ assert.ok(nginx.indexOf("location ^~ /api/ai/ {") < nginx.indexOf("location ^~ /
 assert.match(nginx, /client_max_body_size\s+20m;/);
 assert.match(nginx, /http2\s+on;/);
 assert.match(nginx, /try_files\s+\$uri\s+\$uri\/\s+\/index\.html;/);
+assert.match(nginx, /location = \/index\.html \{[\s\S]*?Cache-Control "no-store" always;/, "SPA 入口必须禁止缓存以发现新版本");
+assert.match(nginx, /location \^~ \/assets\/ \{[\s\S]*?Cache-Control "public, max-age=31536000, immutable" always;/, "哈希静态资源必须启用长期不可变缓存");
 assert.match(nginx, /error_page\s+429\s+=\s+@molinword_ai_rate_limited;/);
 assert.match(nginx, /error_page\s+429\s+=\s+@molinword_api_rate_limited;/);
 for (const header of ["Retry-After", "RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset"]) {
@@ -131,10 +133,22 @@ assert.match(runtimeCheck, /APP_ENV 必须设置为 production/);
 const packageJson = JSON.parse(await readRequired("package.json"));
 assert.equal(packageJson.scripts?.["check:runtime-config"], "node scripts/check-runtime-config.mjs");
 assert.equal(packageJson.scripts?.["check:runtime-config:production"], "node scripts/check-runtime-config.mjs --require-production");
+assert.equal(packageJson.scripts?.["check:frontend-performance"], "npm run build && node scripts/check-frontend-performance-budget.mjs");
 assert.equal(packageJson.scripts?.["db:migrate:ai-audit-privacy"], "node database/migrate-ai-audit-privacy.mjs");
 assert.equal(packageJson.scripts?.["ai-audit:cleanup"], "node scripts/ai-audit-maintenance.mjs cleanup");
 assert.equal(packageJson.scripts?.["ai-audit:redact-existing"], "node scripts/ai-audit-maintenance.mjs redact-existing");
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:deployment-assets/);
+assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:frontend-performance/);
+const viteConfiguration = await readRequired("vite.config.ts");
+assert.match(viteConfiguration, /manifest:\s*true/);
+assert.match(viteConfiguration, /onlyExplicitManualChunks:\s*true/);
+for (const chunkName of ["vendor-react", "vendor-icons", "editor-tiptap", "editor-prosemirror"]) {
+  assert.ok(viteConfiguration.includes(`return "${chunkName}"`), `Vite 商业缓存分块缺少 ${chunkName}`);
+}
+const frontendPerformanceCheck = await readRequired("scripts/check-frontend-performance-budget.mjs");
+assert.match(frontendPerformanceCheck, /maximumInitialGzipBytes/);
+assert.match(frontendPerformanceCheck, /maximumInitialCssGzipBytes/);
+assert.match(frontendPerformanceCheck, /collectInitialImports/);
 const runbook = await readRequired("ops/README.md");
 assert.doesNotMatch(runbook, /\/bin\/sh\s+-c|\bsource\s+\/etc\/molinword|\. \/etc\/molinword\/molinword\.env/, "运维命令不能用 shell 执行 EnvironmentFile 中的密钥值");
 assert.match(runbook, /molinword-maintenance@check:runtime-config:production\.service/);
