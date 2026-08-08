@@ -23,21 +23,22 @@ function parseBoundedInteger(name, fallback, minimum, maximum) {
 const retentionDays = parseBoundedInteger("AI_AUDIT_RETENTION_DAYS", 30, 1, 365);
 const batchSize = parseBoundedInteger("AI_AUDIT_CLEANUP_BATCH_SIZE", 1000, 1, 10000);
 const maxBatches = parseBoundedInteger("AI_AUDIT_CLEANUP_MAX_BATCHES", 20, 1, 100);
+const redactionBatchSize = parseBoundedInteger("AI_AUDIT_REDACTION_BATCH_SIZE", 10, 1, 100);
 const auditHashKey = String(process.env.AI_AUDIT_HASH_KEY || "");
 if (mode === "redact-existing" && auditHashKey.length < 32) {
   throw new Error("AI_AUDIT_HASH_KEY 至少需要 32 个字符，无法安全脱敏历史审计正文。");
 }
 const connection = await mysql.createConnection(process.env.DATABASE_URL);
 
-async function runBatches(operation) {
+async function runBatches(operation, operationBatchSize = batchSize) {
   let totalAffected = 0;
   let lastAffected = 0;
   for (let batch = 0; batch < maxBatches; batch += 1) {
     lastAffected = await operation();
     totalAffected += lastAffected;
-    if (lastAffected < batchSize) break;
+    if (lastAffected < operationBatchSize) break;
   }
-  return { totalAffected, batchLimitReached: lastAffected === batchSize };
+  return { totalAffected, batchLimitReached: lastAffected === operationBatchSize };
 }
 
 async function cleanupExpiredLogs() {
@@ -68,43 +69,41 @@ function createAuditFingerprint(value) {
 
 async function redactExistingLogs() {
   const result = await runBatches(async () => {
-    const [rows] = await connection.query(
-      `SELECT id, prompt, response
+    const [idRows] = await connection.query(
+      `SELECT id
        FROM ai_request_logs
        WHERE prompt IS NOT NULL OR response IS NOT NULL
        ORDER BY id
-       LIMIT ${batchSize}`
+       LIMIT ${redactionBatchSize}`
     );
-    if (!rows.length) return 0;
-    await connection.beginTransaction();
-    try {
+    // 中文注解：首个查询只缓冲小型 ID 列表；正文逐条读取并由单条 UPDATE 自动提交，避免 MEDIUMTEXT 批量驻留和长事务。
+    for (const { id } of idRows) {
+      const [[row]] = await connection.execute(
+        "SELECT id, prompt, response FROM ai_request_logs WHERE id = ? AND (prompt IS NOT NULL OR response IS NOT NULL)",
+        [id]
+      );
+      if (!row) continue;
       // 中文注解：专用 HMAC 密钥只在 Node 进程内使用；参数化更新不把客户正文或密钥拼入 SQL 与日志。
-      for (const row of rows) {
-        await connection.execute(
-          `UPDATE ai_request_logs
-           SET prompt_hmac_sha256 = COALESCE(prompt_hmac_sha256, ?),
-               response_hmac_sha256 = COALESCE(response_hmac_sha256, ?),
-               prompt_chars = COALESCE(prompt_chars, ?),
-               response_chars = COALESCE(response_chars, ?),
-               prompt = NULL,
-               response = NULL
-           WHERE id = ?`,
-          [
-            createAuditFingerprint(row.prompt),
-            createAuditFingerprint(row.response),
-            Array.from(String(row.prompt || "")).length,
-            Array.from(String(row.response || "")).length,
-            row.id
-          ]
-        );
-      }
-      await connection.commit();
-    } catch (error) {
-      await connection.rollback();
-      throw error;
+      await connection.execute(
+        `UPDATE ai_request_logs
+         SET prompt_hmac_sha256 = COALESCE(prompt_hmac_sha256, ?),
+             response_hmac_sha256 = COALESCE(response_hmac_sha256, ?),
+             prompt_chars = COALESCE(prompt_chars, ?),
+             response_chars = COALESCE(response_chars, ?),
+             prompt = NULL,
+             response = NULL
+         WHERE id = ?`,
+        [
+          createAuditFingerprint(row.prompt),
+          createAuditFingerprint(row.response),
+          Array.from(String(row.prompt || "")).length,
+          Array.from(String(row.response || "")).length,
+          row.id
+        ]
+      );
     }
-    return rows.length;
-  });
+    return idRows.length;
+  }, redactionBatchSize);
   if (!result.batchLimitReached) return { ...result, hasRemaining: false };
   const [[remainingRow]] = await connection.query(
     "SELECT EXISTS(SELECT 1 FROM ai_request_logs WHERE prompt IS NOT NULL OR response IS NOT NULL LIMIT 1) AS has_remaining"

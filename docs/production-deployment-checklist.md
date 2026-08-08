@@ -38,7 +38,7 @@ npm run check:commercial-readiness
 - `SHUTDOWN_TIMEOUT_MS` 应覆盖智能体最多五段模型调用、最多五次平台调用、模型重试与本地结算清理；生产配置门禁会按相关超时计算最小值。进程收到终止信号后先停止接收新请求，再等待在途请求完成。
 - 生产环境默认启用最小化 JSON 访问日志，并通过 `X-Request-Id` 关联请求；日志不应采集 Cookie、查询串和请求体。
 - `AI_AUDIT_CONTENT_MODE=metadata`，只保存请求关联、固定动作、HMAC 指纹和统计信息；`AI_AUDIT_HASH_KEY` 使用独立的至少 32 字符密钥并由密钥系统注入，生产门禁禁止完整提示词和模型回复落库。
-- `AI_AUDIT_RETENTION_DAYS` 必须为 1 至 365 天并经业务、隐私与合规审批；`AI_AUDIT_CLEANUP_BATCH_SIZE`、`AI_AUDIT_CLEANUP_MAX_BATCHES` 控制单轮删除规模。
+- `AI_AUDIT_RETENTION_DAYS` 必须为 1 至 365 天并经业务、隐私与合规审批；`AI_AUDIT_CLEANUP_BATCH_SIZE`、`AI_AUDIT_CLEANUP_MAX_BATCHES` 控制单轮删除规模，`AI_AUDIT_REDACTION_BATCH_SIZE` 以独立小批次限制历史正文内存占用。
 
 生产配置不完整时 `server/index.js` 会在监听端口前直接退出，错误只列缺失项，不打印密钥值。
 发布目录切换前应在目标环境加载 `/etc/molinword/molinword.env` 后运行 `npm run check:runtime-config -- --require-production`，不得把变量值展开到命令行参数或日志。

@@ -82,6 +82,16 @@ for (const reusedKey of ["INTERNAL_API_TOKEN", "LLM_API_KEY", "STORAGE_SECRET_AC
     `AI 审计 HMAC 密钥不能与 ${reusedKey} 复用`
   );
 }
+const reusedDatabasePassword = "database-password%40at-least-32-characters";
+const reusedDatabasePasswordErrors = validateProductionConfiguration({
+  ...validProductionConfiguration,
+  DATABASE_URL: `mysql://word_app:${reusedDatabasePassword}@db.internal:3306/moling_word`,
+  AI_AUDIT_HASH_KEY: decodeURIComponent(reusedDatabasePassword)
+});
+assert.ok(
+  reusedDatabasePasswordErrors.some((message) => message.includes("DATABASE_URL 数据库密码复用")),
+  "AI 审计 HMAC 密钥不能与 URL 编码后的数据库密码复用"
+);
 
 // 中文注解：运行时仍兼容历史 WORD_* 命名，启动门禁必须采用相同解析规则，避免有效旧部署无法升级。
 const legacyAliasErrors = validateProductionConfiguration({

@@ -595,6 +595,14 @@ function validateProductionConfiguration(environment = {}) {
       errors.push(`AI_AUDIT_HASH_KEY 必须使用独立密钥，不能与 ${key} 复用`);
     }
   }
+  try {
+    const databasePassword = decodeURIComponent(new URL(configuration.DATABASE_URL).password || "");
+    if (!isPlaceholder(auditHashKey) && databasePassword && auditHashKey === databasePassword) {
+      errors.push("AI_AUDIT_HASH_KEY 必须使用独立密钥，不能与 DATABASE_URL 数据库密码复用");
+    }
+  } catch {
+    // DATABASE_URL 的格式与连接可用性由数据库初始化和就绪探测负责，此处只做可解析时的密钥复用检查。
+  }
   const requireHttps = (key, allowInternalOverride = false) => {
     if (isPlaceholder(configuration[key])) return;
     try {
@@ -636,6 +644,7 @@ function validateProductionConfiguration(environment = {}) {
   validateIntegerSetting("AI_AUDIT_RETENTION_DAYS", 1, 365);
   validateIntegerSetting("AI_AUDIT_CLEANUP_BATCH_SIZE", 1, 10000);
   validateIntegerSetting("AI_AUDIT_CLEANUP_MAX_BATCHES", 1, 100);
+  validateIntegerSetting("AI_AUDIT_REDACTION_BATCH_SIZE", 1, 100);
   const productionLlmTimeoutMs = Number(configuration.LLM_TIMEOUT_MS || 30000);
   const productionLlmMaxRetries = Number(configuration.LLM_MAX_RETRIES || 1);
   const productionMolingInternalTimeoutMs = Number(configuration.MOLING_INTERNAL_TIMEOUT_MS || 10000);

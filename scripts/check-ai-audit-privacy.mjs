@@ -70,7 +70,8 @@ for (const override of [
   { AI_AUDIT_CONTENT_MODE: "metadata", AI_AUDIT_RETENTION_DAYS: "0" },
   { AI_AUDIT_CONTENT_MODE: "metadata", AI_AUDIT_RETENTION_DAYS: "366" },
   { AI_AUDIT_CONTENT_MODE: "metadata", AI_AUDIT_RETENTION_DAYS: "30", AI_AUDIT_CLEANUP_BATCH_SIZE: "0" },
-  { AI_AUDIT_CONTENT_MODE: "metadata", AI_AUDIT_RETENTION_DAYS: "30", AI_AUDIT_CLEANUP_MAX_BATCHES: "101" }
+  { AI_AUDIT_CONTENT_MODE: "metadata", AI_AUDIT_RETENTION_DAYS: "30", AI_AUDIT_CLEANUP_MAX_BATCHES: "101" },
+  { AI_AUDIT_CONTENT_MODE: "metadata", AI_AUDIT_RETENTION_DAYS: "30", AI_AUDIT_REDACTION_BATCH_SIZE: "101" }
 ]) {
   const errors = validateProductionConfiguration({ ...productionBase, ...override });
   assert.ok(errors.some((message) => /AI_AUDIT_/.test(message)), "生产配置必须拒绝缺失、完整内容或越界保留策略");

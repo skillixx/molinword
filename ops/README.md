@@ -51,7 +51,7 @@ sudo systemctl start 'molinword-maintenance@db:migrate:ai-audit-privacy.service'
 sudo systemctl start 'molinword-maintenance@db:seed:templates.service'
 ```
 
-历史 `ai_request_logs` 可能仍含客户提示词和模型正文。完成备份、配置独立的 `AI_AUDIT_HASH_KEY` 并取得隐私负责人批准后，才可执行以下不可逆脱敏；脚本会先补 HMAC-SHA256 指纹与字符数，再分批清空原文，达到批次上限且仍有积压时会失败告警，需复核日志并再次执行：
+历史 `ai_request_logs` 可能仍含客户提示词和模型正文。完成备份、配置不与数据库及其他服务凭据复用的 `AI_AUDIT_HASH_KEY` 并取得隐私负责人批准后，才可执行以下不可逆脱敏；脚本按 `AI_AUDIT_REDACTION_BATCH_SIZE` 小批次逐条读取正文，补 HMAC-SHA256 指纹与字符数后立即清空原文，达到批次上限且仍有积压时会失败告警，需复核日志并再次执行：
 
 ```bash
 sudo systemctl start 'molinword-maintenance@ai-audit:redact-existing.service'

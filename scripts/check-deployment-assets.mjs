@@ -80,6 +80,8 @@ assert.match(auditMigration, /alterClauses\.join\(", "\)/, "AI 审计迁移必�
 const auditMaintenance = await readRequired("scripts/ai-audit-maintenance.mjs");
 assert.match(auditMaintenance, /DATE_SUB\(CURRENT_TIMESTAMP, INTERVAL \$\{retentionDays\} DAY\)/);
 assert.match(auditMaintenance, /createHmac\("sha256", auditHashKey\)/);
+assert.match(auditMaintenance, /SELECT id\s+FROM ai_request_logs[\s\S]*LIMIT \$\{redactionBatchSize\}/, "历史脱敏必须先读取小型 ID 批次");
+assert.match(auditMaintenance, /SELECT id, prompt, response FROM ai_request_logs WHERE id = \?/, "历史正文必须逐条读取，不能批量缓冲 MEDIUMTEXT");
 assert.match(auditMaintenance, /prompt = NULL/);
 assert.match(auditMaintenance, /response = NULL/);
 assert.match(auditMaintenance, /if \(result\.hasRemaining\)[\s\S]*throw new Error/, "达到单轮上限且仍有积压时必须失败告警");
@@ -108,7 +110,8 @@ for (const expected of [
   "AI_AUDIT_HASH_KEY=replace-with-secret-manager-value",
   "AI_AUDIT_RETENTION_DAYS=30",
   "AI_AUDIT_CLEANUP_BATCH_SIZE=1000",
-  "AI_AUDIT_CLEANUP_MAX_BATCHES=20"
+  "AI_AUDIT_CLEANUP_MAX_BATCHES=20",
+  "AI_AUDIT_REDACTION_BATCH_SIZE=10"
 ]) {
   assert.ok(productionEnvironment.includes(expected), `生产环境样例缺少 ${expected}`);
 }
