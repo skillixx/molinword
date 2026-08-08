@@ -171,6 +171,8 @@ assert.match(thirdPartyNoticeBundle, /matchesReleaseTarget/);
 assert.match(thirdPartyNoticeBundle, /upstreamMetadata\.optionalDependencies/);
 assert.match(thirdPartyNoticeBundle, /hasValidSha512Integrity/);
 assert.match(thirdPartyNoticeBundle, /sanitizePublicSource/);
+assert.match(thirdPartyNoticeBundle, /trustedPackageArchiveHosts/);
+assert.match(thirdPartyNoticeBundle, /sensitiveCredentialPattern/);
 assert.match(thirdPartyNoticeBundle, /for await \(const entry of await opendir\(packageDirectory\)\)/);
 assert.match(thirdPartyNoticeBundle, /await stat\(filePath\)/);
 assert.match(thirdPartyNoticeBundle, /maximumTotalLicenseSourceBytes/);

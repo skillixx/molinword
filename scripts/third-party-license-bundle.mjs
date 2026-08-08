@@ -8,6 +8,9 @@ const maximumDirectoryEntriesPerPackage = 4096;
 const maximumPackageCoordinates = 2000;
 const maximumTotalLicenseSourceBytes = 12 * 1024 * 1024;
 const maximumBundleBytes = 16 * 1024 * 1024;
+const trustedPackageArchiveHosts = new Set(["registry.npmjs.org", "registry.npmmirror.com"]);
+const trustedPublicSourceHosts = new Set(["github.com", "gitlab.com", "bitbucket.org", "www.npmjs.com", ...trustedPackageArchiveHosts]);
+const sensitiveCredentialPattern = /(?:gh[pousr]_|github_pat_|npm_|sk-|AKIA)[A-Za-z0-9_+/=-]{12,}/i;
 const sharedUpstreamLicenseFallbacks = [
   { prefix: "@esbuild/", upstreamName: "esbuild", packagePath: "node_modules/esbuild", repositoryToken: "github.com/evanw/esbuild" },
   { prefix: "@rollup/rollup-", upstreamName: "rollup", packagePath: "node_modules/rollup", repositoryToken: "github.com/rollup/rollup" }
@@ -53,7 +56,19 @@ export function sanitizePublicSource(value, packageName, version) {
   try {
     const source = new URL(normalized);
     // 中文注解：公开许可证包只保留无凭据的 HTTPS 来源，并移除可能携带令牌的查询串和片段。
-    if (source.protocol !== "https:" || source.username || source.password) return fallback;
+    let decodedPath = source.pathname;
+    try {
+      decodedPath = decodeURIComponent(source.pathname);
+    } catch {
+      return fallback;
+    }
+    if (
+      source.protocol !== "https:"
+      || source.username
+      || source.password
+      || !trustedPublicSourceHosts.has(source.hostname.toLowerCase())
+      || sensitiveCredentialPattern.test(decodedPath)
+    ) return fallback;
     source.search = "";
     source.hash = "";
     return source.toString();
@@ -64,6 +79,25 @@ export function sanitizePublicSource(value, packageName, version) {
 
 export function hasValidSha512Integrity(value) {
   return String(value || "").split(/\s+/).some((token) => /^sha512-[A-Za-z0-9+/]{86}==$/.test(token));
+}
+
+export function isTrustedLockedArchive(lockMetadata, packageName, version) {
+  const resolvedUrl = String(lockMetadata.resolved || "");
+  const packageBaseName = packageName.split("/").at(-1);
+  try {
+    const archive = new URL(resolvedUrl);
+    return archive.protocol === "https:"
+      && trustedPackageArchiveHosts.has(archive.hostname.toLowerCase())
+      && !archive.username
+      && !archive.password
+      && !archive.search
+      && !archive.hash
+      && archive.pathname.includes(`/${packageName}/`)
+      && archive.pathname.endsWith(`/${packageBaseName}-${version}.tgz`)
+      && hasValidSha512Integrity(lockMetadata.integrity);
+  } catch {
+    return false;
+  }
 }
 
 function normalizeDeclaredLicense(packageMetadata) {
@@ -138,12 +172,7 @@ async function readSharedUpstreamLicenseFallback(rootDir, candidate, license) {
   const targetRepository = normalizeRepository(packageMetadata.repository);
   const upstreamRepository = normalizeRepository(upstreamMetadata.repository);
   const upstreamLicense = normalizeDeclaredLicense(upstreamMetadata);
-  const resolvedUrl = String(lockMetadata.resolved || "");
-  const packageBaseName = packageMetadata.name.split("/").at(-1);
-  const resolvedTargetIsValid = /^https:\/\//.test(resolvedUrl)
-    && resolvedUrl.includes(`/${packageMetadata.name}/`)
-    && resolvedUrl.endsWith(`/${packageBaseName}-${packageMetadata.version}.tgz`)
-    && hasValidSha512Integrity(lockMetadata.integrity);
+  const resolvedTargetIsValid = isTrustedLockedArchive(lockMetadata, packageMetadata.name, packageMetadata.version);
   const declaredByUpstream = upstreamMetadata.optionalDependencies?.[packageMetadata.name] === packageMetadata.version;
   // 中文注解：原生平台包不携带 LICENSE 时，只允许复用同版本、同许可证、同上游仓库主包的原文，避免错配其他项目授权。
   if (
@@ -242,7 +271,7 @@ export async function buildThirdPartyLicenseBundle({ rootDir = process.cwd() } =
     const { packageMetadata } = first;
     const license = String(first.lockMetadata.license || normalizeDeclaredLicense(packageMetadata)).trim();
     const source = sanitizePublicSource(
-      packageMetadata.homepage || normalizeRepository(packageMetadata.repository) || first.lockMetadata.resolved,
+      normalizeRepository(packageMetadata.repository) || packageMetadata.homepage || first.lockMetadata.resolved,
       packageMetadata.name,
       packageMetadata.version
     );

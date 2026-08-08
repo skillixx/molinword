@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { buildThirdPartyLicenseBundle, hasValidSha512Integrity, sanitizePublicSource } from "./third-party-license-bundle.mjs";
+import { buildThirdPartyLicenseBundle, hasValidSha512Integrity, isTrustedLockedArchive, sanitizePublicSource } from "./third-party-license-bundle.mjs";
+
+// 测试侧独立声明敏感凭据特征，避免把生产实现的内部正则暴露成公共接口。
+const publicCredentialPattern = /(?:gh[pousr]_|github_pat_|npm_|sk-|AKIA)[A-Za-z0-9_+/=-]{12,}/i;
 
 const result = await buildThirdPartyLicenseBundle({ rootDir: process.cwd() });
 const repeatedResult = await buildThirdPartyLicenseBundle({ rootDir: process.cwd() });
@@ -15,8 +18,11 @@ assert.match(result.content, /^Release target: linux\/x64\/glibc$/m);
 assert.doesNotMatch(result.content, /D:\\|C:\\Users\\/i, "许可证包不能泄露构建机绝对路径");
 assert.equal(hasValidSha512Integrity("sha512-A="), false, "短伪 SRI 不能通过 SHA-512 完整性校验");
 assert.equal(hasValidSha512Integrity(lock.packages["node_modules/@esbuild/linux-x64"].integrity), true);
+assert.equal(isTrustedLockedArchive(lock.packages["node_modules/@esbuild/linux-x64"], "@esbuild/linux-x64", "0.28.1"), true);
+assert.equal(isTrustedLockedArchive({ ...lock.packages["node_modules/@esbuild/linux-x64"], resolved: "https://attacker.example/@esbuild/linux-x64/-/linux-x64-0.28.1.tgz" }, "@esbuild/linux-x64", "0.28.1"), false, "未知归档主机不能复用可信主包许可证");
 assert.equal(sanitizePublicSource("https://token@example.com/source?access_token=secret", "example", "1.0.0"), "https://www.npmjs.com/package/example/v/1.0.0");
 assert.equal(sanitizePublicSource("file:///home/runner/private", "example", "1.0.0"), "https://www.npmjs.com/package/example/v/1.0.0");
+assert.equal(sanitizePublicSource("https://github.com/example/ghp_12345678901234567890/artifact", "example", "1.0.0"), "https://www.npmjs.com/package/example/v/1.0.0", "URL 路径内凭据不能进入公开产物");
 
 for (const packageName of ["react", "minio", "caniuse-lite"]) {
   const lockedVersion = lock.packages?.[`node_modules/${packageName}`]?.version;
@@ -48,7 +54,9 @@ for (const entry of result.entries) {
   assert.ok(entry.licenseSources.length > 0 && entry.licenseSources.every((source) => source.content.trim()), `${marker} 缺少许可证正文`);
   const publicSource = new URL(entry.source);
   assert.equal(publicSource.protocol, "https:", `${marker} 来源必须使用 HTTPS`);
+  assert.ok(["github.com", "gitlab.com", "bitbucket.org", "www.npmjs.com", "registry.npmjs.org", "registry.npmmirror.com"].includes(publicSource.hostname), `${marker} 来源域名未经批准`);
   assert.equal(publicSource.username || publicSource.password || publicSource.search || publicSource.hash, "", `${marker} 来源不能携带凭据、查询串或片段`);
+  assert.doesNotMatch(decodeURIComponent(publicSource.pathname), publicCredentialPattern, `${marker} 来源路径不能携带凭据`);
 }
 
 console.log("第三方许可证发布包检查通过。", {
