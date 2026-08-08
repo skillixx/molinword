@@ -16,6 +16,7 @@ await writeFile(outputPath, result.content, "utf8");
 
 console.log("第三方许可证发布包已生成。", {
   output: path.relative(rootDir, outputPath).replaceAll("\\", "/"),
+  releaseTarget: `${result.releaseTarget.os}/${result.releaseTarget.cpu}/${result.releaseTarget.libc}`,
   packages: result.entries.length,
   skippedOptionalPackages: result.skippedOptional.length,
   bytes: Buffer.byteLength(result.content)

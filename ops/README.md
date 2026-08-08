@@ -4,7 +4,7 @@
 
 ## 一、部署前提
 
-- Linux 服务器已安装 Node.js 22、npm、Nginx 1.25.1 或更高版本和 systemd。
+- 与 `ops/release-target.json` 一致的 Linux x64 glibc 服务器已安装 Node.js 22、npm、Nginx 1.25.1 或更高版本和 systemd；其他架构或 musl 发行版必须先修改发布目标并重新构建、验证许可证包。
 - 已创建无登录权限的 `molinword` 系统用户，代码目录为 `/opt/molinword`。
 - MySQL、MinIO、墨灵内部 API 和模型网关已准备专用生产账号及最小权限。
 - 域名与 TLS 证书已就绪，应用端口 `3001` 仅监听 `127.0.0.1`，不直接暴露公网。

@@ -150,6 +150,8 @@ assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:f
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:third-party-notices/);
 const thirdPartyNoticeIndex = await readRequired("public/THIRD_PARTY_NOTICES.md");
 assert.match(thirdPartyNoticeIndex, /THIRD_PARTY_LICENSES\.txt/);
+const releaseTarget = JSON.parse(await readRequired("ops/release-target.json"));
+assert.deepEqual(releaseTarget, { os: "linux", cpu: "x64", libc: "glibc" });
 const thirdPartyNoticeGenerator = await readRequired("scripts/generate-third-party-notices.mjs");
 assert.match(thirdPartyNoticeGenerator, /dist["'], ["']THIRD_PARTY_LICENSES\.txt/);
 assert.match(thirdPartyNoticeGenerator, /writeFile\(outputPath, result\.content, "utf8"\)/);
@@ -157,6 +159,12 @@ const thirdPartyNoticeBundle = await readRequired("scripts/third-party-license-b
 assert.match(thirdPartyNoticeBundle, /lockMetadata\.dev === true/);
 assert.match(thirdPartyNoticeBundle, /licenseFilePattern/);
 assert.match(thirdPartyNoticeBundle, /standardLicenseFallbacks/);
+assert.match(thirdPartyNoticeBundle, /sharedUpstreamLicenseFallbacks/);
+assert.match(thirdPartyNoticeBundle, /packageMetadata\.version !== upstreamMetadata\.version/);
+assert.match(thirdPartyNoticeBundle, /matchesReleaseTarget/);
+assert.match(thirdPartyNoticeBundle, /await stat\(filePath\)/);
+assert.match(thirdPartyNoticeBundle, /maximumTotalLicenseSourceBytes/);
+assert.match(thirdPartyNoticeBundle, /maximumBundleBytes/);
 const viteConfiguration = await readRequired("vite.config.ts");
 assert.match(viteConfiguration, /manifest:\s*true/);
 assert.match(viteConfiguration, /onlyExplicitManualChunks:\s*true/);
