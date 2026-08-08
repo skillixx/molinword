@@ -148,6 +148,7 @@ for (const chunkName of ["vendor-react", "vendor-icons", "editor-tiptap", "edito
 const frontendPerformanceCheck = await readRequired("scripts/check-frontend-performance-budget.mjs");
 assert.match(frontendPerformanceCheck, /maximumInitialGzipBytes/);
 assert.match(frontendPerformanceCheck, /maximumInitialCssGzipBytes/);
+assert.match(frontendPerformanceCheck, /initialRequestCount\s*=\s*chunkMetrics\.length\s*\+\s*cssMetrics\.length/);
 assert.match(frontendPerformanceCheck, /collectInitialImports/);
 const runbook = await readRequired("ops/README.md");
 assert.doesNotMatch(runbook, /\/bin\/sh\s+-c|\bsource\s+\/etc\/molinword|\. \/etc\/molinword\/molinword\.env/, "运维命令不能用 shell 执行 EnvironmentFile 中的密钥值");

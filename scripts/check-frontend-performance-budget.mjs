@@ -52,11 +52,12 @@ for (const cssFile of initialCssFiles) {
 // 中文注解：同时约束单块解析成本、首屏传输总量和请求数量，避免仅靠拆碎文件绕过门禁。
 const maximumChunkBytes = 450 * 1024;
 const maximumInitialGzipBytes = 300 * 1024;
-const maximumInitialChunkCount = 8;
+const maximumInitialRequestCount = 8;
 const maximumInitialCssGzipBytes = 32 * 1024;
 const oversizedChunks = chunkMetrics.filter((item) => item.rawBytes > maximumChunkBytes);
 const initialGzipBytes = chunkMetrics.reduce((total, item) => total + item.gzipBytes, 0);
 const initialCssGzipBytes = cssMetrics.reduce((total, item) => total + item.gzipBytes, 0);
+const initialRequestCount = chunkMetrics.length + cssMetrics.length;
 
 assert.deepEqual(
   oversizedChunks,
@@ -68,8 +69,8 @@ assert.ok(
   `初始 JavaScript gzip 总量 ${initialGzipBytes} 超过预算 ${maximumInitialGzipBytes}`
 );
 assert.ok(
-  chunkMetrics.length <= maximumInitialChunkCount,
-  `初始 JavaScript 分块 ${chunkMetrics.length} 个，超过预算 ${maximumInitialChunkCount}`
+  initialRequestCount <= maximumInitialRequestCount,
+  `初始 JavaScript/CSS 请求 ${initialRequestCount} 个，超过预算 ${maximumInitialRequestCount}`
 );
 assert.ok(
   initialCssGzipBytes <= maximumInitialCssGzipBytes,
@@ -80,6 +81,8 @@ console.log("前端生产性能预算检查通过。", {
   initialChunks: chunkMetrics,
   initialGzipBytes,
   maximumInitialGzipBytes,
+  initialRequestCount,
+  maximumInitialRequestCount,
   initialCss: cssMetrics,
   initialCssGzipBytes,
   maximumInitialCssGzipBytes
