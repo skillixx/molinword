@@ -589,6 +589,12 @@ function validateProductionConfiguration(environment = {}) {
   if (!isPlaceholder(configuration.AI_AUDIT_HASH_KEY) && String(configuration.AI_AUDIT_HASH_KEY).length < 32) {
     errors.push("AI_AUDIT_HASH_KEY 长度不足 32 个字符");
   }
+  const auditHashKey = String(configuration.AI_AUDIT_HASH_KEY || "");
+  for (const key of ["INTERNAL_API_TOKEN", "LLM_API_KEY", "STORAGE_SECRET_ACCESS_KEY"]) {
+    if (!isPlaceholder(auditHashKey) && !isPlaceholder(configuration[key]) && auditHashKey === String(configuration[key])) {
+      errors.push(`AI_AUDIT_HASH_KEY 必须使用独立密钥，不能与 ${key} 复用`);
+    }
+  }
   const requireHttps = (key, allowInternalOverride = false) => {
     if (isPlaceholder(configuration[key])) return;
     try {

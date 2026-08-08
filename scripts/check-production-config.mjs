@@ -72,6 +72,17 @@ const placeholderModelErrors = validateProductionConfiguration({
 });
 assert.ok(placeholderModelErrors.some((message) => message.includes("LLM_MODEL")), "生产模型名不能保留占位值");
 
+for (const reusedKey of ["INTERNAL_API_TOKEN", "LLM_API_KEY", "STORAGE_SECRET_ACCESS_KEY"]) {
+  const reusedAuditKeyErrors = validateProductionConfiguration({
+    ...validProductionConfiguration,
+    AI_AUDIT_HASH_KEY: validProductionConfiguration[reusedKey]
+  });
+  assert.ok(
+    reusedAuditKeyErrors.some((message) => message.includes(`不能与 ${reusedKey} 复用`)),
+    `AI 审计 HMAC 密钥不能与 ${reusedKey} 复用`
+  );
+}
+
 // 中文注解：运行时仍兼容历史 WORD_* 命名，启动门禁必须采用相同解析规则，避免有效旧部署无法升级。
 const legacyAliasErrors = validateProductionConfiguration({
   ...validProductionConfiguration,
