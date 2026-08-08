@@ -155,6 +155,7 @@ npm run billing:reconcile:retry
 - 生产环境设置 `APP_ENV=production` 后会强制要求墨灵会话并禁用 `LOCAL_MOLING_MOCK`；同时建议保留 `REQUIRE_MOLING_SESSION=true`，形成显式双重门禁。
 - 后端接口错误只返回中文用户提示，真实错误保留在服务端日志。
 - 生产 AI 审计强制使用 `AI_AUDIT_CONTENT_MODE=metadata`，仅保存请求 ID、专用密钥生成的 HMAC-SHA256 指纹、字符数、状态与耗时；保留期由 `AI_AUDIT_RETENTION_DAYS` 控制。
+- 工作台的 AI 操作记录只通过 `GET /api/ai/history` 读取当前用户的动作、状态、字符数、耗时和请求号；不查询或返回提示词、模型回复、HMAC、内部错误及模型标识。
 - 文档、导出文件下载都按当前用户校验，避免跨用户访问。
 - 生产启动会执行 fail-fast 配置校验；完整步骤见 `docs/production-deployment-checklist.md`。
 - 可审计的 Nginx、systemd、环境变量、计费对账定时器和回滚步骤见 `ops/README.md`；样例不能替代真实域名、证书、密钥和目标环境授权。
@@ -168,6 +169,7 @@ npm run check:frontend-performance
 npm run check:deployment-assets
 npm run check:third-party-notices
 npm run check:dev-license-notice
+npm run check:ai-history
 npm run build
 npm run check:template-agent
 npm run check:template-agent-api
@@ -185,6 +187,8 @@ npm run db:migrate:ai-audit-privacy
 `check:docx-visual-render -- --self-test` 在本地生成正式商业模板夹具并校验标题黑色、六级标题样式和表格结构；PR 与正式发布 CI 还会安装 LibreOffice、Poppler 和 Noto CJK 字体，执行不带 `--self-test` 的真实 DOCX → PDF → PNG 渲染，拒绝空白页、绿色像素、缺失关键文字、非 A4 页面或越过安全页边界的内容，并上传逐页图像供审批人复核。
 
 `check:frontend-performance` 会先生成 Vite manifest，再沿入口静态依赖计算初始 JavaScript/CSS gzip 闭包、单块大小和资源请求总数；其压缩级别与生产 Nginx 基线一致。React、图标、Tiptap 与 ProseMirror 使用独立长期缓存块，业务代码变化不再生成 800KB 以上单文件。
+
+`check:ai-history` 通过真实 HTTP 接口验证 AI 操作记录按当前用户隔离、使用有界游标分页，并在成功、参数错误、未登录及旧数据库结构响应上禁用缓存。隐私迁移缺失时接口明确返回 503，生产就绪检查也会失败，禁止降级读取旧审计正文。桌面与 390px 浏览器回归还会验证刷新、加载更多和隐私字段不可见。
 
 `check:third-party-notices` 会验证所有已安装生产依赖都能形成许可证正文；`npm run build` 还会生成随发布物交付的 `dist/THIRD_PARTY_LICENSES.txt`。`check:dev-license-notice` 会启动真实 Vite 开发服务，确认同一路径返回 UTF-8 纯文本、完整正文与正确的 GET/HEAD/405 契约，避免 SPA 回退造成“能打开但内容其实是首页”的假成功。产品侧栏的“开源许可”入口会打开当前构建的许可证全文，桌面、折叠侧栏和 390px 窄屏行为由浏览器回归覆盖。项目自身仍为 `private: true`，该文件只履行第三方依赖告知义务，不授予 molinword 源码许可证。
 

@@ -92,6 +92,9 @@ for (const column of ["request_id", "prompt_hmac_sha256", "response_hmac_sha256"
   assert.match(auditMigration, new RegExp(`\\["${column}"`), `AI 审计迁移缺少 ${column}`);
 }
 assert.match(auditMigration, /idx_ai_logs_created/);
+assert.match(auditMigration, /hasExactMysqlIndex/);
+assert.match(auditMigration, /INDEX_NAME, SEQ_IN_INDEX, COLUMN_NAME, SUB_PART/);
+assert.match(auditMigration, /DROP INDEX \$\{aiHistoryIndexName\}/, "同名但列序错误的历史索引必须先删除再按精确定义重建");
 assert.match(auditMigration, /alterClauses\.join\(", "\)/, "AI 审计迁移必须合并缺失列和索引，避免逐列重建大表");
 const auditMaintenance = await readRequired("scripts/ai-audit-maintenance.mjs");
 assert.match(auditMaintenance, /DATE_SUB\(CURRENT_TIMESTAMP, INTERVAL \$\{retentionDays\} DAY\)/);
@@ -300,6 +303,7 @@ assert.equal(packageJson.scripts?.["check:release-manifest-contract"], "node scr
 assert.equal(packageJson.scripts?.["check:production-release-bundle"], "node scripts/check-production-release-bundle.mjs");
 assert.equal(packageJson.scripts?.["check:docx-visual-render"], "node scripts/check-docx-visual-render.mjs", "必须提供真实 Office 渲染的公开门禁命令");
 assert.equal(packageJson.scripts?.["check:dev-license-notice"], "node scripts/check-dev-license-notice.mjs", "必须提供开发态许可证真实 HTTP 门禁命令");
+assert.equal(packageJson.scripts?.["check:ai-history"], "node scripts/check-ai-history.mjs", "必须提供 AI 操作历史用户隔离与脱敏门禁命令");
 assert.equal(packageJson.scripts?.["release:bundle"], undefined, "不得暴露可让仓库代码直接接触正式签名私钥的 npm 命令");
 assert.equal(packageJson.scripts?.["release:bundle:unsigned-ci"], "node scripts/create-production-release-bundle.mjs --unsigned-for-ci");
 assert.equal(packageJson.scripts?.["release:verify-archive"], "node scripts/verify-production-release-archive.mjs");
@@ -314,6 +318,7 @@ assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:d
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:frontend-performance/);
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:third-party-notices/);
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:dev-license-notice/, "商业门禁必须覆盖 Vite 开发态许可证入口");
+assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:ai-history/, "商业门禁必须覆盖 AI 操作历史的用户隔离与隐私边界");
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:release-target-contract/);
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:production-acceptance/);
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:production-acceptance-finalization/);

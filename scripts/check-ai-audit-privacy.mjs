@@ -90,7 +90,7 @@ assert.equal(
   "所有 AI 审计写入必须关联服务端请求 ID"
 );
 const schemaSource = await readFile("database/init-mysql.sql", "utf8");
-for (const field of ["request_id", "prompt_hmac_sha256", "response_hmac_sha256", "prompt_chars", "response_chars", "idx_ai_logs_created"]) {
+for (const field of ["request_id", "prompt_hmac_sha256", "response_hmac_sha256", "prompt_chars", "response_chars", "idx_ai_logs_created", "idx_ai_logs_user_id"]) {
   assert.match(schemaSource, new RegExp(`\\b${field}\\b`), `新数据库 AI 审计表缺少 ${field}`);
 }
 

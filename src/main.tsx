@@ -524,6 +524,17 @@ type ApiTemplate = TemplateItem & {
   updatedAt?: string;
 };
 
+type AiHistoryRecord = {
+  action: string;
+  actionLabel: string;
+  status: "success" | "failed";
+  requestId: string | null;
+  promptChars: number | null;
+  responseChars: number | null;
+  latencyMs: number | null;
+  createdAt: string | null;
+};
+
 type OutlineItem = {
   id: number;
   title: string;
@@ -2743,12 +2754,17 @@ function App() {
   const [launchStatus, setLaunchStatus] = React.useState("");
   const [appInitializing, setAppInitializing] = React.useState(true);
   const [documentsLoading, setDocumentsLoading] = React.useState(false);
+  const [aiHistory, setAiHistory] = React.useState<AiHistoryRecord[]>([]);
+  const [aiHistoryLoading, setAiHistoryLoading] = React.useState(false);
+  const [aiHistoryError, setAiHistoryError] = React.useState("");
+  const [aiHistoryNextBeforeId, setAiHistoryNextBeforeId] = React.useState<string | null>(null);
   const [documentImporting, setDocumentImporting] = React.useState(false);
   const [pointsRefreshing, setPointsRefreshing] = React.useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = React.useState(false);
   const [isOutlineCollapsed, setIsOutlineCollapsed] = React.useState(false);
   const [pageLayout, setPageLayout] = React.useState<DocumentPageLayout>({ ...defaultDocumentPageLayout });
   const saveQueueRef = React.useRef<Promise<unknown>>(Promise.resolve());
+  const aiHistoryRequestRef = React.useRef(0);
 
   const loadSession = React.useCallback(async () => {
     const response = await fetch("/api/session");
@@ -2768,6 +2784,29 @@ function App() {
       setAiError(error instanceof Error ? error.message : "读取最近文档失败");
     } finally {
       setDocumentsLoading(false);
+    }
+  }, []);
+
+  const loadAiHistory = React.useCallback(async (beforeId: string | null = null) => {
+    // 中文注解：刷新与“加载更多”可能并发返回，只允许最后一次请求更新界面，避免旧页覆盖新快照。
+    const requestSequence = ++aiHistoryRequestRef.current;
+    setAiHistoryLoading(true);
+    try {
+      const search = new URLSearchParams({ limit: "10" });
+      if (beforeId) search.set("beforeId", beforeId);
+      const response = await fetch(`/api/ai/history?${search.toString()}`);
+      const result = await readApiJson(response);
+      if (requestSequence !== aiHistoryRequestRef.current) return;
+      const nextHistory = Array.isArray(result.history) ? result.history as AiHistoryRecord[] : [];
+      // 中文注解：有游标时追加下一页，无游标时视为全量刷新并丢弃旧分页，确保刷新按钮语义明确。
+      setAiHistory((current) => beforeId ? [...current, ...nextHistory] : nextHistory);
+      setAiHistoryNextBeforeId(typeof result.nextBeforeId === "string" ? result.nextBeforeId : null);
+      setAiHistoryError("");
+    } catch (error) {
+      if (requestSequence !== aiHistoryRequestRef.current) return;
+      setAiHistoryError(error instanceof Error ? error.message : "读取 AI 操作记录失败");
+    } finally {
+      if (requestSequence === aiHistoryRequestRef.current) setAiHistoryLoading(false);
     }
   }, []);
 
@@ -2844,7 +2883,7 @@ function App() {
         } else {
           await loadSession();
         }
-        await loadRecentDocuments();
+        await Promise.all([loadRecentDocuments(), loadAiHistory()]);
       } catch (error) {
         setLaunchStatus("");
         setAiError(error instanceof Error ? error.message : "初始化登录状态失败");
@@ -2853,7 +2892,7 @@ function App() {
       }
     };
     void run();
-  }, [loadRecentDocuments, loadSession]);
+  }, [loadAiHistory, loadRecentDocuments, loadSession]);
 
   React.useEffect(() => {
     void loadTemplates();
@@ -2878,6 +2917,8 @@ function App() {
       return null;
     } finally {
       setAiLoading(null);
+      // 中文注解：成功和失败的 AI 请求都会产生审计元数据；刷新必须后台执行，不能因历史库变慢而阻塞正文进入编辑器。
+      void loadAiHistory();
     }
   };
 
@@ -3325,6 +3366,12 @@ function App() {
           deleteDocument={deleteDocument}
           duplicateDocument={duplicateDocument}
           documentsLoading={documentsLoading}
+          aiHistory={aiHistory}
+          aiHistoryLoading={aiHistoryLoading}
+          aiHistoryError={aiHistoryError}
+          aiHistoryNextBeforeId={aiHistoryNextBeforeId}
+          refreshAiHistory={() => void loadAiHistory()}
+          loadMoreAiHistory={() => void loadAiHistory(aiHistoryNextBeforeId)}
           documentImporting={documentImporting}
           importDocument={importDocument}
         />
@@ -3395,6 +3442,46 @@ function LoadingProcess(props: { label: string; compact?: boolean }) {
   );
 }
 
+function AiHistoryPanel(props: {
+  history: AiHistoryRecord[];
+  loading: boolean;
+  error: string;
+  nextBeforeId: string | null;
+  refresh: () => void;
+  loadMore: () => void;
+}) {
+  const formatDuration = (latencyMs: number | null) => {
+    if (latencyMs == null) return "耗时未记录";
+    return latencyMs < 1000 ? `${latencyMs} 毫秒` : `${Math.round(latencyMs / 100) / 10} 秒`;
+  };
+  const formatCreatedAt = (createdAt: string | null) => {
+    if (!createdAt) return "时间未记录";
+    const date = new Date(createdAt);
+    return Number.isNaN(date.getTime()) ? "时间未记录" : date.toLocaleString();
+  };
+
+  return (
+    <section className="ai-history-panel" aria-label="AI 操作记录">
+      <div className="ai-history-head">
+        <div className="section-title"><Bot size={18} /><div><h2>AI 操作记录</h2><p>仅展示状态、耗时与字符数，不展示文档正文或模型回复。</p></div></div>
+        <button type="button" onClick={props.refresh} disabled={props.loading} aria-label="刷新 AI 操作记录"><RefreshCw className={props.loading ? "spin-icon" : ""} size={15} />{props.loading ? "刷新中" : "刷新记录"}</button>
+      </div>
+      {props.error ? <div className="ai-history-error" role="status"><span>{props.error}</span><button type="button" onClick={props.refresh}>重新读取</button></div> : null}
+      {!props.error && props.loading && props.history.length === 0 ? <div className="empty-state">正在读取 AI 操作记录...</div> : null}
+      {!props.error && !props.loading && props.history.length === 0 ? <div className="empty-state">暂无 AI 操作记录，运行智能体或生成内容后会显示在这里。</div> : null}
+      {props.history.length > 0 ? <div className="ai-history-list">
+        {props.history.map((item, index) => <article className={`ai-history-item ${item.status}`} key={`${item.createdAt || "unknown"}-${item.requestId || "untracked"}-${index}`}>
+          <div className="ai-history-item-head"><strong>{item.actionLabel}</strong><span>{item.status === "success" ? "成功" : "失败"}</span></div>
+          <div className="ai-history-meta"><span>{formatCreatedAt(item.createdAt)}</span><span>{formatDuration(item.latencyMs)}</span></div>
+          <div className="ai-history-counts"><span>输入 {item.promptChars ?? "-"} 字</span><span>输出 {item.responseChars ?? "-"} 字</span></div>
+          {item.requestId ? <code>请求号 {item.requestId}</code> : <small>请求号未记录</small>}
+        </article>)}
+      </div> : null}
+      {props.nextBeforeId ? <button className="ai-history-more" type="button" onClick={props.loadMore} disabled={props.loading} aria-label="加载更多 AI 操作记录">{props.loading ? "正在加载" : "加载更多"}</button> : null}
+    </section>
+  );
+}
+
 function Workspace(props: {
   selectedType: DocumentType;
   setSelectedType: (value: DocumentType) => void;
@@ -3412,6 +3499,12 @@ function Workspace(props: {
   deleteDocument: (documentId: number) => void;
   duplicateDocument: (documentId: number) => void;
   documentsLoading: boolean;
+  aiHistory: AiHistoryRecord[];
+  aiHistoryLoading: boolean;
+  aiHistoryError: string;
+  aiHistoryNextBeforeId: string | null;
+  refreshAiHistory: () => void;
+  loadMoreAiHistory: () => void;
   documentImporting: boolean;
   importDocument: (file: File) => void;
 }) {
@@ -3474,6 +3567,14 @@ function Workspace(props: {
             ))}
           </div>
         </section>
+        <AiHistoryPanel
+          history={props.aiHistory}
+          loading={props.aiHistoryLoading}
+          error={props.aiHistoryError}
+          nextBeforeId={props.aiHistoryNextBeforeId}
+          refresh={props.refreshAiHistory}
+          loadMore={props.loadMoreAiHistory}
+        />
       </div>
     </section>
   );

@@ -60,7 +60,7 @@ npm run check:commercial-readiness
 
 - `document_templates` 仅启用已审核模板，正文骨架包含元数据、编制说明、正式章节和行动表。
 - `billing_reconciliation_tasks` 包含 `operation_type`、`claim_token` 和唯一幂等键。
-- `ai_request_logs` 包含请求 ID、HMAC-SHA256 指纹、字符数与创建时间索引；先执行 `db:migrate:ai-audit-privacy`，再经批准单独执行 `ai-audit:redact-existing` 清理历史原文。
+- `ai_request_logs` 包含请求 ID、HMAC-SHA256 指纹、字符数、创建时间索引及 `(user_id, id)` 历史分页索引；先执行 `db:migrate:ai-audit-privacy`，再经批准单独执行 `ai-audit:redact-existing` 清理历史原文。
 - MinIO bucket 可读写，前端无法看到 bucket、object key 或访问密钥。
 
 ## 四、真实链路验收
@@ -87,7 +87,7 @@ sudo ls -lt /var/lib/molinword-acceptance/<release-id>-*.json
 6. 人为制造模型失败，确认返回 503、预占被释放；释放或结算响应不确定时生成对账任务。
 7. 导入包含标题、表格、图片的 DOCX，编辑后导出；在 Microsoft Word 中确认标题与各级标题为规范黑色、正文与行内自定义颜色不被误改。
 8. 在 390px、平板和桌面宽度检查模板库、智能体结果和编辑器，不应横向溢出，所有按钮均有明确反馈。
-9. 发起一次 AI 请求，使用 `X-Request-Id` 关联访问日志和 `ai_request_logs.request_id`；确认 `prompt`、`response` 为空，摘要和字符数存在，且日志不含密钥或客户正文。
+9. 分别以两个真实用户发起 AI 请求，使用 `X-Request-Id` 关联访问日志和 `ai_request_logs.request_id`；确认 `prompt`、`response` 为空，摘要和字符数存在，且日志不含密钥或客户正文。再检查工作台 AI 操作记录与 `GET /api/ai/history`：只能看到当前用户的动作、状态、字符数、耗时和请求号，响应为 `private, no-store`，不得出现另一用户记录、提示词、模型回复、HMAC、内部错误或模型标识。
 10. 切换到上一份制品并等待在途请求结束，确认 `/api/health` 自动回显上一制品清单中的发布号，随后恢复当前版本并保存时间线。
 
 将十项脱敏证据放入独立验收用户专属的 `/var/lib/molinword-acceptance/<release-id>-evidence/`，按 `ops/acceptance/manual-acceptance.example.json` 生成 `<release-id>-manual.json`；长期运行的 API 用户不能访问这个 0700 目录。人工清单必须填写授权审批人、变更单号、晚于最新自动预检的 UTC 批准时间、最新预检 SHA-256 和每个附件 SHA-256；JSON 仅允许固定字段，附件必须为当前发布号目录内的非空常规文件。摘要应在审批人完成内容复核后用服务器 `sha256sum` 计算，避免路径相同但内容已被替换。最后计算整份人工清单 SHA-256，由变更流程按 `ops/acceptance/authorization.example.json` 签发 root-only 短期授权凭据，精确绑定同一发布号、审批人、变更单、预检摘要和人工清单摘要，有效期不得超过七天。

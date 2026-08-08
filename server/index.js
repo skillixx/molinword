@@ -14,6 +14,7 @@ import multer from "multer";
 import { normalizeUploadedFileName } from "./upload-file-name.js";
 import mysql from "mysql2/promise";
 import sanitizeHtml from "sanitize-html";
+import { aiHistoryIndexColumns, aiHistoryIndexName, hasExactMysqlIndex } from "../shared/ai-audit-schema.js";
 import { verifyReleaseManifest } from "../shared/release-manifest.js";
 const require = createRequire(import.meta.url);
 const pdf = require("pdf-parse");
@@ -432,6 +433,11 @@ app.use((request, response, next) => {
   // 中文注解：浏览器携带会话 cookie 的跨站写请求必须在进入业务和计费逻辑前被拒绝。
   response.status(403).json({ message: "请求来源不受信任，请从正式应用入口重试。" });
 });
+// 中文注解：在通用限流之前设置私有禁缓存，确保历史接口即使被 429/403 提前拒绝也不会留下跨用户缓存。
+app.use("/api/ai/history", (_request, response, next) => {
+  response.setHeader("Cache-Control", "private, no-store");
+  next();
+});
 app.use("/api", createFixedWindowRateLimiter({
   maximumRequests: apiRateLimitMaximum,
   windowMs: rateLimitWindowMs,
@@ -442,11 +448,14 @@ app.use("/api/ai", createFixedWindowRateLimiter({
   maximumRequests: aiRateLimitMaximum,
   windowMs: rateLimitWindowMs,
   message: "AI 请求过于频繁，请稍后重试。",
-  excludedPaths: new Set(["/auth-check"])
+  // 中文注解：历史记录不触发模型且受通用 API 限流保护，不能占用用户的 AI 生成频率额度。
+  excludedPaths: new Set(["/auth-check", "/history"])
 }));
 // 中文注解：先完成来源与频率门禁再解析正文，畸形或超大 JSON 同样受限流保护。
 app.use(express.json({ limit: "1mb" }));
 app.use("/api/ai", (request, response, next) => {
+  // 中文注解：只读历史查询不占模型并发槽，避免数据库响应稍慢时挤占真正的文档生成任务。
+  if (request.method === "GET" && request.path === "/history") return next();
   if (activeAiRequests >= maximumConcurrentAiRequests) {
     response.setHeader("Retry-After", "2");
     response.status(429).json({ message: "AI 服务当前请求较多，请稍后重试。" });
@@ -4224,6 +4233,20 @@ const aiAuditActionTypes = new Set([
   "polish",
   "polish_legacy"
 ]);
+const aiHistoryActionLabels = Object.freeze({
+  template_agent_plan: "模板智能体规划",
+  generate_outline: "生成大纲",
+  generate_body: "生成正文",
+  continue: "续写",
+  expand: "扩写",
+  shorten: "缩写",
+  correct: "纠错",
+  format: "格式优化",
+  polish: "润色",
+  polish_legacy: "润色",
+  unknown: "其他 AI 操作"
+});
+const maximumMysqlUnsignedBigInt = 18446744073709551615n;
 
 function buildAiAuditRecord({ requestId = null, actionType, prompt, responseText, status = "success", errorMessage = null, latencyMs = null }, environment = process.env) {
   const contentMode = resolveAiAuditContentMode(environment);
@@ -4530,6 +4553,76 @@ async function getCurrentUser(request) {
     productId: normalizeMolingId(molingProductId),
     isMolingUser: false,
     expiresAt: null
+  };
+}
+
+function normalizeAiHistoryRequest(query = {}) {
+  const rawLimit = query.limit == null || query.limit === "" ? "20" : String(query.limit);
+  if (!/^\d{1,2}$/.test(rawLimit)) throw createPublicError("AI 操作记录分页数量无效。", 400);
+  const limit = Number(rawLimit);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw createPublicError("AI 操作记录分页数量必须为 1 到 50。", 400);
+  const rawBeforeId = query.beforeId == null || query.beforeId === "" ? "" : String(query.beforeId);
+  if (rawBeforeId && (!/^[1-9]\d{0,19}$/.test(rawBeforeId) || BigInt(rawBeforeId) > maximumMysqlUnsignedBigInt)) {
+    throw createPublicError("AI 操作记录游标无效。", 400);
+  }
+  return { limit, beforeId: rawBeforeId || null };
+}
+
+function normalizeAiHistoryRow(row) {
+  const action = aiAuditActionTypes.has(String(row.action_type || "")) ? String(row.action_type) : "unknown";
+  const nonNegativeInteger = (value) => {
+    const number = Number(value);
+    return Number.isSafeInteger(number) && number >= 0 ? number : null;
+  };
+  const createdAt = new Date(row.created_at);
+  return {
+    action,
+    actionLabel: aiHistoryActionLabels[action] || aiHistoryActionLabels.unknown,
+    // 中文注解：历史脏数据或未来未知状态按失败展示，不能误导用户认为一次未确认的 AI 调用已成功。
+    status: row.status === "success" ? "success" : "failed",
+    requestId: String(row.request_id || "").trim().slice(0, 64) || null,
+    promptChars: nonNegativeInteger(row.prompt_chars),
+    responseChars: nonNegativeInteger(row.response_chars),
+    latencyMs: nonNegativeInteger(row.latency_ms),
+    createdAt: Number.isNaN(createdAt.getTime()) ? null : createdAt.toISOString()
+  };
+}
+
+function createAiHistoryHandler({ authenticate = getCurrentUser, getDatabase = ensureDb } = {}) {
+  return async (request, response) => {
+    // 中文注解：成功、未登录和参数错误都禁止共享缓存，避免同一浏览器或代理残留上一用户的操作元数据。
+    response.setHeader("Cache-Control", "private, no-store");
+    try {
+      // 中文注解：先确认身份再解析和查询，数据库 SQL 始终携带当前 user_id，不能由客户端指定其他用户。
+      const currentUser = await authenticate(request);
+      const { limit, beforeId } = normalizeAiHistoryRequest(request.query);
+      const pool = await getDatabase();
+      const whereCursor = beforeId ? " AND id < CAST(? AS UNSIGNED)" : "";
+      const params = beforeId ? [currentUser.userId, beforeId, limit + 1] : [currentUser.userId, limit + 1];
+      // 中文注解：只选择工作台需要的低敏元数据，提示词、回复、HMAC、模型名和内部错误不进入 Node 进程的响应对象。
+      const [rows] = await pool.query(
+        `SELECT CAST(id AS CHAR) AS id, action_type, request_id,
+          prompt_chars, response_chars, status, latency_ms, created_at
+         FROM ai_request_logs
+         WHERE user_id = ?${whereCursor}
+         ORDER BY id DESC
+         LIMIT ?`,
+        params
+      );
+      const hasMore = rows.length > limit;
+      const history = rows.slice(0, limit).map(normalizeAiHistoryRow);
+      // 中文注解：自增日志 ID 只作为下一页游标使用，不进入明细对象，避免向前端暴露跨租户全局标识。
+      const nextBeforeId = hasMore && history.length ? String(rows[limit - 1].id) : null;
+      response.json({ history, nextBeforeId });
+    } catch (error) {
+      if (["ER_BAD_FIELD_ERROR", "ER_NO_SUCH_TABLE"].includes(error?.code)) {
+        // 中文注解：旧审计表可能仍含历史正文，缺少隐私字段时必须失败关闭，不能降级读取旧列。
+        console.error(error);
+        response.status(503).json({ message: "AI 操作记录尚未完成数据库升级，请联系管理员。" });
+        return;
+      }
+      sendError(response, error, error?.httpStatus || 500, "读取 AI 操作记录失败，请稍后重试。");
+    }
   };
 }
 
@@ -5280,6 +5373,23 @@ async function boundedReadinessCheck(check) {
   }
 }
 
+async function checkDatabaseReadiness(candidatePool = dbPool) {
+  if (!candidatePool) return false;
+  // 中文注解：数据库可连接但审计隐私迁移缺失时，AI 日志会静默写入失败；生产就绪必须同时验证安全字段存在。
+  await candidatePool.query(
+    `SELECT request_id, prompt_hmac_sha256, response_hmac_sha256, prompt_chars, response_chars
+     FROM ai_request_logs
+     LIMIT 0`
+  );
+  const [indexRows] = await candidatePool.query(
+    `SELECT INDEX_NAME, SEQ_IN_INDEX, COLUMN_NAME, SUB_PART
+     FROM information_schema.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_request_logs' AND INDEX_NAME = ?`,
+    [aiHistoryIndexName]
+  );
+  return hasExactMysqlIndex(indexRows, aiHistoryIndexName, aiHistoryIndexColumns);
+}
+
 async function consumeResponseBodyWithinLimit(response, maximumBytes) {
   if (!response.body) return true;
   const reader = response.body.getReader();
@@ -5325,10 +5435,7 @@ async function checkGatewayReadiness() {
 
 app.get("/api/ready", async (_request, response) => {
   const [databaseReady, storageReady, gatewayReady] = await Promise.all([
-    dbPool ? boundedReadinessCheck(async () => {
-      await dbPool.query("SELECT 1");
-      return true;
-    }) : false,
+    boundedReadinessCheck(checkDatabaseReadiness),
     minioClient ? boundedReadinessCheck(() => minioClient.bucketExists(storageBucket)) : false,
     boundedReadinessCheck(checkGatewayReadiness)
   ]);
@@ -5388,6 +5495,8 @@ app.get("/api/session", async (request, response) => {
     sendError(response, error, 500, "读取登录状态失败，请刷新页面重试。");
   }
 });
+
+app.get("/api/ai/history", createAiHistoryHandler());
 
 app.post("/api/logout", async (request, response) => {
   try {
@@ -6295,7 +6404,7 @@ app.use((error, _request, response, next) => {
   sendError(response, error, 500, "服务暂时不可用，请稍后重试。");
 });
 
-export { appendBillingReconciliationOutbox, buildAiAuditRecord, createBillingReconciliationPayload, createDocxBuffer, createTemplateAgentFallbackPlan, formatGeneratedBodyHtml, legacyDocTextToHtml, loadTemplateAgentCandidates, normalizeAiEditAction, normalizeTemplateAgentPlan, normalizeTemplateAgentReview, normalizeTemplateBriefAnalysis, parseImportedDocument, parseStyledDocxToHtml, persistBillingReconciliationTask, readSafeImageDimensions, resolveBillableFailureResponse, resolveTemplateAgentFailureStatus, sanitizeImportedHtml, shouldReleasePointHold, validateProductionConfiguration };
+export { appendBillingReconciliationOutbox, buildAiAuditRecord, checkDatabaseReadiness, createAiHistoryHandler, createBillingReconciliationPayload, createDocxBuffer, createTemplateAgentFallbackPlan, formatGeneratedBodyHtml, legacyDocTextToHtml, loadTemplateAgentCandidates, normalizeAiEditAction, normalizeTemplateAgentPlan, normalizeTemplateAgentReview, normalizeTemplateBriefAnalysis, parseImportedDocument, parseStyledDocxToHtml, persistBillingReconciliationTask, readSafeImageDimensions, resolveBillableFailureResponse, resolveTemplateAgentFailureStatus, sanitizeImportedHtml, shouldReleasePointHold, validateProductionConfiguration };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const productionConfigurationErrors = validateProductionConfiguration(process.env);

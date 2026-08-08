@@ -64,6 +64,8 @@ LLM_MODEL=your-approved-model
 
 生产环境必须设置 `AI_AUDIT_CONTENT_MODE=metadata`。智能体审计只保存 `X-Request-Id` 对应请求 ID、固定动作枚举、模型、状态、耗时、Unicode 字符数和由专用 `AI_AUDIT_HASH_KEY` 生成的 HMAC-SHA256 指纹，不保存用户需求、文档正文或模型原文。保留期限由 `AI_AUDIT_RETENTION_DAYS` 配置，并通过 `molinword-ai-audit-retention.timer` 分批清理；历史正文脱敏属于不可逆维护操作，必须先备份并审批。
 
+工作台通过 `GET /api/ai/history?limit=10&beforeId=<cursor>` 展示当前登录用户的操作历史。接口最多返回 50 条，游标只接受 MySQL 无符号整数；查询通过 `(user_id, id)` 索引在数据库边界强制绑定当前 `user_id`，并只选择动作、成功/失败状态、字符数、耗时、请求号和时间。提示词、模型回复、HMAC 指纹、内部错误、模型标识、文档 ID 及日志 ID 不会进入明细响应，所有成功或失败响应均设置 `Cache-Control: private, no-store`。工作台支持刷新和加载更多，单次 AI 操作结束后自动刷新；读取失败只影响历史面板，不阻断写作流程。旧环境未执行 `db:migrate:ai-audit-privacy` 时接口返回明确的 503，`/api/ready` 同样失败，禁止从可能含历史正文的旧列降级读取。
+
 ## 五、计费与降级
 
 - 使用类型：`word_template_agent`
@@ -85,6 +87,7 @@ npm run check:template-agent-ui
 npm run check:docx-export-format
 npm run check:docx-visual-render -- --self-test
 npm run check:ai-audit-privacy
+npm run check:ai-history
 npm run check:production-acceptance
 npm run check:production-acceptance-finalization
 npm run db:seed:templates

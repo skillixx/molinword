@@ -57,6 +57,22 @@ const plan = {
 };
 
 let createdDocument = null;
+let aiHistoryRequestCount = 0;
+const aiHistoryPages = {
+  first: {
+    history: [
+      { action: "template_agent_plan", actionLabel: "模板智能体规划", status: "success", requestId: "ui-history-template", promptChars: 96, responseChars: 412, latencyMs: 1320, createdAt: "2026-08-08T08:00:00.000Z" },
+      { action: "generate_body", actionLabel: "生成正文", status: "failed", requestId: "ui-history-body", promptChars: 180, responseChars: 0, latencyMs: 5000, createdAt: "2026-08-08T07:30:00.000Z" }
+    ],
+    nextBeforeId: "400"
+  },
+  next: {
+    history: [
+      { action: "polish", actionLabel: "润色", status: "success", requestId: null, promptChars: 42, responseChars: 55, latencyMs: 760, createdAt: "2026-08-08T07:00:00.000Z" }
+    ],
+    nextBeforeId: null
+  }
+};
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
@@ -90,6 +106,12 @@ const server = createServer(async (request, response) => {
   }
   if (request.method === "GET" && url.pathname === "/api/documents") {
     sendJson(response, { documents: createdDocument ? [createdDocument] : [] });
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/api/ai/history") {
+    aiHistoryRequestCount += 1;
+    assert.equal(url.searchParams.get("limit"), "10");
+    sendJson(response, url.searchParams.get("beforeId") ? aiHistoryPages.next : aiHistoryPages.first);
     return;
   }
   if (request.method === "POST" && url.pathname === "/api/ai/template-agent") {
@@ -143,6 +165,20 @@ const browser = await chromium.launch(playwrightLaunchOptions());
 try {
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
   await page.goto(`http://127.0.0.1:${address.port}/`, { waitUntil: "networkidle" });
+  const historyPanel = page.getByRole("region", { name: "AI 操作记录" });
+  await historyPanel.waitFor();
+  const historyPanelBox = await historyPanel.boundingBox();
+  assert.ok(historyPanelBox && historyPanelBox.x >= 0 && historyPanelBox.x + historyPanelBox.width <= 390, "390px 窄屏下 AI 操作记录不能横向溢出");
+  assert.equal(await historyPanel.locator(".ai-history-item").count(), 2);
+  assert.equal(await historyPanel.getByText("模板智能体规划", { exact: true }).count(), 1);
+  assert.equal(await historyPanel.getByText("失败", { exact: true }).count(), 1);
+  assert.doesNotMatch(await historyPanel.innerText(), /用户需求|模型正文|HMAC|private-model/i, "工作台不得呈现审计正文或内部模型信息");
+  await historyPanel.getByRole("button", { name: "加载更多 AI 操作记录" }).click();
+  await historyPanel.locator(".ai-history-item").nth(2).waitFor();
+  assert.equal(await historyPanel.locator(".ai-history-item").count(), 3);
+  await historyPanel.getByRole("button", { name: "刷新 AI 操作记录" }).click();
+  await historyPanel.locator(".ai-history-item").nth(2).waitFor({ state: "detached" });
+  assert.equal(await historyPanel.locator(".ai-history-item").count(), 2);
   assert.equal(await page.getByText("企业文档助手", { exact: true }).count(), 1, "产品品牌区必须使用正式商业标识");
   assert.equal(await page.getByText("本地开发版", { exact: true }).count(), 0, "生产前端不能固定展示开发版标识");
   const mobileLicenseLink = page.getByRole("link", { name: "查看第三方开源许可证全文" });
@@ -172,6 +208,11 @@ try {
   }
   const desktopPage = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   await desktopPage.goto(`http://127.0.0.1:${address.port}/`, { waitUntil: "networkidle" });
+  const desktopHistoryPanel = desktopPage.getByRole("region", { name: "AI 操作记录" });
+  await desktopHistoryPanel.waitFor();
+  const desktopHistoryBox = await desktopHistoryPanel.boundingBox();
+  assert.ok(desktopHistoryBox && desktopHistoryBox.x >= 0 && desktopHistoryBox.x + desktopHistoryBox.width <= 1440, "桌面端 AI 操作记录不能横向溢出");
+  assert.equal(await desktopHistoryPanel.locator(".ai-history-item").count(), 2);
   const desktopLicenseLink = desktopPage.getByRole("link", { name: "查看第三方开源许可证全文" });
   await desktopLicenseLink.waitFor();
   const [licensePage] = await Promise.all([
@@ -220,7 +261,8 @@ try {
   const heading2Style = heading2Styles[0][0];
   const heading2Color = heading2Style.match(/<w:color w:val="([0-9A-Fa-f]{6})"\/>/)?.[1].toUpperCase();
   assert.ok(!heading2Color || heading2Color === "000000", `Word 标题样式不能回流强调色，实际为 ${heading2Color}`);
-  console.log("模板智能体窄屏创建与 Word 导出工作流检查通过。", { documentId: createdDocument.id, templateId: createdDocument.templateId });
+  assert.ok(aiHistoryRequestCount >= 4, "移动端刷新、加载更多和桌面初始化都必须真实请求 AI 操作记录接口");
+  console.log("模板智能体、AI 操作历史与 Word 导出工作流检查通过。", { documentId: createdDocument.id, templateId: createdDocument.templateId, aiHistoryRequestCount });
 } finally {
   await browser.close();
   await new Promise((resolveClose) => server.close(resolveClose));

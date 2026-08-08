@@ -1,5 +1,6 @@
 import "dotenv/config";
 import mysql from "mysql2/promise";
+import { aiHistoryIndexColumns, aiHistoryIndexName, hasExactMysqlIndex } from "../shared/ai-audit-schema.js";
 
 if (!process.env.DATABASE_URL) {
   throw new Error("缺少 DATABASE_URL，无法迁移 AI 审计隐私字段。");
@@ -31,24 +32,39 @@ async function loadMissingOperations(databaseName) {
   );
   const existingColumns = new Set(columnRows.map((row) => row.COLUMN_NAME));
   const missingColumns = [...auditColumnDefinitions].filter(([columnName]) => !existingColumns.has(columnName));
-  const [[indexRow]] = await connection.query(
-    `SELECT COUNT(*) AS count
+  const [indexRows] = await connection.query(
+    `SELECT INDEX_NAME, SEQ_IN_INDEX, COLUMN_NAME, SUB_PART
      FROM information_schema.STATISTICS
-     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'ai_request_logs' AND INDEX_NAME = 'idx_ai_logs_created'`,
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'ai_request_logs'
+       AND INDEX_NAME IN ('idx_ai_logs_created', 'idx_ai_logs_user_id')`,
     [databaseName]
   );
-  return { missingColumns, missingCreatedAtIndex: !Number(indexRow.count) };
+  const existingIndexes = new Set(indexRows.map((row) => row.INDEX_NAME));
+  return {
+    missingColumns,
+    createdAtIndexExists: existingIndexes.has("idx_ai_logs_created"),
+    historyIndexExists: existingIndexes.has(aiHistoryIndexName),
+    needsCreatedAtIndex: !hasExactMysqlIndex(indexRows, "idx_ai_logs_created", ["created_at"]),
+    needsHistoryIndex: !hasExactMysqlIndex(indexRows, aiHistoryIndexName, aiHistoryIndexColumns)
+  };
 }
 
 async function ensureAuditStructure(databaseName) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const { missingColumns, missingCreatedAtIndex } = await loadMissingOperations(databaseName);
-    if (!missingColumns.length && !missingCreatedAtIndex) return;
+    const { missingColumns, createdAtIndexExists, historyIndexExists, needsCreatedAtIndex, needsHistoryIndex } = await loadMissingOperations(databaseName);
+    if (!missingColumns.length && !needsCreatedAtIndex && !needsHistoryIndex) return;
     const alterClauses = missingColumns.map(([columnName, definition]) => `ADD COLUMN ${columnName} ${definition}`);
-    if (missingCreatedAtIndex) alterClauses.push("ADD INDEX idx_ai_logs_created (created_at)");
+    if (needsCreatedAtIndex) {
+      if (createdAtIndexExists) alterClauses.push("DROP INDEX idx_ai_logs_created");
+      alterClauses.push("ADD INDEX idx_ai_logs_created (created_at)");
+    }
+    if (needsHistoryIndex) {
+      if (historyIndexExists) alterClauses.push(`DROP INDEX ${aiHistoryIndexName}`);
+      alterClauses.push(`ADD INDEX ${aiHistoryIndexName} (${aiHistoryIndexColumns.join(", ")})`);
+    }
 
-    // 中文注解：缺失列和索引合并为一次 ALTER；旧版 MySQL 最多重建一次审计表，避免逐列迁移放大锁与 IO。
-    const algorithms = missingCreatedAtIndex
+    // 中文注解：缺失列和历史分页/保留期索引合并为一次 ALTER；旧版 MySQL 最多重建一次审计表，避免逐项迁移放大锁与 IO。
+    const algorithms = needsCreatedAtIndex || needsHistoryIndex
       ? ["ALGORITHM=INPLACE, LOCK=NONE"]
       : ["ALGORITHM=INSTANT", "ALGORITHM=INPLACE, LOCK=NONE"];
     let shouldRetryForRace = false;
@@ -57,7 +73,7 @@ async function ensureAuditStructure(databaseName) {
         await connection.query(`ALTER TABLE ai_request_logs ${alterClauses.join(", ")}, ${algorithm}`);
         return;
       } catch (error) {
-        if (["ER_DUP_FIELDNAME", "ER_DUP_KEYNAME"].includes(error?.code)) {
+        if (["ER_DUP_FIELDNAME", "ER_DUP_KEYNAME", "ER_CANT_DROP_FIELD_OR_KEY"].includes(error?.code)) {
           // 中文注解：并发部署可能先完成相同 DDL，重新读取结构后只补仍缺失的部分。
           shouldRetryForRace = true;
           break;
@@ -72,7 +88,7 @@ async function ensureAuditStructure(databaseName) {
   }
 
   const remaining = await loadMissingOperations(databaseName);
-  if (remaining.missingColumns.length || remaining.missingCreatedAtIndex) {
+  if (remaining.missingColumns.length || remaining.needsCreatedAtIndex || remaining.needsHistoryIndex) {
     throw new Error("AI 审计隐私字段迁移未能收敛，请检查并发迁移状态。");
   }
 }

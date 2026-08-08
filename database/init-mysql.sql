@@ -123,6 +123,7 @@ CREATE TABLE IF NOT EXISTS ai_request_logs (
   PRIMARY KEY (id),
   KEY idx_ai_logs_created (created_at),
   KEY idx_ai_logs_user_created (user_id, created_at),
+  KEY idx_ai_logs_user_id (user_id, id),
   KEY idx_ai_logs_document (document_id),
   KEY idx_ai_logs_action (action_type),
   CONSTRAINT fk_ai_logs_document
