@@ -9,6 +9,16 @@ npm run check:commercial-readiness
 
 要求 Node.js 满足 `package.json.engines`。禁止携带 `.env`、本地日志、截图、测试压缩包、`node_modules` 或 `dist` 历史目录进入源码提交。
 
+仓库同时提供以下可审计部署基线：
+
+- `ops/nginx/molinword.conf.example`：HTTPS、反向代理、限流与 SPA 回退。
+- `ops/systemd/molinword-api.service`：运行配置预检、故障重启、优雅退出与最小写目录。
+- `ops/systemd/molinword-reconcile.*`：待对账 outbox 导入和幂等重试定时任务。
+- `ops/env/molinword.production.env.example`：不含真实密钥的生产变量清单。
+- `.github/workflows/commercial-readiness.yml`：拉取请求与主分支商业门禁。
+
+安装、验收和回滚命令见 `ops/README.md`。`npm run check:deployment-assets` 只验证这些资产的契约完整性，不证明它们已部署到目标服务器。
+
 ## 二、生产配置
 
 - `APP_ENV=production`。服务端会强制要求墨灵会话并关闭本地模拟。
@@ -27,6 +37,7 @@ npm run check:commercial-readiness
 - 生产环境默认启用最小化 JSON 访问日志，并通过 `X-Request-Id` 关联请求；日志不应采集 Cookie、查询串和请求体。
 
 生产配置不完整时 `server/index.js` 会在监听端口前直接退出，错误只列缺失项，不打印密钥值。
+发布目录切换前应在目标环境加载 `/etc/molinword/molinword.env` 后运行 `npm run check:runtime-config -- --require-production`，不得把变量值展开到命令行参数或日志。
 
 ## 三、数据库与模板
 

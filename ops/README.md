@@ -1,0 +1,99 @@
+# molinword 生产部署运行手册
+
+本目录提供 Nginx、systemd、生产环境变量样例和计费对账定时任务。它们是可审计的部署基线，不包含真实密钥，也不会替代目标环境的备份、域名、证书、数据库迁移或墨灵平台授权。
+
+## 一、部署前提
+
+- Linux 服务器已安装 Node.js 22、npm、Nginx 和 systemd。
+- 已创建无登录权限的 `molinword` 系统用户，代码目录为 `/opt/molinword`。
+- MySQL、MinIO、墨灵内部 API 和模型网关已准备专用生产账号及最小权限。
+- 域名与 TLS 证书已就绪，应用端口 `3001` 仅监听 `127.0.0.1`，不直接暴露公网。
+- 发布前已在 CI 或受控构建机执行 `npm ci`、`npm run check:commercial-readiness` 和 `npm run build`。
+
+## 二、发布
+
+以下命令中的 `<release-id>`、域名和路径必须由部署人员替换。不要把 `.env`、本地日志、截图、测试压缩包或开发缓存复制到服务器。
+
+```bash
+sudo install -d -m 0755 /opt/molinword/releases
+sudo install -d -m 0755 -o molinword -g molinword /opt/molinword/releases/<release-id>
+sudo install -d -m 0750 -o root -g molinword /etc/molinword
+sudo install -m 0640 -o root -g molinword ops/env/molinword.production.env.example /etc/molinword/molinword.env
+sudo install -m 0644 ops/systemd/molinword-api.service /etc/systemd/system/molinword-api.service
+sudo install -m 0644 ops/systemd/molinword-reconcile.service /etc/systemd/system/molinword-reconcile.service
+sudo install -m 0644 ops/systemd/molinword-reconcile.timer /etc/systemd/system/molinword-reconcile.timer
+sudo install -m 0644 ops/nginx/molinword.conf.example /etc/nginx/sites-available/molinword.conf
+```
+
+先编辑 `/etc/molinword/molinword.env`，通过密钥管理系统注入真实值；再编辑 Nginx 配置中的域名和证书路径。禁止把密钥直接写入命令历史。将已通过门禁且包含 `dist/` 的发布目录复制到 `/opt/molinword/releases/<release-id>`，确认文件归属 `molinword:molinword`，然后在服务器安装纯生产依赖并预检真实配置：
+
+```bash
+cd /opt/molinword/releases/<release-id>
+sudo -u molinword npm ci --omit=dev
+sudo -u molinword /bin/sh -c 'set -a; . /etc/molinword/molinword.env; set +a; exec /usr/bin/npm run check:runtime-config -- --require-production'
+```
+
+执行数据库操作前先核对目标库、备份与回滚方案。以下命令会修改真实数据库和模板存储，只能在获批变更窗口中逐条执行：
+
+```bash
+sudo -u molinword /bin/sh -c 'set -a; . /etc/molinword/molinword.env; set +a; exec /usr/bin/npm run db:migrate:document-template'
+sudo -u molinword /bin/sh -c 'set -a; . /etc/molinword/molinword.env; set +a; exec /usr/bin/npm run db:migrate:document-page-layout'
+sudo -u molinword /bin/sh -c 'set -a; . /etc/molinword/molinword.env; set +a; exec /usr/bin/npm run db:migrate:billing-reconciliation'
+sudo -u molinword /bin/sh -c 'set -a; . /etc/molinword/molinword.env; set +a; exec /usr/bin/npm run db:seed:templates'
+```
+
+迁移完成后再切换原子软链接并启动服务：
+
+```bash
+sudo ln -sfn /opt/molinword/releases/<release-id> /opt/molinword/current
+sudo systemctl daemon-reload
+sudo nginx -t
+sudo systemctl enable --now molinword-api.service
+sudo systemctl enable --now molinword-reconcile.timer
+sudo systemctl reload nginx
+```
+
+## 三、验收
+
+```bash
+curl -fsS http://127.0.0.1:3001/api/health
+curl -fsS https://word.example.com/api/health
+curl -fsS https://word.example.com/api/ready
+systemctl status molinword-api.service --no-pager
+systemctl status molinword-reconcile.timer --no-pager
+journalctl -u molinword-api.service -n 100 --no-pager
+```
+
+随后逐项执行 `docs/production-deployment-checklist.md` 的真实链路验收，保存请求 ID、时间、测试账号、调用前后积分、对账任务、Word 样例和桌面/移动端截图。`/api/ready` 必须为 200；仅 `/api/health` 为 200 不能证明数据库、MinIO 或模型网关可用。
+
+## 四、对账
+
+定时器每 5 分钟先导入持久卷 outbox，再使用原幂等键重试待对账任务。查看执行证据：
+
+```bash
+systemctl list-timers molinword-reconcile.timer
+journalctl -u molinword-reconcile.service -n 100 --no-pager
+sudo -u molinword npm run billing:reconcile:list
+```
+
+进入 `manual_review` 的任务禁止直接修改额度表或盲目释放；应核对墨灵账本、原幂等键和平台响应后人工处理。
+
+## 五、回滚
+
+应用回滚只切换到上一份已验证发布，不删除新版本，也不自动回滚数据库或用户文档：
+
+```bash
+sudo ln -sfn /opt/molinword/releases/<previous-release-id> /opt/molinword/current
+sudo systemctl restart molinword-api.service
+curl -fsS http://127.0.0.1:3001/api/health
+curl -fsS https://word.example.com/api/ready
+```
+
+如果新迁移与旧版本不兼容，停止回滚并按已批准的数据库恢复方案处理。禁止在没有备份和影响评估时执行破坏性 SQL。
+
+## 六、证据边界
+
+- 仓库门禁通过，只证明代码、构建、依赖许可证、自包含商业门禁和部署资产契约通过。
+- systemd `active` 只证明进程运行；Nginx 200 只证明入口可访问。
+- 只有在目标环境完成真实 SSO、积分、MySQL、MinIO、模型、Word 打开和多设备视觉验收，才能标记为生产可用。
+- 本手册不会创建生产账号、申请证书、修改防火墙、执行迁移、启用定时器或发布真实流量；这些操作必须由部署人员按变更流程授权执行。

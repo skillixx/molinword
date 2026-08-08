@@ -1,0 +1,44 @@
+[Unit]
+Description=Moling AI Word API
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+ConditionPathExists=/opt/molinword/current/server/index.js
+
+[Service]
+Type=simple
+User=molinword
+Group=molinword
+WorkingDirectory=/opt/molinword/current
+EnvironmentFile=/etc/molinword/molinword.env
+ExecStartPre=/usr/bin/node scripts/check-runtime-config.mjs --require-production
+ExecStart=/usr/bin/node server/index.js
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+TimeoutStartSec=60
+# 中文注解：大于应用允许的 1200 秒最大退出窗口，避免 systemd 提前 SIGKILL。
+TimeoutStopSec=1260
+UMask=0077
+StateDirectory=molinword
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/molinword
+
+[Install]
+WantedBy=multi-user.target

@@ -27,9 +27,14 @@ npm run dev
 - `MOLING_PRODUCT_ID`：墨灵平台商品 ID。
 - `LOCAL_MOLING_MOCK`：是否启用本地墨灵模拟模式。
 - `REQUIRE_MOLING_SESSION`：默认设为 `true`；仅本地直连调试时改为 `false`。`APP_ENV=production` 时服务端会强制启用门禁。
+- `APP_BASE_URL`：生产站点的 HTTPS 根地址，用于会话与来源校验。
+- `TRUSTED_PROXY_HOPS`：可信反向代理层数；单层 Nginx 通常设为 `1`。
 - `LLM_API_URL`：DeepSeek 或墨灵 token 网关的 chat/completions 地址。
+- `LLM_READINESS_URL`：使用同一凭据且不产生模型用量的模型就绪探测地址；留空时按 OpenAI 兼容接口推导 `/models`。
 - `LLM_API_KEY`：AI 模型密钥，只能放在服务端。
 - `LLM_MODEL`：模型名称，例如 `deepseek-chat` 或平台网关支持的模型名。
+- `MOLING_INTERNAL_TIMEOUT_MS`：墨灵内部接口（含响应正文读取）的超时时间。
+- `BILLING_RECONCILIATION_OUTBOX`：数据库暂不可写时保存待对账记录的持久卷绝对路径。
 - `DATABASE_URL`：MySQL 连接串。
 - `STORAGE_ENDPOINT`：MinIO 服务地址。
 - `STORAGE_BUCKET`：MinIO bucket 名称。
@@ -151,12 +156,14 @@ npm run billing:reconcile:retry
 - 后端接口错误只返回中文用户提示，真实错误保留在服务端日志。
 - 文档、导出文件下载都按当前用户校验，避免跨用户访问。
 - 生产启动会执行 fail-fast 配置校验；完整步骤见 `docs/production-deployment-checklist.md`。
+- 可审计的 Nginx、systemd、环境变量、计费对账定时器和回滚步骤见 `ops/README.md`；样例不能替代真实域名、证书、密钥和目标环境授权。
 - 开源依赖商业使用边界和许可证门禁见 `docs/open-source-commercial-use.md`。
 
 ## 构建验证
 
 ```bash
 npm run check:commercial-readiness
+npm run check:deployment-assets
 npm run build
 npm run check:template-agent
 npm run check:template-agent-api

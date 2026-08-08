@@ -1,0 +1,36 @@
+[Unit]
+Description=Moling AI Word billing reconciliation
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/opt/molinword/current/scripts/billing-reconciliation.mjs
+
+[Service]
+Type=oneshot
+User=molinword
+Group=molinword
+WorkingDirectory=/opt/molinword/current
+EnvironmentFile=/etc/molinword/molinword.env
+# 中文注解：先导入持久卷 outbox，再按原幂等键重试数据库中的待对账任务。
+ExecStartPre=/usr/bin/node scripts/check-runtime-config.mjs --require-production
+ExecStart=/usr/bin/node scripts/billing-reconciliation.mjs import-outbox
+ExecStart=/usr/bin/node scripts/billing-reconciliation.mjs retry
+TimeoutStartSec=300
+UMask=0077
+StateDirectory=molinword
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/molinword

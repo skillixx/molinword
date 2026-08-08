@@ -1,0 +1,82 @@
+# 中文注解：本文件安装到 /etc/nginx/sites-available/molinword.conf 前，必须替换域名和证书路径。
+limit_req_zone $binary_remote_addr zone=molinword_api:10m rate=10r/s;
+limit_req_zone $binary_remote_addr zone=molinword_ai:10m rate=2r/s;
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name word.example.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name word.example.com;
+
+    ssl_certificate /etc/letsencrypt/live/word.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/word.example.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:MOLINWORD_SSL:10m;
+    ssl_session_timeout 1d;
+
+    root /opt/molinword/current/dist;
+    index index.html;
+    client_max_body_size 20m;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    add_header Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+
+    # 中文注解：AI 路由同时受通用 API 和更严格 AI 桶约束，且必须写在 /api/ 之前。
+    location ^~ /api/ai/ {
+        limit_req zone=molinword_api burst=30 nodelay;
+        limit_req zone=molinword_ai burst=6 nodelay;
+        limit_req_status 429;
+
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 900s;
+        proxy_read_timeout 900s;
+    }
+
+    location ^~ /api/ {
+        limit_req zone=molinword_api burst=30 nodelay;
+        limit_req_status 429;
+
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 900s;
+        proxy_read_timeout 900s;
+    }
+
+    location = /index.html {
+        add_header Cache-Control "no-store" always;
+        try_files $uri =404;
+    }
+
+    location ^~ /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        try_files $uri =404;
+    }
+
+    # 中文注解：Vite History 路由统一回退到 index.html，刷新工作台、模板库和编辑器路由不会 404。
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

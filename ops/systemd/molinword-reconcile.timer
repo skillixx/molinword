@@ -1,0 +1,13 @@
+[Unit]
+Description=Run Moling AI Word billing reconciliation periodically
+
+[Timer]
+OnBootSec=2m
+OnUnitActiveSec=5m
+RandomizedDelaySec=30s
+AccuracySec=30s
+Persistent=true
+Unit=molinword-reconcile.service
+
+[Install]
+WantedBy=timers.target
