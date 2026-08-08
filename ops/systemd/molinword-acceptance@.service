@@ -3,19 +3,21 @@ Description=Moling AI Word production acceptance preflight for release %I
 Wants=network-online.target
 After=network-online.target molinword-api.service
 ConditionPathExists=/opt/molinword/current/package.json
+ConditionPathExists=/usr/bin/flock
 
 [Service]
 Type=oneshot
-User=molinword
-Group=molinword
+User=molinword-acceptance
+Group=molinword-acceptance
 WorkingDirectory=/opt/molinword/current
 EnvironmentFile=/etc/molinword/molinword.env
 ExecStartPre=/usr/bin/node scripts/check-runtime-config.mjs --require-production
 # 中文注解：站点只取受保护环境中的 APP_BASE_URL，实例名只能作为经过脚本校验的发布号和证据文件名。
-ExecStart=/usr/bin/node scripts/production-acceptance-evidence.mjs --release-id=%I --output-dir=/var/lib/molinword/acceptance
+# 中文注解：采集与最终签名共用内核锁，禁止签名哈希附件期间插入新的预检记录。
+ExecStart=/usr/bin/flock --exclusive /var/lib/molinword-acceptance/.acceptance.lock /usr/bin/node scripts/production-acceptance-evidence.mjs --release-id=%I --output-dir=/var/lib/molinword-acceptance
 TimeoutStartSec=180
 UMask=0077
-StateDirectory=molinword
+StateDirectory=molinword-acceptance
 StateDirectoryMode=0700
 NoNewPrivileges=true
 PrivateTmp=true
@@ -32,4 +34,4 @@ SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 CapabilityBoundingSet=
 AmbientCapabilities=
-ReadWritePaths=/var/lib/molinword
+ReadWritePaths=/var/lib/molinword-acceptance

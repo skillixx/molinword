@@ -6,6 +6,12 @@ import { request as httpsRequest } from "node:https";
 import { BlockList, isIP } from "node:net";
 import { dirname, extname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  createPendingProductionManualChecks,
+  normalizeAcceptanceReleaseId,
+  productionAcceptancePreflightKind,
+  productionAcceptanceSchemaVersion
+} from "../shared/production-acceptance-contract.js";
 
 const maximumJsonBytes = 64 * 1024;
 const defaultTimeoutMs = 10000;
@@ -27,29 +33,8 @@ for (const [network, prefix] of [
   ["5f00::", 16], ["fc00::", 7], ["fe80::", 10], ["fec0::", 10], ["ff00::", 8]
 ]) forbiddenAddressRanges.addSubnet(network, prefix, "ipv6");
 
-const manualChecks = Object.freeze([
-  { id: "moling-sso", title: "墨灵 SSO 与跨用户隔离", evidenceRequired: "平台入口截图、专用测试用户、会话 Cookie 属性和跨用户 401/403 记录" },
-  { id: "http-contracts", title: "错误输入与限流契约", evidenceRequired: "无效 JSON 的 400、真实限流 429、Retry-After/RateLimit 响应头和中文提示截图" },
-  { id: "agent-workflow", title: "四阶段文档智能体真实链路", evidenceRequired: "需求分析、MySQL active 白名单模板匹配、结构设计、质量审校四阶段记录及最终文档，不得使用 Mock" },
-  { id: "points-ledger", title: "积分预占、结算与幂等", evidenceRequired: "调用前后积分、平台账本、幂等键和只结算一次的记录" },
-  { id: "insufficient-points", title: "余额不足拒绝", evidenceRequired: "真实低余额账号、402 请求 ID、调用前后余额及模型未被调用的证据" },
-  { id: "failure-reconciliation", title: "模型失败补偿与对账", evidenceRequired: "503 请求 ID、积分释放结果、原幂等键及待对账或人工复核记录" },
-  { id: "word-visual", title: "Microsoft Word 导入导出视觉验收", evidenceRequired: "包含标题、表格、图片和自定义颜色的 Word 样例及逐页截图" },
-  { id: "multi-device", title: "390px、平板和桌面端交互验收", evidenceRequired: "三种宽度截图、无横向溢出记录和按钮反馈清单" },
-  { id: "audit-correlation", title: "请求日志与 AI 审计关联", evidenceRequired: "同一 X-Request-Id 的访问日志、脱敏 ai_request_logs 记录和无敏感正文证明" },
-  { id: "rollback-drill", title: "版本回滚与在途请求演练", evidenceRequired: "前后 release id、systemd/Nginx 状态、ready 结果和回滚时间线" }
-]);
-
 function acceptanceFailure(message, detailCode) {
   return Object.assign(new Error(message), { detailCode });
-}
-
-function assertReleaseId(releaseId) {
-  const normalized = String(releaseId || "").trim();
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(normalized)) {
-    throw new Error("release id 必须为 1 至 80 位字母、数字、点、下划线或连字符。");
-  }
-  return normalized;
 }
 
 export function validateAcceptanceTarget(baseUrl, { allowInsecureLoopback = false } = {}) {
@@ -246,13 +231,13 @@ function addCheck(checks, id, passed, detailCode) {
 }
 
 export function createBlockedAcceptanceEvidence({ releaseId, error } = {}) {
-  const normalizedReleaseId = assertReleaseId(releaseId);
+  const normalizedReleaseId = normalizeAcceptanceReleaseId(releaseId);
   const detailCode = safeInitializationFailureCodes.has(error?.detailCode)
     ? error.detailCode
     : "collector-initialization-failed";
   return {
-    schemaVersion: 1,
-    kind: "molinword-production-acceptance-preflight",
+    schemaVersion: productionAcceptanceSchemaVersion,
+    kind: productionAcceptancePreflightKind,
     releaseId: normalizedReleaseId,
     // 中文注解：初始化失败时不回显尚未通过安全校验的 URL，只保存稳定错误码和待人工验收框架。
     targetOrigin: "",
@@ -262,7 +247,7 @@ export function createBlockedAcceptanceEvidence({ releaseId, error } = {}) {
     checks: [{ id: "collector-initialization", status: "failed", detailCode }],
     observations: { initialization: { detailCode } },
     requestIds: [],
-    manualChecks: manualChecks.map((check) => ({ ...check, status: "pending" }))
+    manualChecks: createPendingProductionManualChecks()
   };
 }
 
@@ -328,7 +313,7 @@ export async function collectProductionAcceptanceEvidence({
   lookup = dnsLookup
 } = {}) {
   const target = validateAcceptanceTarget(baseUrl, { allowInsecureLoopback });
-  const normalizedReleaseId = assertReleaseId(releaseId);
+  const normalizedReleaseId = normalizeAcceptanceReleaseId(releaseId);
   const normalizedTimeout = normalizeTimeout(timeoutMs);
   assertApprovedProductionTarget(target, approvedBaseUrl, allowInsecureLoopback);
   const addresses = await resolveAcceptanceAddresses(target, { lookup, allowInsecureLoopback, timeoutMs: normalizedTimeout });
@@ -376,8 +361,8 @@ export async function collectProductionAcceptanceEvidence({
 
   const automaticStatus = checks.every((check) => check.status === "passed") ? "passed" : "failed";
   return {
-    schemaVersion: 1,
-    kind: "molinword-production-acceptance-preflight",
+    schemaVersion: productionAcceptanceSchemaVersion,
+    kind: productionAcceptancePreflightKind,
     releaseId: normalizedReleaseId,
     targetOrigin: target.origin,
     collectedAt: new Date().toISOString(),
@@ -392,7 +377,7 @@ export async function collectProductionAcceptanceEvidence({
       unauthenticatedAi: { status: unauthorizedProbe?.status || 0, skipped: !authenticationProbeAllowed }
     },
     requestIds,
-    manualChecks: manualChecks.map((check) => ({ ...check, status: "pending" }))
+    manualChecks: createPendingProductionManualChecks()
   };
 }
 
@@ -412,7 +397,7 @@ export async function writeAcceptanceEvidence(outputPath, evidence) {
 
 export async function writeAcceptanceEvidenceToDirectory(outputDirectory, evidence) {
   const timestamp = String(evidence?.collectedAt || new Date().toISOString()).replace(/[^0-9TZ]/g, "");
-  const fileName = `${assertReleaseId(evidence?.releaseId)}-${timestamp}-${randomUUID()}.json`;
+  const fileName = `${normalizeAcceptanceReleaseId(evidence?.releaseId)}-${timestamp}-${randomUUID()}.json`;
   // 中文注解：生产重试使用时间与随机值生成新文件，既不覆盖失败证据，也不阻断同一发布号再次采集。
   return writeAcceptanceEvidence(resolve(String(outputDirectory || ""), fileName), evidence);
 }

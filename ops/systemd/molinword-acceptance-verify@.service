@@ -1,0 +1,35 @@
+[Unit]
+Description=Moling AI Word verify latest signed acceptance for release %I
+ConditionPathExists=/opt/molinword/current/package.json
+ConditionPathExists=/etc/molinword/acceptance-approval.key
+ConditionPathIsDirectory=/var/lib/molinword-acceptance
+ConditionPathExists=/var/lib/molinword-acceptance/.acceptance.lock
+ConditionPathExists=/usr/bin/flock
+
+[Service]
+Type=oneshot
+User=molinword-acceptance
+Group=molinword-acceptance
+WorkingDirectory=/opt/molinword/current
+LoadCredential=acceptance_approval_key:/etc/molinword/acceptance-approval.key
+ExecStartPre=/usr/bin/node scripts/check-release-manifest.mjs --expected-release-id=%I
+# 中文注解：复核任务不写文件，会重新验证最新批准记录的 HMAC 及全部原始证据摘要。
+ExecStart=/usr/bin/flock --shared /var/lib/molinword-acceptance/.acceptance.lock /usr/bin/node scripts/finalize-production-acceptance.mjs --verify-latest --release-id=%I --acceptance-dir=/var/lib/molinword-acceptance
+TimeoutStartSec=300
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadOnlyPaths=/var/lib/molinword-acceptance

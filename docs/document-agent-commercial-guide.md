@@ -85,7 +85,8 @@ npm run check:template-agent-ui
 npm run check:docx-export-format
 npm run check:ai-audit-privacy
 npm run check:production-acceptance
+npm run check:production-acceptance-finalization
 npm run db:seed:templates
 ```
 
-`check:template-agent-api` 使用自包含的 OpenAI 兼容模型服务，验证需求分析、结构设计、质量审校三次真实模型调用和模板匹配工具阶段。`check:template-agent-ui` 同时在 1440px 桌面和 390px 窄屏执行完整流程：输入需求、查看四阶段结果、采用方案、创建文档、打开编辑器，并检查元数据表、正式章节和 Word 导出。`check:production-acceptance` 验证生产证据采集器的制品版本绑定、批准域名与公网 DNS 绑定、脱敏、超时、失败关闭和不可覆盖契约；目标环境先验证由 Git 提交和实际文件哈希生成的发布清单，再通过 `molinword-acceptance@<release-id>.service` 从受保护环境生成预检文件，但其中的 `manual-approval-required` 仍须十项真实 SSO、HTTP 契约、四阶段智能体、积分、Word、多设备、审计和回滚证据关闭。数据库与 MinIO 的真实连接仍需在目标环境单独验收。
+`check:template-agent-api` 使用自包含的 OpenAI 兼容模型服务，验证需求分析、结构设计、质量审校三次真实模型调用和模板匹配工具阶段。`check:template-agent-ui` 同时在 1440px 桌面和 390px 窄屏执行完整流程：输入需求、查看四阶段结果、采用方案、创建文档、打开编辑器，并检查元数据表、正式章节和 Word 导出。`check:production-acceptance` 验证生产证据采集器的制品版本绑定、批准域名与公网 DNS 绑定、脱敏、超时、失败关闭和不可覆盖契约；`check:production-acceptance-finalization` 验证最新预检不可回退、十项人工证据附件哈希、按发布授权、独立 HMAC 签名、追加式批准和附件改动检测。目标环境仍须执行真实 SSO、HTTP 契约、四阶段智能体、积分、Word、多设备、审计和回滚验收，再通过最终验收 systemd 单元生成 `approved` 记录。数据库与 MinIO 的真实连接仍需在目标环境单独验收。

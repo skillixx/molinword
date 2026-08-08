@@ -116,14 +116,45 @@ const acceptanceService = await readRequired("ops/systemd/molinword-acceptance@.
 for (const expected of [
   "WorkingDirectory=/opt/molinword/current",
   "EnvironmentFile=/etc/molinword/molinword.env",
+  "User=molinword-acceptance",
+  "Group=molinword-acceptance",
   "ExecStartPre=/usr/bin/node scripts/check-runtime-config.mjs --require-production",
-  "ExecStart=/usr/bin/node scripts/production-acceptance-evidence.mjs --release-id=%I --output-dir=/var/lib/molinword/acceptance",
+  "ExecStart=/usr/bin/flock --exclusive /var/lib/molinword-acceptance/.acceptance.lock /usr/bin/node scripts/production-acceptance-evidence.mjs --release-id=%I --output-dir=/var/lib/molinword-acceptance",
   "NoNewPrivileges=true",
   "ProtectSystem=strict",
-  "ReadWritePaths=/var/lib/molinword"
+  "ReadWritePaths=/var/lib/molinword-acceptance"
 ]) {
   assert.ok(acceptanceService.includes(expected), `验收 systemd 模板缺少 ${expected}`);
 }
+const acceptanceFinalizeService = await readRequired("ops/systemd/molinword-acceptance-finalize@.service");
+for (const expected of [
+  "LoadCredential=acceptance_approval_key:/etc/molinword/acceptance-approval.key",
+  "LoadCredential=acceptance_authorization:/etc/molinword/acceptance-authorization.json",
+  "User=molinword-acceptance",
+  "Group=molinword-acceptance",
+  "ExecStartPre=/usr/bin/node scripts/check-release-manifest.mjs --expected-release-id=%I",
+  "ExecStart=/usr/bin/flock --exclusive /var/lib/molinword-acceptance/.acceptance.lock /usr/bin/node scripts/finalize-production-acceptance.mjs --release-id=%I --acceptance-dir=/var/lib/molinword-acceptance",
+  "NoNewPrivileges=true",
+  "ProtectSystem=strict",
+  "RestrictAddressFamilies=AF_UNIX",
+  "ReadWritePaths=/var/lib/molinword-acceptance"
+]) {
+  assert.ok(acceptanceFinalizeService.includes(expected), `最终验收 systemd 模板缺少 ${expected}`);
+}
+assert.doesNotMatch(acceptanceFinalizeService, /EnvironmentFile=|SupplementaryGroups=molinword/, "最终签名单元不得继承 API 生产密钥读取权限");
+const acceptanceVerifyService = await readRequired("ops/systemd/molinword-acceptance-verify@.service");
+for (const expected of [
+  "LoadCredential=acceptance_approval_key:/etc/molinword/acceptance-approval.key",
+  "User=molinword-acceptance",
+  "Group=molinword-acceptance",
+  "ExecStart=/usr/bin/flock --shared /var/lib/molinword-acceptance/.acceptance.lock /usr/bin/node scripts/finalize-production-acceptance.mjs --verify-latest --release-id=%I --acceptance-dir=/var/lib/molinword-acceptance",
+  "ProtectSystem=strict",
+  "RestrictAddressFamilies=AF_UNIX",
+  "ReadOnlyPaths=/var/lib/molinword-acceptance"
+]) {
+  assert.ok(acceptanceVerifyService.includes(expected), `验收复核 systemd 模板缺少 ${expected}`);
+}
+assert.doesNotMatch(acceptanceVerifyService, /EnvironmentFile=|SupplementaryGroups=molinword/, "最终复核单元不得继承 API 生产密钥读取权限");
 
 const productionEnvironment = await readRequired("ops/env/molinword.production.env.example");
 for (const expected of [
@@ -174,11 +205,42 @@ assert.match(productionAcceptanceCollector, /createBlockedAcceptanceEvidence/, "
 assert.match(productionAcceptanceCollector, /maximumJsonBytes\s*=\s*64 \* 1024/, "生产验收响应正文必须设置读取上限");
 assert.match(productionAcceptanceCollector, /flag: "wx"/, "生产验收证据必须拒绝覆盖历史文件");
 assert.match(productionAcceptanceCollector, /health\.releaseId === normalizedReleaseId/, "生产验收证据必须绑定运行服务的发布标识");
+const acceptanceFinalizer = await readRequired("scripts/finalize-production-acceptance.mjs");
+assert.match(acceptanceFinalizer, /createHmac\("sha256"/, "最终验收记录必须使用 HMAC-SHA256 绑定证据");
+assert.match(acceptanceFinalizer, /timingSafeEqual/, "最终验收签名校验必须使用恒定时间比较");
+assert.match(acceptanceFinalizer, /latest-preflight-blocked/, "最新自动预检失败时不得回退批准旧记录");
+assert.match(acceptanceFinalizer, /approval-preflight-superseded/, "只读复核必须确认签名仍绑定当前最新预检");
+assert.match(acceptanceFinalizer, /preflight-changed-during-finalization/, "最终签名写入前必须再次确认预检未变化");
+assert.match(acceptanceFinalizer, /maximumPreflightCandidates\s*=\s*64/, "最终验收必须限制自动预检候选数量");
+assert.match(acceptanceFinalizer, /O_NOFOLLOW/, "最终验收必须通过文件描述符拒绝符号链接竞态");
+assert.match(acceptanceFinalizer, /authorization-grant-mismatch/, "最终验收必须把发布号、审批人和变更单绑定到独立授权凭据");
+assert.match(acceptanceFinalizer, /preflight-digest-mismatch/, "人工清单必须绑定审批人复核过的最新预检摘要");
+assert.match(acceptanceFinalizer, /evidence-digest-mismatch/, "人工清单中的附件摘要必须与实际文件一致");
+assert.match(acceptanceFinalizer, /flag: "wx"/, "最终验收记录必须独占追加，不能覆盖旧批准");
+assert.match(acceptanceFinalizer, /CREDENTIALS_DIRECTORY/, "最终验收密钥必须来自 systemd credential");
+assert.match(acceptanceFinalizer, /approved-evidence-changed/, "验收复核必须重新校验原始附件完整性");
+const manualAcceptanceExample = JSON.parse(await readRequired("ops/acceptance/manual-acceptance.example.json"));
+assert.equal(manualAcceptanceExample.kind, "molinword-production-manual-acceptance");
+assert.deepEqual(manualAcceptanceExample.checks.map((check) => check.id), [
+  "moling-sso", "http-contracts", "agent-workflow", "points-ledger", "insufficient-points",
+  "failure-reconciliation", "word-visual", "multi-device", "audit-correlation", "rollback-drill"
+]);
+assert.equal(manualAcceptanceExample.preflightSha256, "replace-with-latest-preflight-sha256");
+assert.ok(manualAcceptanceExample.checks.every((check) => check.evidenceFiles.every((evidence) => evidence.file && evidence.sha256)), "人工验收样例必须为每个附件提供路径与摘要字段");
+const acceptanceAuthorizationExample = JSON.parse(await readRequired("ops/acceptance/authorization.example.json"));
+assert.deepEqual(Object.keys(acceptanceAuthorizationExample).sort(), [
+  "approverId", "authorizedAt", "changeId", "expiresAt", "kind", "manualSha256", "preflightSha256", "releaseId", "schemaVersion"
+].sort(), "生产验收授权样例必须只包含固定字段");
+assert.equal(acceptanceAuthorizationExample.kind, "molinword-production-acceptance-authorization");
+assert.equal(acceptanceAuthorizationExample.preflightSha256, "replace-with-latest-preflight-sha256");
+assert.equal(acceptanceAuthorizationExample.manualSha256, "replace-with-manual-json-sha256");
 const packageJson = JSON.parse(await readRequired("package.json"));
 assert.equal(packageJson.scripts?.["check:runtime-config"], "node scripts/check-runtime-config.mjs");
 assert.equal(packageJson.scripts?.["check:runtime-config:production"], "node scripts/check-runtime-config.mjs --require-production");
 assert.equal(packageJson.scripts?.["check:production-acceptance"], "node scripts/check-production-acceptance-evidence.mjs");
+assert.equal(packageJson.scripts?.["check:production-acceptance-finalization"], "node scripts/check-production-acceptance-finalization.mjs");
 assert.equal(packageJson.scripts?.["production:collect-acceptance"], "node scripts/production-acceptance-evidence.mjs");
+assert.equal(packageJson.scripts?.["production:finalize-acceptance"], "node scripts/finalize-production-acceptance.mjs");
 assert.equal(packageJson.scripts?.["check:release-target"], "node scripts/check-release-target.mjs");
 assert.equal(packageJson.scripts?.["check:release-target-contract"], "node scripts/check-release-target.mjs --self-test");
 assert.equal(packageJson.scripts?.["check:release-manifest"], "node scripts/check-release-manifest.mjs");
@@ -194,6 +256,7 @@ assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:f
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:third-party-notices/);
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:release-target-contract/);
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:production-acceptance/);
+assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:production-acceptance-finalization/);
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:release-manifest-contract/);
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:release-manifest/);
 const thirdPartyNoticeIndex = await readRequired("public/THIRD_PARTY_NOTICES.md");
@@ -252,6 +315,16 @@ assert.match(runbook, /\/etc\/nginx\/sites-enabled\/molinword\.conf/);
 assert.ok(runbook.indexOf("/etc/nginx/sites-enabled/molinword.conf") < runbook.indexOf("sudo nginx -t"), "站点必须先启用再做 Nginx 全量语法检查");
 assert.match(runbook, /sudo systemctl restart molinword-api\.service/, "切换版本后必须重启已运行的 API 服务");
 assert.match(runbook, /molinword-acceptance@<release-id>\.service/, "部署手册必须通过受保护环境运行生产验收采集器");
+assert.match(runbook, /molinword-acceptance-finalize@<release-id>\.service/, "部署手册必须提供独立凭据保护的最终验收命令");
+assert.match(runbook, /molinword-acceptance-verify@<release-id>\.service/, "部署手册必须提供最终验收附件复核命令");
+assert.match(runbook, /acceptance-approval\.key/, "部署手册必须说明独立最终验收签名密钥");
+assert.match(runbook, /acceptance-authorization\.json/, "部署手册必须说明按发布签发的 root-only 授权凭据");
+assert.match(runbook, /有效期不超过七天/, "部署手册必须限制最终验收授权凭据的有效期");
+assert.match(runbook, /独立验收用户/, "部署手册必须隔离 API 与验收目录的系统身份");
+assert.match(runbook, /test "\$\(id -u molinword\)" != "\$\(id -u molinword-acceptance\)" \|\| \{[^\n]+exit 1; \}/, "部署手册必须失败中止 API 与验收用户复用 UID 的部署");
+assert.match(runbook, /test "\$\(id -g molinword\)" != "\$\(id -g molinword-acceptance\)" \|\| \{[^\n]+exit 1; \}/, "部署手册必须失败中止 API 与验收用户复用主 GID 的部署");
+assert.match(runbook, /完整人工清单摘要/, "部署手册必须让短期授权绑定人工清单的确定字节");
+assert.match(runbook, /内核 `flock`/, "部署手册必须说明采集、签名与复核的并发锁边界");
 assert.match(runbook, /manual-approval-required/, "部署手册必须说明自动预检后仍需人工批准");
 assert.match(runbook, /Git 提交与实际前后端制品哈希共同生成/, "部署手册必须说明发布号由实际制品派生而非环境变量自报");
 for (const heading of ["发布", "验收", "回滚", "对账", "证据边界"]) {

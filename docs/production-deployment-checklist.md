@@ -70,7 +70,7 @@ npm run check:commercial-readiness
 cd /opt/molinword/current
 sudo systemctl start 'molinword-acceptance@<release-id>.service'
 sudo systemctl status 'molinword-acceptance@<release-id>.service' --no-pager
-sudo ls -lt /var/lib/molinword/acceptance/<release-id>-*.json
+sudo ls -lt /var/lib/molinword-acceptance/<release-id>-*.json
 ```
 
 专用 systemd 单元从受保护的环境文件读取 `APP_BASE_URL`。采集器要求目标与该地址完全一致，拒绝 IP、私网、回环、链路本地、公私混合解析和 DNS 重绑定，并校验 HTTPS、HTML 入口及 `no-store` 缓存策略、安全响应头、`APP_ENV=production`、运行时制品清单发布号与实例发布号一致、强制会话、MySQL/MinIO/模型就绪、JSON 404、无副作用 AI 认证端点 401 和服务端请求 ID。它只保存白名单布尔值、状态码、安全响应头和请求 ID，单个 JSON 正文最多读取 64 KiB，超时、异常状态、制品不符或缺失头部都会失败关闭。自动通过只会得到 `releaseDecision=manual-approval-required`，不能替代以下真实账号、账本、Word 和人工签字验收。
@@ -85,6 +85,17 @@ sudo ls -lt /var/lib/molinword/acceptance/<release-id>-*.json
 7. 导入包含标题、表格、图片的 DOCX，编辑后导出；在 Microsoft Word 中确认标题与各级标题为规范黑色、正文与行内自定义颜色不被误改。
 8. 在 390px、平板和桌面宽度检查模板库、智能体结果和编辑器，不应横向溢出，所有按钮均有明确反馈。
 9. 发起一次 AI 请求，使用 `X-Request-Id` 关联访问日志和 `ai_request_logs.request_id`；确认 `prompt`、`response` 为空，摘要和字符数存在，且日志不含密钥或客户正文。
+10. 切换到上一份制品并等待在途请求结束，确认 `/api/health` 自动回显上一制品清单中的发布号，随后恢复当前版本并保存时间线。
+
+将十项脱敏证据放入独立验收用户专属的 `/var/lib/molinword-acceptance/<release-id>-evidence/`，按 `ops/acceptance/manual-acceptance.example.json` 生成 `<release-id>-manual.json`；长期运行的 API 用户不能访问这个 0700 目录。人工清单必须填写授权审批人、变更单号、晚于最新自动预检的 UTC 批准时间、最新预检 SHA-256 和每个附件 SHA-256；JSON 仅允许固定字段，附件必须为当前发布号目录内的非空常规文件。摘要应在审批人完成内容复核后用服务器 `sha256sum` 计算，避免路径相同但内容已被替换。最后计算整份人工清单 SHA-256，由变更流程按 `ops/acceptance/authorization.example.json` 签发 root-only 短期授权凭据，精确绑定同一发布号、审批人、变更单、预检摘要和人工清单摘要，有效期不得超过七天。
+
+```bash
+sudo systemctl start 'molinword-acceptance-finalize@<release-id>.service'
+sudo systemctl start 'molinword-acceptance-verify@<release-id>.service'
+sudo systemctl status 'molinword-acceptance-verify@<release-id>.service' --no-pager
+```
+
+最终验收会绑定最新成功预检、root 管理的短期授权、人工清单和每个附件的 SHA-256，并使用 API 无权读取的独立 systemd credential 生成 HMAC-SHA256。只读复核会重新选择当前最新预检并读取所有原始证据；任何文件被改动、批准后出现更新预检、最新预检失败、检查缺失、授权不匹配或签名不匹配都必须失败关闭。
 
 ## 五、对账与回滚
 
@@ -99,6 +110,4 @@ sudo systemctl start 'molinword-maintenance@billing:reconcile:retry.service'
 - 回滚应用版本不回滚用户文档或计费账本；数据库结构采用向后兼容新增表/列，回滚前先验证旧版本可忽略新结构。
 - 历史 AI 正文脱敏和过期日志删除不可回滚；执行前必须确认备份、目标库、保留期限审批和影响范围。
 
-10. 切换到上一份制品并等待在途请求结束，确认 `/api/health` 自动回显上一制品清单中的发布号，随后恢复当前版本并保存时间线。
-
-完成以上真实链路、填写自动证据文件中的十项 `manualChecks` 并由业务验收人保存签字证据后，才能把该版本标记为生产可用。
+完成以上真实链路、取得 `releaseDecision=approved` 的追加式签名记录、通过只读附件复核并由业务验收人在变更单签字后，才能把该版本标记为生产可用。

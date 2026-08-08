@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "kind": "molinword-production-manual-acceptance",
+  "releaseId": "replace-with-release-id",
+  "approverId": "replace-with-approved-operator-id",
+  "changeId": "replace-with-change-id",
+  "approvedAt": "2026-01-01T00:00:00.000Z",
+  "preflightSha256": "replace-with-latest-preflight-sha256",
+  "checks": [
+    { "id": "moling-sso", "status": "passed", "evidenceFiles": [{ "file": "replace-with-release-id-evidence/moling-sso.png", "sha256": "replace-with-sha256" }] },
+    { "id": "http-contracts", "status": "passed", "evidenceFiles": [{ "file": "replace-with-release-id-evidence/http-contracts.txt", "sha256": "replace-with-sha256" }] },
+    { "id": "agent-workflow", "status": "passed", "evidenceFiles": [{ "file": "replace-with-release-id-evidence/agent-workflow.png", "sha256": "replace-with-sha256" }] },
+    { "id": "points-ledger", "status": "passed", "evidenceFiles": [{ "file": "replace-with-release-id-evidence/points-ledger.txt", "sha256": "replace-with-sha256" }] },
+    { "id": "insufficient-points", "status": "passed", "evidenceFiles": [{ "file": "replace-with-release-id-evidence/insufficient-points.txt", "sha256": "replace-with-sha256" }] },
+    { "id": "failure-reconciliation", "status": "passed", "evidenceFiles": [{ "file": "replace-with-release-id-evidence/failure-reconciliation.txt", "sha256": "replace-with-sha256" }] },
+    { "id": "word-visual", "status": "passed", "evidenceFiles": [{ "file": "replace-with-release-id-evidence/word-visual.docx", "sha256": "replace-with-sha256" }, { "file": "replace-with-release-id-evidence/word-visual.png", "sha256": "replace-with-sha256" }] },
+    { "id": "multi-device", "status": "passed", "evidenceFiles": [{ "file": "replace-with-release-id-evidence/multi-device.png", "sha256": "replace-with-sha256" }] },
+    { "id": "audit-correlation", "status": "passed", "evidenceFiles": [{ "file": "replace-with-release-id-evidence/audit-correlation.txt", "sha256": "replace-with-sha256" }] },
+    { "id": "rollback-drill", "status": "passed", "evidenceFiles": [{ "file": "replace-with-release-id-evidence/rollback-drill.txt", "sha256": "replace-with-sha256" }] }
+  ]
+}

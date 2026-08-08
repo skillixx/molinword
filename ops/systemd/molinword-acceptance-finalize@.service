@@ -1,0 +1,38 @@
+[Unit]
+Description=Moling AI Word finalize signed acceptance for release %I
+After=molinword-api.service
+ConditionPathExists=/opt/molinword/current/package.json
+ConditionPathExists=/etc/molinword/acceptance-approval.key
+ConditionPathExists=/etc/molinword/acceptance-authorization.json
+ConditionPathExists=/usr/bin/flock
+
+[Service]
+Type=oneshot
+User=molinword-acceptance
+Group=molinword-acceptance
+WorkingDirectory=/opt/molinword/current
+LoadCredential=acceptance_approval_key:/etc/molinword/acceptance-approval.key
+LoadCredential=acceptance_authorization:/etc/molinword/acceptance-authorization.json
+ExecStartPre=/usr/bin/node scripts/check-release-manifest.mjs --expected-release-id=%I
+# 中文注解：最终批准只读取当前版本的预检、人工清单与附件，并向持久目录追加 HMAC 签名记录。
+ExecStart=/usr/bin/flock --exclusive /var/lib/molinword-acceptance/.acceptance.lock /usr/bin/node scripts/finalize-production-acceptance.mjs --release-id=%I --acceptance-dir=/var/lib/molinword-acceptance
+TimeoutStartSec=300
+UMask=0077
+StateDirectory=molinword-acceptance
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/molinword-acceptance

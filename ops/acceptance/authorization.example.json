@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "kind": "molinword-production-acceptance-authorization",
+  "releaseId": "replace-with-release-id",
+  "approverId": "replace-with-approved-operator-id",
+  "changeId": "replace-with-change-id",
+  "authorizedAt": "2026-01-01T00:05:00.000Z",
+  "expiresAt": "2026-01-02T00:00:00.000Z",
+  "preflightSha256": "replace-with-latest-preflight-sha256",
+  "manualSha256": "replace-with-manual-json-sha256"
+}
