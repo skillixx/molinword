@@ -8,13 +8,13 @@ if (!process.env.DATABASE_URL) {
 const connection = await mysql.createConnection(process.env.DATABASE_URL);
 
 // 中文注解：所有 DDL 名称和定义均由脚本内固定清单提供，不接受外部参数，避免动态 DDL 注入。
-const auditColumns = [
-  ["request_id", "VARCHAR(64) NULL COMMENT '服务端请求 ID，用于关联访问日志' AFTER model"],
-  ["prompt_sha256", "CHAR(64) NULL COMMENT '完整提示词 SHA-256' AFTER response"],
-  ["response_sha256", "CHAR(64) NULL COMMENT '完整模型回复 SHA-256' AFTER prompt_sha256"],
-  ["prompt_chars", "INT UNSIGNED NULL COMMENT '提示词 Unicode 字符数' AFTER response_sha256"],
-  ["response_chars", "INT UNSIGNED NULL COMMENT '模型回复 Unicode 字符数' AFTER prompt_chars"]
-];
+const auditColumnDefinitions = new Map([
+  ["request_id", "VARCHAR(64) NULL COMMENT '服务端请求 ID，用于关联访问日志'"],
+  ["prompt_hmac_sha256", "CHAR(64) NULL COMMENT '提示词 HMAC-SHA256 指纹'"],
+  ["response_hmac_sha256", "CHAR(64) NULL COMMENT '模型回复 HMAC-SHA256 指纹'"],
+  ["prompt_chars", "INT UNSIGNED NULL COMMENT '提示词 Unicode 字符数'"],
+  ["response_chars", "INT UNSIGNED NULL COMMENT '模型回复 Unicode 字符数'"]
+]);
 
 async function currentDatabaseName() {
   const [[databaseRow]] = await connection.query("SELECT DATABASE() AS database_name");
@@ -22,58 +22,63 @@ async function currentDatabaseName() {
   return databaseRow.database_name;
 }
 
-async function ensureColumn(databaseName, columnName, definition) {
-  const [[columnRow]] = await connection.query(
-    `SELECT COUNT(*) AS count
+async function loadMissingOperations(databaseName) {
+  const [columnRows] = await connection.query(
+    `SELECT COLUMN_NAME
      FROM information_schema.COLUMNS
-     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'ai_request_logs' AND COLUMN_NAME = ?`,
-    [databaseName, columnName]
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'ai_request_logs'`,
+    [databaseName]
   );
-  if (Number(columnRow.count)) return;
-
-  const addColumn = async (algorithmClause) => {
-    try {
-      await connection.query(`ALTER TABLE ai_request_logs ADD COLUMN ${columnName} ${definition}, ${algorithmClause}`);
-      return true;
-    } catch (error) {
-      // 中文注解：多节点同时迁移时，后完成节点遇到重复字段可视为幂等成功。
-      if (error?.code === "ER_DUP_FIELDNAME") return true;
-      const canDowngrade = ["ER_ALTER_OPERATION_NOT_SUPPORTED_REASON", "ER_UNKNOWN_ALTER_ALGORITHM", "ER_PARSE_ERROR"]
-        .includes(error?.code);
-      if (algorithmClause === "ALGORITHM=INSTANT" && canDowngrade) return false;
-      throw error;
-    }
-  };
-
-  // 中文注解：新版 MySQL 优先瞬时加列；不支持时仅降级到明确无锁的在线迁移。
-  if (await addColumn("ALGORITHM=INSTANT")) return;
-  await addColumn("ALGORITHM=INPLACE, LOCK=NONE");
-}
-
-async function ensureCreatedAtIndex(databaseName) {
+  const existingColumns = new Set(columnRows.map((row) => row.COLUMN_NAME));
+  const missingColumns = [...auditColumnDefinitions].filter(([columnName]) => !existingColumns.has(columnName));
   const [[indexRow]] = await connection.query(
     `SELECT COUNT(*) AS count
      FROM information_schema.STATISTICS
      WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'ai_request_logs' AND INDEX_NAME = 'idx_ai_logs_created'`,
     [databaseName]
   );
-  if (Number(indexRow.count)) return;
-  try {
-    // 中文注解：保留清理按创建时间定位历史记录，独立索引避免每日任务扫描整表。
-    await connection.query(
-      "ALTER TABLE ai_request_logs ADD INDEX idx_ai_logs_created (created_at), ALGORITHM=INPLACE, LOCK=NONE"
-    );
-  } catch (error) {
-    if (error?.code !== "ER_DUP_KEYNAME") throw error;
+  return { missingColumns, missingCreatedAtIndex: !Number(indexRow.count) };
+}
+
+async function ensureAuditStructure(databaseName) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const { missingColumns, missingCreatedAtIndex } = await loadMissingOperations(databaseName);
+    if (!missingColumns.length && !missingCreatedAtIndex) return;
+    const alterClauses = missingColumns.map(([columnName, definition]) => `ADD COLUMN ${columnName} ${definition}`);
+    if (missingCreatedAtIndex) alterClauses.push("ADD INDEX idx_ai_logs_created (created_at)");
+
+    // 中文注解：缺失列和索引合并为一次 ALTER；旧版 MySQL 最多重建一次审计表，避免逐列迁移放大锁与 IO。
+    const algorithms = missingCreatedAtIndex
+      ? ["ALGORITHM=INPLACE, LOCK=NONE"]
+      : ["ALGORITHM=INSTANT", "ALGORITHM=INPLACE, LOCK=NONE"];
+    let shouldRetryForRace = false;
+    for (const algorithm of algorithms) {
+      try {
+        await connection.query(`ALTER TABLE ai_request_logs ${alterClauses.join(", ")}, ${algorithm}`);
+        return;
+      } catch (error) {
+        if (["ER_DUP_FIELDNAME", "ER_DUP_KEYNAME"].includes(error?.code)) {
+          // 中文注解：并发部署可能先完成相同 DDL，重新读取结构后只补仍缺失的部分。
+          shouldRetryForRace = true;
+          break;
+        }
+        const canDowngrade = ["ER_ALTER_OPERATION_NOT_SUPPORTED_REASON", "ER_UNKNOWN_ALTER_ALGORITHM", "ER_PARSE_ERROR"]
+          .includes(error?.code);
+        if (algorithm === "ALGORITHM=INSTANT" && canDowngrade) continue;
+        throw error;
+      }
+    }
+    if (!shouldRetryForRace) break;
+  }
+
+  const remaining = await loadMissingOperations(databaseName);
+  if (remaining.missingColumns.length || remaining.missingCreatedAtIndex) {
+    throw new Error("AI 审计隐私字段迁移未能收敛，请检查并发迁移状态。");
   }
 }
 
 try {
-  const databaseName = await currentDatabaseName();
-  for (const [columnName, definition] of auditColumns) {
-    await ensureColumn(databaseName, columnName, definition);
-  }
-  await ensureCreatedAtIndex(databaseName);
+  await ensureAuditStructure(await currentDatabaseName());
   console.log("AI 审计隐私字段迁移完成。");
 } finally {
   await connection.end();

@@ -1,4 +1,5 @@
 import "dotenv/config";
+import crypto from "node:crypto";
 import mysql from "mysql2/promise";
 
 if (!process.env.DATABASE_URL) {
@@ -22,6 +23,10 @@ function parseBoundedInteger(name, fallback, minimum, maximum) {
 const retentionDays = parseBoundedInteger("AI_AUDIT_RETENTION_DAYS", 30, 1, 365);
 const batchSize = parseBoundedInteger("AI_AUDIT_CLEANUP_BATCH_SIZE", 1000, 1, 10000);
 const maxBatches = parseBoundedInteger("AI_AUDIT_CLEANUP_MAX_BATCHES", 20, 1, 100);
+const auditHashKey = String(process.env.AI_AUDIT_HASH_KEY || "");
+if (mode === "redact-existing" && auditHashKey.length < 32) {
+  throw new Error("AI_AUDIT_HASH_KEY 至少需要 32 个字符，无法安全脱敏历史审计正文。");
+}
 const connection = await mysql.createConnection(process.env.DATABASE_URL);
 
 async function runBatches(operation) {
@@ -32,47 +37,91 @@ async function runBatches(operation) {
     totalAffected += lastAffected;
     if (lastAffected < batchSize) break;
   }
-  return { totalAffected, limitReached: lastAffected === batchSize };
+  return { totalAffected, batchLimitReached: lastAffected === batchSize };
 }
 
 async function cleanupExpiredLogs() {
-  return runBatches(async () => {
+  const result = await runBatches(async () => {
     // 中文注解：两个数值均已通过严格整数边界校验，分批删除限制单次事务规模与锁持有时间。
-    const [result] = await connection.query(
+    const [deleteResult] = await connection.query(
       `DELETE FROM ai_request_logs
        WHERE created_at < DATE_SUB(CURRENT_TIMESTAMP, INTERVAL ${retentionDays} DAY)
        ORDER BY created_at, id
        LIMIT ${batchSize}`
     );
-    return Number(result.affectedRows || 0);
+    return Number(deleteResult.affectedRows || 0);
   });
+  if (!result.batchLimitReached) return { ...result, hasRemaining: false };
+  const [[remainingRow]] = await connection.query(
+    `SELECT EXISTS(
+       SELECT 1 FROM ai_request_logs
+       WHERE created_at < DATE_SUB(CURRENT_TIMESTAMP, INTERVAL ${retentionDays} DAY)
+       LIMIT 1
+     ) AS has_remaining`
+  );
+  return { ...result, hasRemaining: Boolean(remainingRow.has_remaining) };
+}
+
+function createAuditFingerprint(value) {
+  return crypto.createHmac("sha256", auditHashKey).update(String(value || ""), "utf8").digest("hex");
 }
 
 async function redactExistingLogs() {
-  return runBatches(async () => {
-    // 中文注解：先在数据库内计算不可逆摘要和字符数，再清空历史正文；日志只输出数量，不输出客户内容。
-    const [result] = await connection.query(
-      `UPDATE ai_request_logs
-       SET prompt_sha256 = COALESCE(prompt_sha256, SHA2(COALESCE(prompt, ''), 256)),
-           response_sha256 = COALESCE(response_sha256, SHA2(COALESCE(response, ''), 256)),
-           prompt_chars = COALESCE(prompt_chars, CHAR_LENGTH(COALESCE(prompt, ''))),
-           response_chars = COALESCE(response_chars, CHAR_LENGTH(COALESCE(response, ''))),
-           prompt = NULL,
-           response = NULL
+  const result = await runBatches(async () => {
+    const [rows] = await connection.query(
+      `SELECT id, prompt, response
+       FROM ai_request_logs
        WHERE prompt IS NOT NULL OR response IS NOT NULL
        ORDER BY id
        LIMIT ${batchSize}`
     );
-    return Number(result.affectedRows || 0);
+    if (!rows.length) return 0;
+    await connection.beginTransaction();
+    try {
+      // 中文注解：专用 HMAC 密钥只在 Node 进程内使用；参数化更新不把客户正文或密钥拼入 SQL 与日志。
+      for (const row of rows) {
+        await connection.execute(
+          `UPDATE ai_request_logs
+           SET prompt_hmac_sha256 = COALESCE(prompt_hmac_sha256, ?),
+               response_hmac_sha256 = COALESCE(response_hmac_sha256, ?),
+               prompt_chars = COALESCE(prompt_chars, ?),
+               response_chars = COALESCE(response_chars, ?),
+               prompt = NULL,
+               response = NULL
+           WHERE id = ?`,
+          [
+            createAuditFingerprint(row.prompt),
+            createAuditFingerprint(row.response),
+            Array.from(String(row.prompt || "")).length,
+            Array.from(String(row.response || "")).length,
+            row.id
+          ]
+        );
+      }
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    }
+    return rows.length;
   });
+  if (!result.batchLimitReached) return { ...result, hasRemaining: false };
+  const [[remainingRow]] = await connection.query(
+    "SELECT EXISTS(SELECT 1 FROM ai_request_logs WHERE prompt IS NOT NULL OR response IS NOT NULL LIMIT 1) AS has_remaining"
+  );
+  return { ...result, hasRemaining: Boolean(remainingRow.has_remaining) };
 }
 
 try {
   const result = mode === "cleanup" ? await cleanupExpiredLogs() : await redactExistingLogs();
   console.log(mode === "cleanup" ? "AI 审计过期日志清理完成。" : "AI 审计历史正文脱敏完成。", {
     affectedRows: result.totalAffected,
-    limitReached: result.limitReached
+    hasRemaining: result.hasRemaining
   });
+  if (result.hasRemaining) {
+    // 中文注解：积压超过单轮上限时必须让 systemd 标记失败并触发告警，不能伪装成保留策略已满足。
+    throw new Error("AI 审计维护达到单轮批次上限且仍有剩余记录，请检查积压并立即重试。");
+  }
 } finally {
   await connection.end();
 }

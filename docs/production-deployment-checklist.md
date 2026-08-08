@@ -37,7 +37,7 @@ npm run check:commercial-readiness
 - `MOLING_INTERNAL_TIMEOUT_MS` 必须覆盖墨灵 SSO、预占、结算和释放的响应正文读取，避免平台仅返回响应头时永久挂起。
 - `SHUTDOWN_TIMEOUT_MS` 应覆盖智能体最多五段模型调用、最多五次平台调用、模型重试与本地结算清理；生产配置门禁会按相关超时计算最小值。进程收到终止信号后先停止接收新请求，再等待在途请求完成。
 - 生产环境默认启用最小化 JSON 访问日志，并通过 `X-Request-Id` 关联请求；日志不应采集 Cookie、查询串和请求体。
-- `AI_AUDIT_CONTENT_MODE=metadata`，只保存请求关联、摘要和统计信息；生产门禁禁止完整提示词和模型回复落库。
+- `AI_AUDIT_CONTENT_MODE=metadata`，只保存请求关联、固定动作、HMAC 指纹和统计信息；`AI_AUDIT_HASH_KEY` 使用独立的至少 32 字符密钥并由密钥系统注入，生产门禁禁止完整提示词和模型回复落库。
 - `AI_AUDIT_RETENTION_DAYS` 必须为 1 至 365 天并经业务、隐私与合规审批；`AI_AUDIT_CLEANUP_BATCH_SIZE`、`AI_AUDIT_CLEANUP_MAX_BATCHES` 控制单轮删除规模。
 
 生产配置不完整时 `server/index.js` 会在监听端口前直接退出，错误只列缺失项，不打印密钥值。
@@ -53,7 +53,7 @@ npm run check:commercial-readiness
 
 - `document_templates` 仅启用已审核模板，正文骨架包含元数据、编制说明、正式章节和行动表。
 - `billing_reconciliation_tasks` 包含 `operation_type`、`claim_token` 和唯一幂等键。
-- `ai_request_logs` 包含请求 ID、SHA-256、字符数与创建时间索引；先执行 `db:migrate:ai-audit-privacy`，再经批准单独执行 `ai-audit:redact-existing` 清理历史原文。
+- `ai_request_logs` 包含请求 ID、HMAC-SHA256 指纹、字符数与创建时间索引；先执行 `db:migrate:ai-audit-privacy`，再经批准单独执行 `ai-audit:redact-existing` 清理历史原文。
 - MinIO bucket 可读写，前端无法看到 bucket、object key 或访问密钥。
 
 ## 四、真实链路验收

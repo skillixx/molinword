@@ -6,6 +6,7 @@ import { buildAiAuditRecord, normalizeAiEditAction, validateProductionConfigurat
 const prompt = "客户手机号 138****0000 与项目预算";
 const responseText = "建议按已确认范围执行。";
 const requestId = "request-12345678";
+const auditHashKey = "audit-hmac-key-at-least-32-characters";
 const metadataRecord = buildAiAuditRecord({
   requestId,
   actionType: "template_agent_plan",
@@ -13,16 +14,21 @@ const metadataRecord = buildAiAuditRecord({
   responseText,
   status: "failed",
   errorMessage: "LLM_API_KEY=secret-value 模型调用失败"
-}, { APP_ENV: "production", AI_AUDIT_CONTENT_MODE: "metadata" });
+}, { APP_ENV: "production", AI_AUDIT_CONTENT_MODE: "metadata", AI_AUDIT_HASH_KEY: auditHashKey });
 
 assert.equal(metadataRecord.requestId, requestId);
 assert.equal(metadataRecord.prompt, null, "生产元数据模式不得保存完整提示词");
 assert.equal(metadataRecord.responseText, null, "生产元数据模式不得保存完整模型回复");
-assert.equal(metadataRecord.promptSha256, crypto.createHash("sha256").update(prompt).digest("hex"));
-assert.equal(metadataRecord.responseSha256, crypto.createHash("sha256").update(responseText).digest("hex"));
+assert.equal(metadataRecord.promptHmacSha256, crypto.createHmac("sha256", auditHashKey).update(prompt).digest("hex"));
+assert.equal(metadataRecord.responseHmacSha256, crypto.createHmac("sha256", auditHashKey).update(responseText).digest("hex"));
 assert.equal(metadataRecord.promptChars, Array.from(prompt).length);
 assert.equal(metadataRecord.responseChars, Array.from(responseText).length);
 assert.doesNotMatch(metadataRecord.errorMessage, /secret-value/, "生产审计错误不得保存内部密钥或原始错误");
+assert.equal(
+  buildAiAuditRecord({ actionType: "客户机密正文", prompt, responseText }, { APP_ENV: "production", AI_AUDIT_HASH_KEY: auditHashKey }).actionType,
+  "unknown",
+  "审计写库边界不得接受未知动作"
+);
 
 const developmentRecord = buildAiAuditRecord({ actionType: "polish", prompt, responseText }, { APP_ENV: "development" });
 assert.equal(developmentRecord.prompt, prompt);
@@ -44,6 +50,7 @@ const productionBase = {
   LLM_API_URL: "https://gateway.example.com/v1/chat/completions",
   LLM_API_KEY: "model-key-at-least-32-characters",
   LLM_MODEL: "approved-model",
+  AI_AUDIT_HASH_KEY: auditHashKey,
   STORAGE_ENDPOINT: "https://minio.example.com",
   STORAGE_ACCESS_KEY_ID: "storage-access-key",
   STORAGE_SECRET_ACCESS_KEY: "storage-secret-key-at-least-32-characters",
@@ -58,6 +65,7 @@ const productionBase = {
 
 for (const override of [
   {},
+  { AI_AUDIT_CONTENT_MODE: "metadata", AI_AUDIT_HASH_KEY: "short", AI_AUDIT_RETENTION_DAYS: "30" },
   { AI_AUDIT_CONTENT_MODE: "full", AI_AUDIT_RETENTION_DAYS: "30" },
   { AI_AUDIT_CONTENT_MODE: "metadata", AI_AUDIT_RETENTION_DAYS: "0" },
   { AI_AUDIT_CONTENT_MODE: "metadata", AI_AUDIT_RETENTION_DAYS: "366" },
@@ -81,7 +89,7 @@ assert.equal(
   "所有 AI 审计写入必须关联服务端请求 ID"
 );
 const schemaSource = await readFile("database/init-mysql.sql", "utf8");
-for (const field of ["request_id", "prompt_sha256", "response_sha256", "prompt_chars", "response_chars", "idx_ai_logs_created"]) {
+for (const field of ["request_id", "prompt_hmac_sha256", "response_hmac_sha256", "prompt_chars", "response_chars", "idx_ai_logs_created"]) {
   assert.match(schemaSource, new RegExp(`\\b${field}\\b`), `新数据库 AI 审计表缺少 ${field}`);
 }
 

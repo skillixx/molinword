@@ -75,6 +75,7 @@ const apiProcess = spawn(process.execPath, ["server/index.js"], {
     LLM_API_KEY: "model-key-at-least-32-characters",
     LLM_MODEL: "test-model",
     AI_AUDIT_CONTENT_MODE: "metadata",
+    AI_AUDIT_HASH_KEY: "audit-hmac-key-at-least-32-characters",
     AI_AUDIT_RETENTION_DAYS: "30",
     STORAGE_ENDPOINT: gatewayOrigin,
     STORAGE_ACCESS_KEY_ID: "storage-access-key",

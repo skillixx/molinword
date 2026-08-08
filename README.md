@@ -154,7 +154,7 @@ npm run billing:reconcile:retry
 - 生产环境建议启用 HTTPS，并把 `SESSION_COOKIE_SECURE=true`。
 - 生产环境设置 `APP_ENV=production` 后会强制要求墨灵会话并禁用 `LOCAL_MOLING_MOCK`；同时建议保留 `REQUIRE_MOLING_SESSION=true`，形成显式双重门禁。
 - 后端接口错误只返回中文用户提示，真实错误保留在服务端日志。
-- 生产 AI 审计强制使用 `AI_AUDIT_CONTENT_MODE=metadata`，仅保存请求 ID、摘要、字符数、状态与耗时；保留期由 `AI_AUDIT_RETENTION_DAYS` 控制。
+- 生产 AI 审计强制使用 `AI_AUDIT_CONTENT_MODE=metadata`，仅保存请求 ID、专用密钥生成的 HMAC-SHA256 指纹、字符数、状态与耗时；保留期由 `AI_AUDIT_RETENTION_DAYS` 控制。
 - 文档、导出文件下载都按当前用户校验，避免跨用户访问。
 - 生产启动会执行 fail-fast 配置校验；完整步骤见 `docs/production-deployment-checklist.md`。
 - 可审计的 Nginx、systemd、环境变量、计费对账定时器和回滚步骤见 `ops/README.md`；样例不能替代真实域名、证书、密钥和目标环境授权。

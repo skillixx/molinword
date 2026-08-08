@@ -570,6 +570,7 @@ function validateProductionConfiguration(environment = {}) {
     "LLM_API_KEY",
     "LLM_MODEL",
     "AI_AUDIT_CONTENT_MODE",
+    "AI_AUDIT_HASH_KEY",
     "AI_AUDIT_RETENTION_DAYS",
     "STORAGE_ENDPOINT",
     "STORAGE_ACCESS_KEY_ID",
@@ -584,6 +585,9 @@ function validateProductionConfiguration(environment = {}) {
   }
   for (const key of ["INTERNAL_API_TOKEN", "LLM_API_KEY", "STORAGE_SECRET_ACCESS_KEY"]) {
     if (!isPlaceholder(configuration[key]) && String(configuration[key]).length < 16) errors.push(`${key} 长度不足 16 个字符`);
+  }
+  if (!isPlaceholder(configuration.AI_AUDIT_HASH_KEY) && String(configuration.AI_AUDIT_HASH_KEY).length < 32) {
+    errors.push("AI_AUDIT_HASH_KEY 长度不足 32 个字符");
   }
   const requireHttps = (key, allowInternalOverride = false) => {
     if (isPlaceholder(configuration[key])) return;
@@ -4188,12 +4192,29 @@ function resolveAiAuditContentMode(environment = {}) {
   return production ? "metadata" : "full";
 }
 
+const aiAuditActionTypes = new Set([
+  "template_agent_plan",
+  "generate_outline",
+  "generate_body",
+  "continue",
+  "expand",
+  "shorten",
+  "correct",
+  "format",
+  "polish",
+  "polish_legacy"
+]);
+
 function buildAiAuditRecord({ requestId = null, actionType, prompt, responseText, status = "success", errorMessage = null, latencyMs = null }, environment = process.env) {
   const contentMode = resolveAiAuditContentMode(environment);
   if (contentMode === "disabled") return null;
   const promptValue = String(prompt || "");
   const responseValue = String(responseText || "");
-  const hash = (value) => crypto.createHash("sha256").update(value, "utf8").digest("hex");
+  const hashKey = String(environment.AI_AUDIT_HASH_KEY || "");
+  // 中文注解：无专用密钥时宁可不生成指纹，也不能退回可被字典反推的无密钥摘要。
+  const fingerprint = (value) => hashKey
+    ? crypto.createHmac("sha256", hashKey).update(value, "utf8").digest("hex")
+    : null;
   const fullContent = contentMode === "full";
   const normalizedError = errorMessage == null
     ? null
@@ -4203,11 +4224,12 @@ function buildAiAuditRecord({ requestId = null, actionType, prompt, responseText
 
   return {
     requestId: String(requestId || "").trim().slice(0, 64) || null,
-    actionType: String(actionType || "unknown").trim().slice(0, 60) || "unknown",
+    // 中文注解：审计动作同样在最终写库边界收敛，避免未来调用点误把客户输入当作动作保存。
+    actionType: typeof actionType === "string" && aiAuditActionTypes.has(actionType) ? actionType : "unknown",
     prompt: fullContent ? promptValue.slice(0, 262144) : null,
     responseText: fullContent ? responseValue.slice(0, 262144) : null,
-    promptSha256: hash(promptValue),
-    responseSha256: hash(responseValue),
+    promptHmacSha256: fingerprint(promptValue),
+    responseHmacSha256: fingerprint(responseValue),
     promptChars: Array.from(promptValue).length,
     responseChars: Array.from(responseValue).length,
     status: status === "failed" ? "failed" : "success",
@@ -4241,7 +4263,7 @@ async function logAiRequest({ userId = localUserId, documentId = null, ...auditI
     await dbPool.query(
       `INSERT INTO ai_request_logs
         (user_id, document_id, action_type, model, request_id, prompt, response,
-         prompt_sha256, response_sha256, prompt_chars, response_chars, status, error_message, latency_ms)
+         prompt_hmac_sha256, response_hmac_sha256, prompt_chars, response_chars, status, error_message, latency_ms)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         userId,
@@ -4251,8 +4273,8 @@ async function logAiRequest({ userId = localUserId, documentId = null, ...auditI
         auditRecord.requestId,
         auditRecord.prompt,
         auditRecord.responseText,
-        auditRecord.promptSha256,
-        auditRecord.responseSha256,
+        auditRecord.promptHmacSha256,
+        auditRecord.responseHmacSha256,
         auditRecord.promptChars,
         auditRecord.responseChars,
         auditRecord.status,

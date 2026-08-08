@@ -72,14 +72,17 @@ assert.match(auditRetentionTimer, /OnCalendar=\*-\*-\* 03:15:00/);
 assert.match(auditRetentionTimer, /RandomizedDelaySec=30m/);
 assert.match(auditRetentionTimer, /Persistent=true/);
 const auditMigration = await readRequired("database/migrate-ai-audit-privacy.mjs");
-for (const column of ["request_id", "prompt_sha256", "response_sha256", "prompt_chars", "response_chars"]) {
+for (const column of ["request_id", "prompt_hmac_sha256", "response_hmac_sha256", "prompt_chars", "response_chars"]) {
   assert.match(auditMigration, new RegExp(`\\["${column}"`), `AI 审计迁移缺少 ${column}`);
 }
 assert.match(auditMigration, /idx_ai_logs_created/);
+assert.match(auditMigration, /alterClauses\.join\(", "\)/, "AI 审计迁移必须合并缺失列和索引，避免逐列重建大表");
 const auditMaintenance = await readRequired("scripts/ai-audit-maintenance.mjs");
 assert.match(auditMaintenance, /DATE_SUB\(CURRENT_TIMESTAMP, INTERVAL \$\{retentionDays\} DAY\)/);
+assert.match(auditMaintenance, /createHmac\("sha256", auditHashKey\)/);
 assert.match(auditMaintenance, /prompt = NULL/);
 assert.match(auditMaintenance, /response = NULL/);
+assert.match(auditMaintenance, /if \(result\.hasRemaining\)[\s\S]*throw new Error/, "达到单轮上限且仍有积压时必须失败告警");
 assert.doesNotMatch(auditMaintenance, /console\.log\([^\n]*(?:prompt|response)/i, "AI 审计维护日志不得输出客户正文");
 const maintenanceService = await readRequired("ops/systemd/molinword-maintenance@.service");
 for (const expected of [
@@ -102,6 +105,7 @@ for (const expected of [
   "SESSION_COOKIE_SECURE=true",
   "BILLING_RECONCILIATION_OUTBOX=/var/lib/molinword/billing-reconciliation-outbox.jsonl",
   "AI_AUDIT_CONTENT_MODE=metadata",
+  "AI_AUDIT_HASH_KEY=replace-with-secret-manager-value",
   "AI_AUDIT_RETENTION_DAYS=30",
   "AI_AUDIT_CLEANUP_BATCH_SIZE=1000",
   "AI_AUDIT_CLEANUP_MAX_BATCHES=20"

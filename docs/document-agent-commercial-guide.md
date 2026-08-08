@@ -62,7 +62,7 @@ LLM_MODEL=your-approved-model
 
 本项目不把模型密钥发送到浏览器，也不要求引入额外 Agent 框架。后续如接入开源编排框架，应保持现有 API 返回结构和积分预占/结算边界。
 
-生产环境必须设置 `AI_AUDIT_CONTENT_MODE=metadata`。智能体审计只保存 `X-Request-Id` 对应请求 ID、动作、模型、状态、耗时、Unicode 字符数和 SHA-256，不保存用户需求、文档正文或模型原文。保留期限由 `AI_AUDIT_RETENTION_DAYS` 配置，并通过 `molinword-ai-audit-retention.timer` 分批清理；历史正文脱敏属于不可逆维护操作，必须先备份并审批。
+生产环境必须设置 `AI_AUDIT_CONTENT_MODE=metadata`。智能体审计只保存 `X-Request-Id` 对应请求 ID、固定动作枚举、模型、状态、耗时、Unicode 字符数和由专用 `AI_AUDIT_HASH_KEY` 生成的 HMAC-SHA256 指纹，不保存用户需求、文档正文或模型原文。保留期限由 `AI_AUDIT_RETENTION_DAYS` 配置，并通过 `molinword-ai-audit-retention.timer` 分批清理；历史正文脱敏属于不可逆维护操作，必须先备份并审批。
 
 ## 五、计费与降级
 

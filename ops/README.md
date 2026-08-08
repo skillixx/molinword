@@ -51,7 +51,7 @@ sudo systemctl start 'molinword-maintenance@db:migrate:ai-audit-privacy.service'
 sudo systemctl start 'molinword-maintenance@db:seed:templates.service'
 ```
 
-历史 `ai_request_logs` 可能仍含客户提示词和模型正文。完成备份并取得隐私负责人批准后，才可执行以下不可逆脱敏；脚本会先补 SHA-256 与字符数，再分批清空原文，达到批次上限时需复核日志并再次执行：
+历史 `ai_request_logs` 可能仍含客户提示词和模型正文。完成备份、配置独立的 `AI_AUDIT_HASH_KEY` 并取得隐私负责人批准后，才可执行以下不可逆脱敏；脚本会先补 HMAC-SHA256 指纹与字符数，再分批清空原文，达到批次上限且仍有积压时会失败告警，需复核日志并再次执行：
 
 ```bash
 sudo systemctl start 'molinword-maintenance@ai-audit:redact-existing.service'
@@ -102,7 +102,7 @@ journalctl -u 'molinword-maintenance@billing:reconcile:list.service' -n 100 --no
 
 ## 五、AI 审计保留
 
-生产必须设置 `AI_AUDIT_CONTENT_MODE=metadata`，新请求只保存请求 ID、动作、模型、状态、耗时、字符数和 SHA-256，不保存提示词或模型正文。`AI_AUDIT_RETENTION_DAYS` 示例为 30 天，但必须按业务、合同和适用法规批准后确定。每日任务分批删除超过保留期的元数据：
+生产必须设置 `AI_AUDIT_CONTENT_MODE=metadata`，并由密钥系统注入独立、至少 32 字符的 `AI_AUDIT_HASH_KEY`。新请求只保存请求 ID、固定动作、模型、状态、耗时、字符数和 HMAC-SHA256 指纹，不保存提示词或模型正文。`AI_AUDIT_RETENTION_DAYS` 示例为 30 天，但必须按业务、合同和适用法规批准后确定。每日任务分批删除超过保留期的元数据；若单轮上限后仍有积压，任务以失败退出以触发监控：
 
 ```bash
 systemctl list-timers molinword-ai-audit-retention.timer
