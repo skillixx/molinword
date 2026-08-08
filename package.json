@@ -12,6 +12,7 @@
     "api": "node server/index.js",
     "build": "tsc -b && vite build && node scripts/generate-third-party-notices.mjs && node scripts/generate-release-manifest.mjs",
     "check:docx-export-format": "node scripts/check-docx-export-format.mjs",
+    "check:docx-visual-render": "node scripts/check-docx-visual-render.mjs",
     "check:docx-import-format": "node scripts/check-docx-import-format.mjs",
     "check:ai-body-format": "node scripts/check-ai-body-format.mjs",
     "check:upload-file-name-encoding": "node scripts/check-upload-file-name-encoding.mjs",

@@ -174,11 +174,14 @@ npm run check:template-agent-ui
 npm run check:editor-workflow
 npm run check:docx-export-format
 npm run check:docx-import-format
+npm run check:docx-visual-render -- --self-test
 npm run db:migrate:document-page-layout
 npm run db:migrate:ai-audit-privacy
 ```
 
 `check:editor-workflow` 会启动自包含的浏览器测试，验证常用格式编辑、页眉页脚页码、快捷键保存、防并发保存、刷新重开、DOCX 下载与格式一致性，以及 A4 分页、超长结构、模板样式、移动端宽度和长文档固定菜单。原 `check:editor-pagination` 命令保留为兼容别名。
+
+`check:docx-visual-render -- --self-test` 在本地生成正式商业模板夹具并校验标题黑色、六级标题样式和表格结构；PR 与正式发布 CI 还会安装 LibreOffice、Poppler 和 Noto CJK 字体，执行不带 `--self-test` 的真实 DOCX → PDF → PNG 渲染，拒绝空白页、绿色像素、缺失关键文字、非 A4 页面或越过安全页边界的内容，并上传逐页图像供审批人复核。
 
 `check:frontend-performance` 会先生成 Vite manifest，再沿入口静态依赖计算初始 JavaScript/CSS gzip 闭包、单块大小和资源请求总数；其压缩级别与生产 Nginx 基线一致。React、图标、Tiptap 与 ProseMirror 使用独立长期缓存块，业务代码变化不再生成 800KB 以上单文件。
 

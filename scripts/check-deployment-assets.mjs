@@ -180,6 +180,9 @@ assert.match(workflow, /permissions:\s*\n\s+contents:\s+read/);
 assert.match(workflow, /npm ci/);
 assert.match(workflow, /npx playwright install --with-deps chromium/);
 assert.match(workflow, /npm run check:commercial-readiness/);
+assert.match(workflow, /libreoffice-writer[\s\S]*poppler-utils[\s\S]*fonts-noto-cjk/, "商业 CI 必须安装固定的 Office 渲染依赖");
+assert.match(workflow, /npm run check:docx-visual-render -- --output-dir=docx-visual-artifacts/, "商业 CI 必须执行真实 DOCX 渲染门禁");
+assert.match(workflow, /name: molinword-docx-visual-\$\{\{ github\.sha \}\}/, "商业 CI 必须保留按提交绑定的 Word 逐页视觉证据");
 assert.doesNotMatch(workflow, /uses:\s+actions\/(?:checkout|setup-node)@v\d/, "CI 官方 Action 必须固定到确定提交");
 
 const runtimeCheck = await readRequired("scripts/check-runtime-config.mjs");
@@ -220,6 +223,12 @@ assert.match(acceptanceFinalizer, /flag: "wx"/, "最终验收记录必须独占�
 assert.match(acceptanceFinalizer, /CREDENTIALS_DIRECTORY/, "最终验收密钥必须来自 systemd credential");
 assert.match(acceptanceFinalizer, /approved-evidence-changed/, "验收复核必须重新校验原始附件完整性");
 const productionReleaseBundle = await readRequired("scripts/create-production-release-bundle.mjs");
+const docxVisualRender = await readRequired("scripts/check-docx-visual-render.mjs");
+assert.match(docxVisualRender, /createDocxBuffer/, "视觉门禁必须使用真实导出函数生成 DOCX");
+assert.match(docxVisualRender, /soffice/, "视觉门禁必须通过 LibreOffice 渲染 DOCX");
+assert.match(docxVisualRender, /pdftoppm/, "视觉门禁必须把 PDF 逐页栅格化为 PNG");
+assert.match(docxVisualRender, /rendered-green-color-detected/, "视觉门禁必须拒绝渲染结果中的绿色字体或图形像素");
+assert.match(docxVisualRender, /rendered-content-outside-safe-area/, "视觉门禁必须拒绝越过安全页边界的内容");
 assert.match(productionReleaseBundle, /verifyReleaseManifest/, "生产发布包必须先验证发布制品清单");
 assert.match(productionReleaseBundle, /requireGit:\s*true/, "生产发布包必须绑定真实受控 Git 工作区");
 assert.match(productionReleaseBundle, /requireClean:\s*true/, "生产发布包必须拒绝未提交的构建输入");
@@ -260,6 +269,9 @@ assert.match(productionReleaseWorkflow, /github\.ref == 'refs\/heads\/main'/, "�
 assert.match(productionReleaseWorkflow, /secrets\.RELEASE_SIGNING_PRIVATE_KEY_PEM/, "CI 签名私钥必须来自 Environment secret");
 assert.match(productionReleaseWorkflow, /printf[\s\S]*unset RELEASE_SIGNING_PRIVATE_KEY_PEM[\s\S]*openssl pkey/, "私钥落入临时文件后必须在启动外部验签进程前从环境删除");
 assert.match(productionReleaseWorkflow, /npm run check:commercial-readiness[\s\S]*npm run release:bundle:unsigned-ci/, "无密钥打包前必须完整重跑商业门禁");
+assert.match(productionReleaseWorkflow, /libreoffice-writer[\s\S]*npm run check:docx-visual-render -- --output-dir=docx-visual-artifacts[\s\S]*npm run release:bundle:unsigned-ci/, "正式发布必须在无密钥打包前完成真实 Word 渲染门禁");
+assert.match(productionReleaseWorkflow, /name: molinword-docx-visual-\$\{\{ github\.sha \}\}/, "正式发布审批前必须上传按提交绑定的 Word 逐页视觉证据");
+assert.match(productionReleaseWorkflow, /Upload Word visual evidence for approval\s+if: always\(\)/, "真实 Word 渲染失败时也必须保留已有诊断产物");
 assert.match(productionReleaseWorkflow, /unsigned\/\*\.tar\.gz[\s\S]*unsigned\/\*\.tar\.gz\.sha256[\s\S]*unsigned\/\*\.tar\.gz\.sha256\.sig/, "隔离 signer job 必须上传归档、摘要和签名三件套");
 const productionSignerJob = productionReleaseWorkflow.split("\n  sign:")[1] || "";
 assert.match(productionSignerJob, /needs:\s*package/, "签名 job 必须只消费已通过门禁的无密钥 artifact");
@@ -285,6 +297,7 @@ assert.equal(packageJson.scripts?.["check:release-target-contract"], "node scrip
 assert.equal(packageJson.scripts?.["check:release-manifest"], "node scripts/check-release-manifest.mjs");
 assert.equal(packageJson.scripts?.["check:release-manifest-contract"], "node scripts/check-release-manifest-contract.mjs");
 assert.equal(packageJson.scripts?.["check:production-release-bundle"], "node scripts/check-production-release-bundle.mjs");
+assert.equal(packageJson.scripts?.["check:docx-visual-render"], "node scripts/check-docx-visual-render.mjs", "必须提供真实 Office 渲染的公开门禁命令");
 assert.equal(packageJson.scripts?.["release:bundle"], undefined, "不得暴露可让仓库代码直接接触正式签名私钥的 npm 命令");
 assert.equal(packageJson.scripts?.["release:bundle:unsigned-ci"], "node scripts/create-production-release-bundle.mjs --unsigned-for-ci");
 assert.equal(packageJson.scripts?.["release:verify-archive"], "node scripts/verify-production-release-archive.mjs");
@@ -371,6 +384,8 @@ assert.match(runbook, /test "\$\(id -g molinword\)" != "\$\(id -g molinword-acce
 assert.match(runbook, /完整人工清单摘要/, "部署手册必须让短期授权绑定人工清单的确定字节");
 assert.match(runbook, /内核 `flock`/, "部署手册必须说明采集、签名与复核的并发锁边界");
 assert.match(runbook, /gh workflow run production-release\.yml --ref main/, "部署手册必须只触发受保护双 runner 工作流生成正式三件套");
+assert.match(runbook, /molinword-docx-visual-<git-sha>/, "部署手册必须要求审批人逐页复核与提交绑定的 Word 视觉证据");
+assert.match(runbook, /100% 缩放逐页检查全部 PNG/, "人工签名审批必须按原始缩放逐页检查 Word 渲染证据");
 assert.doesNotMatch(runbook, /RELEASE_SIGNING_PRIVATE_KEY_FILE|npm run release:bundle(?:\s|`)/, "部署手册不得指导仓库代码直接读取正式发布私钥");
 assert.match(runbook, /RELEASE_SIGNING_PRIVATE_KEY_PEM/, "部署手册必须把正式私钥限定为受保护 signer Environment secret");
 assert.match(runbook, /RELEASE_SIGNING_PUBLIC_KEY_FILE/, "部署手册必须从服务器预置公钥建立发布信任根");

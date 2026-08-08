@@ -17,7 +17,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -36,3 +36,20 @@ jobs:
 
       - name: Run commercial readiness gate
         run: npm run check:commercial-readiness
+
+      - name: Install controlled Office renderer
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libreoffice-writer poppler-utils fonts-noto-cjk
+
+      - name: Render formal Word template
+        run: npm run check:docx-visual-render -- --output-dir=docx-visual-artifacts
+
+      - name: Upload Word visual evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: molinword-docx-visual-${{ github.sha }}
+          path: docx-visual-artifacts
+          if-no-files-found: warn
+          retention-days: 7

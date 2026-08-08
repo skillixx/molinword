@@ -12,7 +12,7 @@
 
 ## 二、发布
 
-以下命令中的 `<release-id>` 必须使用受信 CI 的 `npm run check:release-manifest` 输出并登记到变更单，域名和路径由部署人员替换。正式三件套只能由 `.github/workflows/production-release.yml` 的手动工作流生成；仓库管理员必须为 `production-release` Environment 配置 required reviewers，并把 `RELEASE_SIGNING_PRIVATE_KEY_PEM` 仅保存为该 Environment 的受保护 secret。工作流只允许 main：无密钥 package runner 完整重跑商业门禁并生成二件套，全新 signer runner 经 Environment 批准后只用系统 OpenSSL 签名，不 checkout 或执行仓库代码。工作流只上传三件套、不自动部署；Environment 是否已启用审批属于 GitHub 外部配置，首次发布前必须由管理员截图或审计日志确认。发布号由 Git 提交与实际前后端制品哈希共同生成，不能根据收到的压缩包或文件名自行采信。不要直接复制工作目录；应在干净提交上生成只包含清单覆盖文件的正式发布包，`.env`、本地日志、截图、测试压缩包、`node_modules` 和开发缓存不会进入归档：
+以下命令中的 `<release-id>` 必须使用受信 CI 的 `npm run check:release-manifest` 输出并登记到变更单，域名和路径由部署人员替换。正式三件套只能由 `.github/workflows/production-release.yml` 的手动工作流生成；仓库管理员必须为 `production-release` Environment 配置 required reviewers，并把 `RELEASE_SIGNING_PRIVATE_KEY_PEM` 仅保存为该 Environment 的受保护 secret。工作流只允许 main：无密钥 package runner 完整重跑商业门禁，用 LibreOffice 把正式模板渲染为 PDF/逐页 PNG 并上传 `molinword-docx-visual-<git-sha>` 证据，然后生成二件套；全新 signer runner 经 Environment 批准后只用系统 OpenSSL 签名，不 checkout 或执行仓库代码。required reviewer 必须下载视觉 artifact，以 100% 缩放逐页检查全部 PNG 和 `visual-render-report.json`，确认无绿色标题、缺字、溢出、破表或异常分页，再批准签名。工作流只上传证据和三件套、不自动部署；Environment 是否已启用审批属于 GitHub 外部配置，首次发布前必须由管理员截图或审计日志确认。发布号由 Git 提交与实际前后端制品哈希共同生成，不能根据收到的压缩包或文件名自行采信。不要直接复制工作目录；应在干净提交上生成只包含清单覆盖文件的正式发布包，`.env`、本地日志、截图、测试压缩包、`node_modules` 和开发缓存不会进入归档：
 
 ```bash
 gh workflow run production-release.yml --ref main
