@@ -58,7 +58,7 @@ const apiProcess = spawn(process.execPath, ["server/index.js"], {
     LLM_TIMEOUT_MS: "5000",
     AI_MAX_CONCURRENT_REQUESTS: "1",
     AI_RATE_LIMIT_MAX: "20",
-    ACCESS_LOG_ENABLED: "false",
+    ACCESS_LOG_ENABLED: "true",
     SHUTDOWN_TIMEOUT_MS: "5000"
   },
   stdio: ["ignore", "pipe", "pipe", "ipc"],
@@ -117,6 +117,14 @@ try {
   assert.equal(modelRequestCount, 1);
   completePendingModelResponse();
   await new Promise((resolve) => setTimeout(resolve, 100));
+  const accessLogs = output
+    .join("")
+    .split(/\r?\n/)
+    .map((line) => {
+      try { return JSON.parse(line); } catch { return null; }
+    })
+    .filter(Boolean);
+  assert.ok(accessLogs.some((entry) => entry.type === "http_access" && entry.path === "/api/ai/edit" && entry.aborted === true), "客户端断连必须写入 aborted=true 的访问日志");
 
   const secondResponse = await callAi("前一请求完成后应恢复服务");
   assert.equal(secondResponse.status, 200);

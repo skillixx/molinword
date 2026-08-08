@@ -52,7 +52,7 @@ const validProductionConfiguration = {
   LLM_TIMEOUT_MS: "30000",
   LLM_MAX_RETRIES: "1",
   ACCESS_LOG_ENABLED: "true",
-  SHUTDOWN_TIMEOUT_MS: "240000"
+  SHUTDOWN_TIMEOUT_MS: "360000"
 };
 const validErrors = validateProductionConfiguration(validProductionConfiguration);
 assert.deepEqual(validErrors, []);
@@ -73,10 +73,10 @@ const invalidRuntimeBoundaryErrors = validateProductionConfiguration({
   RATE_LIMIT_WINDOW_MS: "999",
   API_RATE_LIMIT_MAX: "0",
   AI_RATE_LIMIT_MAX: "1.5",
-  LLM_TIMEOUT_MS: "999",
-  LLM_MAX_RETRIES: "8",
+  LLM_TIMEOUT_MS: "60001",
+  LLM_MAX_RETRIES: "2",
   ACCESS_LOG_ENABLED: "yes",
-  SHUTDOWN_TIMEOUT_MS: "600001"
+  SHUTDOWN_TIMEOUT_MS: "900001"
 });
 for (const expectedKey of [
   "TRUSTED_PROXY_HOPS",
@@ -90,6 +90,12 @@ for (const expectedKey of [
 ]) {
   assert.ok(invalidRuntimeBoundaryErrors.some((message) => message.includes(expectedKey)), `缺少 ${expectedKey} 的运行边界配置错误`);
 }
+
+const shortShutdownWindowErrors = validateProductionConfiguration({
+  ...validProductionConfiguration,
+  SHUTDOWN_TIMEOUT_MS: "329999"
+});
+assert.ok(shortShutdownWindowErrors.some((message) => message.includes("最坏链路 330000")), "退出窗口必须覆盖五段模型调用及其重试");
 
 const insecureInternalErrors = validateProductionConfiguration({
   APP_ENV: "production",

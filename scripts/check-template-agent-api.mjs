@@ -19,6 +19,12 @@ async function readJson(request) {
 
 const modelCalls = [];
 const modelServer = createServer(async (request, response) => {
+  if (request.method === "GET" && request.url === "/v1/models") {
+    assert.equal(request.headers.authorization, "Bearer template-agent-contract-test-key");
+    response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    response.end(JSON.stringify({ data: [{ id: "openai-compatible-test-model" }] }));
+    return;
+  }
   if (request.method === "HEAD" && request.url === "/v1/chat/completions") {
     // 中文注解：就绪探针不调用模型、不计入生成次数；405 表示 chat 路径可达但仅接受 POST。
     response.writeHead(405);

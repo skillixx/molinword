@@ -362,11 +362,11 @@ const trustedProxyHops = readBoundedInteger(process.env.TRUSTED_PROXY_HOPS, 0, 0
 const rateLimitWindowMs = readBoundedInteger(process.env.RATE_LIMIT_WINDOW_MS, 60000, 1000, 3600000);
 const apiRateLimitMaximum = readBoundedInteger(process.env.API_RATE_LIMIT_MAX, 300, 1, 100000);
 const aiRateLimitMaximum = readBoundedInteger(process.env.AI_RATE_LIMIT_MAX, 30, 1, 10000);
-const llmTimeoutMs = readBoundedInteger(process.env.LLM_TIMEOUT_MS, 30000, 1000, 120000);
-const llmMaxRetries = readBoundedInteger(process.env.LLM_MAX_RETRIES, 1, 0, 3);
-// 中文注解：智能体一次最多执行四段模型调用，默认退出窗口必须覆盖全部超时与重试，再留出结算清理时间。
-const inferredShutdownTimeoutMs = Math.min(600000, llmTimeoutMs * (llmMaxRetries + 1) * 4 + 30000);
-const shutdownTimeoutMs = readBoundedInteger(process.env.SHUTDOWN_TIMEOUT_MS, inferredShutdownTimeoutMs, 1000, 600000);
+const llmTimeoutMs = readBoundedInteger(process.env.LLM_TIMEOUT_MS, 30000, 1000, 60000);
+const llmMaxRetries = readBoundedInteger(process.env.LLM_MAX_RETRIES, 1, 0, 1);
+// 中文注解：智能体返修路径最多执行五段模型调用，默认退出窗口覆盖全部超时与重试，再留出结算清理时间。
+const inferredShutdownTimeoutMs = llmTimeoutMs * (llmMaxRetries + 1) * 5 + 30000;
+const shutdownTimeoutMs = readBoundedInteger(process.env.SHUTDOWN_TIMEOUT_MS, inferredShutdownTimeoutMs, inferredShutdownTimeoutMs, 900000);
 const accessLogEnabled = process.env.ACCESS_LOG_ENABLED === "true"
   || (process.env.ACCESS_LOG_ENABLED !== "false" && (process.env.APP_ENV === "production" || process.env.NODE_ENV === "production"));
 let activeAiRequests = 0;
@@ -411,7 +411,7 @@ app.use((request, response, next) => {
   };
   response.once("finish", () => writeAccessLog(false));
   // 中文注解：客户端提前断开时 finish 不会触发，仍需记录一次中断审计日志。
-  response.once("close", () => writeAccessLog(!response.writableEnded));
+  response.once("close", () => writeAccessLog(!response.writableFinished));
   next();
 });
 app.use((request, response, next) => {
@@ -521,6 +521,8 @@ const molingApiBaseUrl = process.env.MOLING_API_BASE_URL || "http://8.130.9.163:
 const gatewayBaseUrl = process.env.MOLIN_GATEWAY_BASE_URL || `${molingApiBaseUrl}/v1`;
 const gatewayApiKey = process.env.MOLIN_GATEWAY_API_KEY || "";
 const llmApiUrl = process.env.LLM_API_URL || `${gatewayBaseUrl}/chat/completions`;
+const llmReadinessUrl = process.env.LLM_READINESS_URL
+  || llmApiUrl.replace(/\/chat\/completions\/?(?:\?.*)?$/i, "/models");
 const llmApiKey = process.env.LLM_API_KEY || gatewayApiKey;
 const gatewayModel = process.env.LLM_MODEL || process.env.MOLIN_GATEWAY_MODEL || "deepseek-chat";
 const storageBucket = process.env.STORAGE_BUCKET || "moling-word";
@@ -592,6 +594,7 @@ function validateProductionConfiguration(environment = {}) {
   requireHttps("APP_BASE_URL");
   requireHttps("MOLING_API_BASE_URL", true);
   requireHttps("LLM_API_URL", true);
+  requireHttps("LLM_READINESS_URL", true);
   requireHttps("STORAGE_ENDPOINT", true);
   if (configuration.SESSION_COOKIE_SECURE !== "true") errors.push("SESSION_COOKIE_SECURE 生产环境必须为 true");
   if (!isPlaceholder(configuration.BILLING_RECONCILIATION_OUTBOX) && !path.isAbsolute(configuration.BILLING_RECONCILIATION_OUTBOX)) {
@@ -608,9 +611,20 @@ function validateProductionConfiguration(environment = {}) {
   validateIntegerSetting("RATE_LIMIT_WINDOW_MS", 1000, 3600000);
   validateIntegerSetting("API_RATE_LIMIT_MAX", 1, 100000);
   validateIntegerSetting("AI_RATE_LIMIT_MAX", 1, 10000);
-  validateIntegerSetting("LLM_TIMEOUT_MS", 1000, 120000);
-  validateIntegerSetting("LLM_MAX_RETRIES", 0, 3);
-  validateIntegerSetting("SHUTDOWN_TIMEOUT_MS", 1000, 600000);
+  validateIntegerSetting("LLM_TIMEOUT_MS", 1000, 60000);
+  validateIntegerSetting("LLM_MAX_RETRIES", 0, 1);
+  validateIntegerSetting("SHUTDOWN_TIMEOUT_MS", 1000, 900000);
+  const productionLlmTimeoutMs = Number(configuration.LLM_TIMEOUT_MS || 30000);
+  const productionLlmMaxRetries = Number(configuration.LLM_MAX_RETRIES || 1);
+  const productionShutdownTimeoutMs = Number(configuration.SHUTDOWN_TIMEOUT_MS || 0);
+  if (Number.isInteger(productionLlmTimeoutMs) && productionLlmTimeoutMs >= 1000 && productionLlmTimeoutMs <= 60000
+      && Number.isInteger(productionLlmMaxRetries) && productionLlmMaxRetries >= 0 && productionLlmMaxRetries <= 1
+      && configuration.SHUTDOWN_TIMEOUT_MS !== undefined) {
+    const minimumShutdownTimeoutMs = productionLlmTimeoutMs * (productionLlmMaxRetries + 1) * 5 + 30000;
+    if (productionShutdownTimeoutMs < minimumShutdownTimeoutMs) {
+      errors.push(`SHUTDOWN_TIMEOUT_MS 必须不少于当前模型配置最坏链路 ${minimumShutdownTimeoutMs} 毫秒`);
+    }
+  }
   if (configuration.ACCESS_LOG_ENABLED !== undefined && !["true", "false"].includes(configuration.ACCESS_LOG_ENABLED)) {
     errors.push("ACCESS_LOG_ENABLED 必须为 true 或 false");
   }
@@ -5129,13 +5143,13 @@ async function checkGatewayReadiness() {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), readinessTimeoutMs);
   try {
-    // 中文注解：HEAD 不产生模型用量；200 或典型“仅允许 POST”响应证明网关路径可达且未拒绝凭据。
-    const response = await fetch(llmApiUrl, {
-      method: "HEAD",
+    // 中文注解：使用 OpenAI 兼容 models 接口验证网络与凭据，不产生模型用量；只接受成功响应，避免 405 假阳性。
+    const response = await fetch(llmReadinessUrl, {
+      method: "GET",
       headers: { Authorization: `Bearer ${llmApiKey}` },
       signal: controller.signal
     });
-    return response.ok || [400, 405, 415].includes(response.status);
+    return response.ok;
   } catch {
     return false;
   } finally {

@@ -21,7 +21,8 @@ npm run check:commercial-readiness
 - `TRUSTED_PROXY_HOPS` 必须与实际反向代理层数一致；无代理为 `0`，单层 Nginx 通常为 `1`，避免伪造客户端 IP 绕过限流。
 - `RATE_LIMIT_WINDOW_MS`、`API_RATE_LIMIT_MAX` 和 `AI_RATE_LIMIT_MAX` 设置单实例 IP 限流；网关层仍需配置按用户、IP 和总量的多层限流。
 - `AI_MAX_CONCURRENT_REQUESTS` 设置单实例模型并发上限；客户端断开不会提前释放仍在执行的模型槽位。
-- `SHUTDOWN_TIMEOUT_MS` 应覆盖最长智能体多段模型调用、模型重试与积分结算清理；进程收到终止信号后先停止接收新请求，再等待在途请求完成。
+- `LLM_READINESS_URL` 留空时从 `LLM_API_URL` 推导 OpenAI 兼容 `/models` 地址；自定义时必须使用验证同一凭据且不产生模型用量的 HTTPS 接口。
+- `SHUTDOWN_TIMEOUT_MS` 应覆盖智能体最多五段模型调用、模型重试与积分结算清理；生产配置门禁会按 `LLM_TIMEOUT_MS` 和 `LLM_MAX_RETRIES` 校验最小值。进程收到终止信号后先停止接收新请求，再等待在途请求完成。
 - 生产环境默认启用最小化 JSON 访问日志，并通过 `X-Request-Id` 关联请求；日志不应采集 Cookie、查询串和请求体。
 
 生产配置不完整时 `server/index.js` 会在监听端口前直接退出，错误只列缺失项，不打印密钥值。

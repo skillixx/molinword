@@ -13,8 +13,20 @@ async function freePort() {
 
 const port = await freePort();
 const output = [];
+let gatewayAuthorized = true;
 const gatewayServer = createServer((request, response) => {
   response.setHeader("Connection", "close");
+  if (request.method === "GET" && request.url === "/v1/models") {
+    if (!gatewayAuthorized || request.headers.authorization !== "Bearer model-key-at-least-32-characters") {
+      response.statusCode = 401;
+      response.end();
+      return;
+    }
+    response.setHeader("Content-Type", "application/json");
+    response.statusCode = 200;
+    response.end(JSON.stringify({ data: [{ id: "test-model" }] }));
+    return;
+  }
   if (request.method === "HEAD" && request.url === "/v1/chat/completions") {
     response.statusCode = 405;
     response.end();
@@ -104,7 +116,7 @@ try {
   const readyWithGatewayResponse = await fetch(`http://127.0.0.1:${port}/api/ready`);
   const readyWithGateway = await readyWithGatewayResponse.json();
   assert.equal(readyWithGateway.checks.gateway, true);
-  await stopGateway();
+  gatewayAuthorized = false;
   const readyWithoutGatewayResponse = await fetch(`http://127.0.0.1:${port}/api/ready`);
   const readyWithoutGateway = await readyWithoutGatewayResponse.json();
   assert.equal(readyWithoutGateway.checks.gateway, false);
@@ -139,7 +151,7 @@ try {
   }
   assert.deepEqual(statuses, [401, 401, 429]);
 
-  console.log("生产 HTTP 基线检查通过。", { requestId: "server-generated", gatewayReadiness: [true, false], malformedJson: 400, missingRoute: 404, aiRateLimit: statuses });
+  console.log("生产 HTTP 基线检查通过。", { requestId: "server-generated", gatewayReadiness: ["authorized", "unauthorized"], malformedJson: 400, missingRoute: 404, aiRateLimit: statuses });
 } finally {
   await stopApi();
   await stopGateway();
