@@ -1,0 +1,110 @@
+name: Signed production release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout approved main commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install controlled Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Verify commercial readiness
+        run: npm run check:commercial-readiness
+
+      - name: Create unsigned bundle in keyless job
+        run: npm run release:bundle:unsigned-ci
+
+      - name: Upload unsigned archive and checksum
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: molinword-unsigned-release-${{ github.sha }}
+          path: |
+            release/*.tar.gz
+            release/*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 1
+
+  sign:
+    needs: package
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: production-release
+    steps:
+      - name: Download approved unsigned pair
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: molinword-unsigned-release-${{ github.sha }}
+          path: unsigned
+
+      - name: Sign checksum on fresh minimal runner
+        env:
+          RELEASE_SIGNING_PRIVATE_KEY_PEM: ${{ secrets.RELEASE_SIGNING_PRIVATE_KEY_PEM }}
+        run: |
+          set -euo pipefail
+          # 中文注解：签名 job 不 checkout、不执行 npm 或仓库代码；私钥只在全新 runner 上短暂落盘，并在启动 OpenSSL 前从环境删除。
+          test -n "$RELEASE_SIGNING_PRIVATE_KEY_PEM" || { echo "production-release 环境未配置发布签名私钥" >&2; exit 1; }
+          umask 077
+          signing_key="$RUNNER_TEMP/molinword-release-signing-private.pem"
+          signing_public="$RUNNER_TEMP/molinword-release-signing-public.pem"
+          cleanup_signing_key() { rm -f -- "$signing_key" "$signing_public"; }
+          trap cleanup_signing_key EXIT
+          printf '%s' "$RELEASE_SIGNING_PRIVATE_KEY_PEM" > "$signing_key"
+          unset RELEASE_SIGNING_PRIVATE_KEY_PEM
+          cd unsigned
+          mapfile -t archives < <(find . -maxdepth 1 -type f -name 'molinword-*.tar.gz' -printf '%f\n')
+          mapfile -t checksums < <(find . -maxdepth 1 -type f -name 'molinword-*.tar.gz.sha256' -printf '%f\n')
+          test "${#archives[@]}" -eq 1 && test "${#checksums[@]}" -eq 1 || { echo "无密钥 artifact 必须只含一份归档和摘要" >&2; exit 1; }
+          test "$(find . -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 2 || { echo "无密钥 artifact 包含额外文件" >&2; exit 1; }
+          test "$(find . -mindepth 1 -maxdepth 1 ! -type f | wc -l)" -eq 0 || { echo "无密钥 artifact 包含链接或额外目录" >&2; exit 1; }
+          test "${checksums[0]}" = "${archives[0]}.sha256" || { echo "归档与摘要文件名不匹配" >&2; exit 1; }
+          sha256sum --check "${checksums[0]}"
+          openssl pkey -in "$signing_key" -check -noout
+          openssl pkey -in "$signing_key" -pubout -out "$signing_public"
+          public_key_text="$(openssl pkey -pubin -in "$signing_public" -text -noout)"
+          if grep -q 'ASN1 OID:' <<<"$public_key_text"; then
+            grep -Eq 'ASN1 OID: (prime256v1|secp384r1|secp521r1)$' <<<"$public_key_text" || { echo "EC 发布签名密钥曲线不受支持" >&2; exit 1; }
+          elif grep -q '^Modulus:' <<<"$public_key_text" \
+            && [[ "$public_key_text" =~ Public-Key:\ \(([0-9]+)\ bit ]] \
+            && (( BASH_REMATCH[1] >= 2048 )); then
+            :
+          else
+            echo "发布签名密钥必须为至少 2048 位 RSA/RSA-PSS 或 P-256/P-384/P-521" >&2
+            exit 1
+          fi
+          openssl dgst -sha256 -sign "$signing_key" -out "${checksums[0]}.sig" "${checksums[0]}"
+          openssl dgst -sha256 -verify "$signing_public" -signature "${checksums[0]}.sig" "${checksums[0]}"
+
+      - name: Upload signed release triplet
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: molinword-production-release-${{ github.sha }}
+          path: |
+            unsigned/*.tar.gz
+            unsigned/*.tar.gz.sha256
+            unsigned/*.tar.gz.sha256.sig
+          if-no-files-found: error
+          retention-days: 30

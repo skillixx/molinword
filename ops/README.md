@@ -12,14 +12,69 @@
 
 ## 二、发布
 
-以下命令中的 `<release-id>` 必须使用 `npm run check:release-manifest` 输出的发布号，域名和路径由部署人员替换。发布号由 Git 提交与实际前后端制品哈希共同生成，不能手工指定。不要把 `.env`、本地日志、截图、测试压缩包或开发缓存复制到服务器。
+以下命令中的 `<release-id>` 必须使用受信 CI 的 `npm run check:release-manifest` 输出并登记到变更单，域名和路径由部署人员替换。正式三件套只能由 `.github/workflows/production-release.yml` 的手动工作流生成；仓库管理员必须为 `production-release` Environment 配置 required reviewers，并把 `RELEASE_SIGNING_PRIVATE_KEY_PEM` 仅保存为该 Environment 的受保护 secret。工作流只允许 main：无密钥 package runner 完整重跑商业门禁并生成二件套，全新 signer runner 经 Environment 批准后只用系统 OpenSSL 签名，不 checkout 或执行仓库代码。工作流只上传三件套、不自动部署；Environment 是否已启用审批属于 GitHub 外部配置，首次发布前必须由管理员截图或审计日志确认。发布号由 Git 提交与实际前后端制品哈希共同生成，不能根据收到的压缩包或文件名自行采信。不要直接复制工作目录；应在干净提交上生成只包含清单覆盖文件的正式发布包，`.env`、本地日志、截图、测试压缩包、`node_modules` 和开发缓存不会进入归档：
 
 ```bash
-sudo install -d -m 0755 /opt/molinword/releases
+gh workflow run production-release.yml --ref main
+# 等待 required reviewer 批准 sign job 且整次运行成功后，使用 GitHub 显示的 run-id 下载唯一正式 artifact。
+gh run download <run-id> --name molinword-production-release-<full-git-sha> --dir ./approved-release
+```
+
+工作流 artifact 包含 `molinword-<release-id>-linux-x64-glibc.tar.gz`、同名 `.sha256` 及 `.sha256.sig`。下载应在获批管理终端完成，再通过批准的制品通道传到目标服务器 `/secure/incoming/molinword`，不要为生产服务器配置 GitHub 登录凭据。仓库 CLI 只允许在 GitHub Actions 无密钥 job 中生成前两项；不得把正式私钥路径或内容交给任何仓库脚本。私钥只存在于受保护的隔离 signer 环境，不能进入仓库、归档或日志；目标服务器预置对应的 root-owned 公钥。归档内部固定以 `molinword-<release-id>/` 为唯一顶层目录，并包含逐文件摘要的 `BUNDLE-MANIFEST.json`。相同受控构建环境、提交与制品会得到相同归档字节；同名文件已存在时拒绝覆盖。
+
+首次部署前，必须由配置管理从已审核提交预置 `/usr/local/lib/molinword-release-tools/`（至少包含声明 `type=module` 的 `package.json`、`scripts/create-production-release-bundle.mjs`、`scripts/verify-production-release-archive.mjs` 与 `shared/release-manifest.js`）及 `/etc/molinword/release-signing-public.pem`。不能从尚未验签的归档提取或执行验证器。以下整块命令以 `set -euo pipefail` 失败即停：可信工具先用 `O_NOFOLLOW`、分块大小上限和独占创建把三件套复制到新 root-only inode，再用预置公钥验证签名，并在同一受限解析过程中校验压缩摘要、条目类型、唯一顶层目录和内部逐文件摘要；随后只解压该副本到全新 staging，复验完整文件集后以发布锁和 `mv --no-target-directory` 原子落位。任何失败都会清除本轮 root-only 副本，允许重新传输后重试。
+
+```bash
+set -euo pipefail
+SOURCE_INCOMING=/secure/incoming/molinword
+SOURCE_ARCHIVE="$SOURCE_INCOMING/molinword-<release-id>-linux-x64-glibc.tar.gz"
+SOURCE_CHECKSUM="$SOURCE_ARCHIVE.sha256"
+SOURCE_SIGNATURE="$SOURCE_CHECKSUM.sig"
+test "$(sudo stat -c '%U:%G:%a' /etc/molinword/release-signing-public.pem)" = "root:root:400" || { echo "发布公钥权限不安全" >&2; exit 1; }
+test -z "$(sudo find /usr/local/lib/molinword-release-tools -xdev \( ! -user root -o -perm /022 \) -print -quit)" || { echo "发布验证器不是 root-only 受控文件" >&2; exit 1; }
+sudo install -d -m 0700 -o root -g root /var/lib/molinword-release-incoming
+test -z "$(sudo find /var/lib/molinword-release-incoming -maxdepth 0 -xdev \( ! -user root -o -perm /022 \) -print -quit)" || { echo "root-only 复验父目录权限不安全" >&2; exit 1; }
+sudo install -d -m 0755 -o root -g root /opt/molinword/releases
+test -z "$(sudo find /opt/molinword/releases -maxdepth 0 -xdev \( ! -user root -o -perm /022 \) -print -quit)" || { echo "发布父目录不是 root-owned 或仍可被非 root 改写" >&2; exit 1; }
+RELEASE_LOCK=/opt/molinword/releases/.<release-id>.deploy-lock
+sudo mkdir -m 0700 "$RELEASE_LOCK" || { echo "同一发布号已有部署在进行" >&2; exit 1; }
+VERIFIED_INCOMING=/var/lib/molinword-release-incoming/molinword-<release-id>-verified
+STAGING_RELEASE=
+cleanup_release_staging() {
+  if [ -n "${STAGING_RELEASE:-}" ]; then sudo rm -rf --one-file-system -- "$STAGING_RELEASE"; fi
+  if [ -n "${VERIFIED_INCOMING:-}" ]; then sudo rm -rf --one-file-system -- "$VERIFIED_INCOMING"; fi
+  if [ -n "${RELEASE_LOCK:-}" ]; then sudo rmdir -- "$RELEASE_LOCK" 2>/dev/null || true; fi
+}
+trap cleanup_release_staging EXIT
+sudo env RELEASE_SIGNING_PUBLIC_KEY_FILE=/etc/molinword/release-signing-public.pem \
+  node /usr/local/lib/molinword-release-tools/scripts/verify-production-release-archive.mjs \
+  --archive="$SOURCE_ARCHIVE" \
+  --checksum="$SOURCE_CHECKSUM" \
+  --signature="$SOURCE_SIGNATURE" \
+  --staged-output-dir="$VERIFIED_INCOMING" \
+  --expected-release-id=<release-id>
+ARCHIVE="$VERIFIED_INCOMING/$(basename "$SOURCE_ARCHIVE")"
+CHECKSUM="$VERIFIED_INCOMING/$(basename "$SOURCE_CHECKSUM")"
+SIGNATURE="$VERIFIED_INCOMING/$(basename "$SOURCE_SIGNATURE")"
 getent passwd molinword-acceptance >/dev/null || sudo useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin molinword-acceptance
 test "$(id -u molinword)" != "$(id -u molinword-acceptance)" || { echo "验收用户与 API 用户复用了 UID，停止部署" >&2; exit 1; }
 test "$(id -g molinword)" != "$(id -g molinword-acceptance)" || { echo "验收用户与 API 用户复用了主 GID，停止部署" >&2; exit 1; }
-sudo install -d -m 0755 -o molinword -g molinword /opt/molinword/releases/<release-id>
+FINAL_RELEASE=/opt/molinword/releases/<release-id>
+test ! -e "$FINAL_RELEASE" && test ! -L "$FINAL_RELEASE" || { echo "目标发布目录已经存在，拒绝复用" >&2; exit 1; }
+STAGING_RELEASE="$(sudo mktemp -d /opt/molinword/releases/.<release-id>.staging.XXXXXX)"
+sudo tar --extract --gzip --file="$ARCHIVE" --directory="$STAGING_RELEASE" --strip-components=1 --no-same-owner --same-permissions
+sudo chmod 0755 "$STAGING_RELEASE"
+sudo -u molinword --chdir="$STAGING_RELEASE" node scripts/verify-production-release-bundle.mjs --expected-release-id=<release-id>
+sudo npm ci --prefix "$STAGING_RELEASE" --omit=dev --ignore-scripts --no-audit --no-fund
+sudo -u molinword --chdir="$STAGING_RELEASE" node scripts/verify-production-release-bundle.mjs --expected-release-id=<release-id> --allow-node-modules
+sudo mv --no-target-directory -- "$STAGING_RELEASE" "$FINAL_RELEASE"
+STAGING_RELEASE=
+sudo rm -rf --one-file-system -- "$VERIFIED_INCOMING"
+VERIFIED_INCOMING=
+sudo rmdir -- "$RELEASE_LOCK"
+RELEASE_LOCK=
+trap - EXIT
+cd "$FINAL_RELEASE"
 sudo install -d -m 0750 -o root -g molinword /etc/molinword
 sudo install -m 0640 -o root -g molinword ops/env/molinword.production.env.example /etc/molinword/molinword.env
 sudo install -m 0644 ops/systemd/molinword-api.service /etc/systemd/system/molinword-api.service
@@ -43,12 +98,13 @@ sudo install -m 0644 ops/nginx/molinword.conf.example /etc/nginx/sites-available
 sudo install -m 0400 -o root -g root /secure/approved/acceptance-approval.key /etc/molinword/acceptance-approval.key
 ```
 
-禁止把任何密钥值直接写入命令历史，也不能复用数据库、模型、存储、会话或 AI 审计密钥。将已通过门禁且包含 `dist/` 的发布目录复制到与清单发布号同名的 `/opt/molinword/releases/<release-id>`，确认文件归属 `molinword:molinword`，然后在服务器安装纯生产依赖。候选软链接让维护单元验证新版本，同时不影响当前服务：
+禁止把任何密钥值直接写入命令历史，也不能复用数据库、模型、存储、会话或 AI 审计密钥。正式发布目录应继续保持 `root:root` 且目录 `0755`、文件 `0644`；运行用户只需读取，不应获得回写已验签源码的权限。纯生产依赖已在原子落位前由 root 以禁用生命周期脚本方式安装并完成第二次复验。候选软链接让维护单元验证新版本，同时不影响当前服务：
 
 ```bash
+set -euo pipefail
 cd /opt/molinword/releases/<release-id>
 test -s dist/THIRD_PARTY_LICENSES.txt
-sudo -u molinword npm ci --omit=dev
+test -d node_modules
 sudo ln -sfn /opt/molinword/releases/<release-id> /opt/molinword/candidate
 sudo systemctl daemon-reload
 sudo systemctl start 'molinword-maintenance@check:release-target.service'

@@ -3,6 +3,8 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  // 中文注解：前端生产制品不得从构建机 .env 注入未受 Git 绑定的值；浏览器端当前没有 VITE_* 配置，运行凭据只由后端在启动时读取。
+  envDir: false,
   build: {
     // 中文注解：生成构建清单供商业性能门禁计算真正的初始静态依赖闭包，而不是只看文件名。
     manifest: true,

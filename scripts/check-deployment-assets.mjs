@@ -189,7 +189,7 @@ assert.match(runtimeCheck, /APP_ENV 必须设置为 production/);
 assert.match(runtimeCheck, /verifyReleaseManifest/, "生产运行配置预检必须同时校验实际制品清单");
 const releaseManifestImplementation = await readRequired("shared/release-manifest.js");
 for (const artifactRoot of [".agents", "database", "ops", "scripts", "server", "shared", "dist"]) {
-  assert.match(releaseManifestImplementation, new RegExp(`artifactRoots[\\s\\S]*?"${artifactRoot.replace(".", "\\.")}"`), `发布清单必须覆盖 ${artifactRoot}`);
+  assert.match(releaseManifestImplementation, new RegExp(`releaseArtifactRoots[\\s\\S]*?"${artifactRoot.replace(".", "\\.")}"`), `发布清单必须覆盖 ${artifactRoot}`);
 }
 assert.match(releaseManifestImplementation, /status", "--porcelain=v1"/, "构建发布清单前必须拒绝受覆盖源码未提交");
 assert.match(releaseManifestImplementation, /"ls-files", "--others", "--ignored", "--exclude-standard"/, "构建发布清单前必须拒绝被 ignore 隐藏的未提交源码");
@@ -219,6 +219,23 @@ assert.match(acceptanceFinalizer, /evidence-digest-mismatch/, "人工清单中�
 assert.match(acceptanceFinalizer, /flag: "wx"/, "最终验收记录必须独占追加，不能覆盖旧批准");
 assert.match(acceptanceFinalizer, /CREDENTIALS_DIRECTORY/, "最终验收密钥必须来自 systemd credential");
 assert.match(acceptanceFinalizer, /approved-evidence-changed/, "验收复核必须重新校验原始附件完整性");
+const productionReleaseBundle = await readRequired("scripts/create-production-release-bundle.mjs");
+assert.match(productionReleaseBundle, /verifyReleaseManifest/, "生产发布包必须先验证发布制品清单");
+assert.match(productionReleaseBundle, /requireGit:\s*true/, "生产发布包必须绑定真实受控 Git 工作区");
+assert.match(productionReleaseBundle, /requireClean:\s*true/, "生产发布包必须拒绝未提交的构建输入");
+assert.match(productionReleaseBundle, /createGzip\(\{ level: 9, mtime: 0 \}\)/, "生产发布包压缩元数据必须可重复");
+assert.match(productionReleaseBundle, /createWriteStream\(\)|archiveHandle\.createWriteStream\(\)/, "生产发布包必须通过独占文件句柄写入");
+assert.match(productionReleaseBundle, /bundle-source-changed/, "生产发布包必须拒绝打包期间变化的源文件");
+assert.match(productionReleaseBundle, /BUNDLE-MANIFEST\.json/, "生产发布包必须携带内部文件摘要清单");
+assert.match(productionReleaseBundle, /O_NOFOLLOW/, "生产发布包必须通过文件描述符拒绝符号链接竞态");
+assert.match(productionReleaseBundle, /missing-third-party-licenses/, "生产发布包必须硬性要求非空第三方许可证汇总");
+assert.match(productionReleaseBundle, /createSign\("sha256"\)/, "发布包库的签名契约必须与隔离 OpenSSL signer 保持兼容");
+assert.doesNotMatch(productionReleaseBundle, /RELEASE_SIGNING_PRIVATE_KEY_FILE/, "仓库 CLI 不得读取正式发布私钥路径");
+assert.match(productionReleaseBundle, /!unsignedForCi \|\| process\.env\.GITHUB_ACTIONS !== "true"/, "仓库 CLI 必须只允许 GitHub Actions 无密钥打包模式");
+assert.match(productionReleaseBundle, /verifyProductionReleaseArchive/, "生产发布工具必须在解压前严格复验归档类型和逐文件摘要");
+assert.match(productionReleaseBundle, /verifyInstalledProductionReleaseBundle/, "生产发布工具必须在安装依赖前拒绝解压目录额外文件");
+assert.match(productionReleaseBundle, /stageProductionReleaseInputs/, "可信发布工具必须先把不可信传入文件复制到新 root-only inode");
+assert.match(productionReleaseBundle, /destinationHandle = await open\(destinationPath, "wx", 0o400\)/, "root-only 复验副本必须独占创建且不可覆盖");
 const manualAcceptanceExample = JSON.parse(await readRequired("ops/acceptance/manual-acceptance.example.json"));
 assert.equal(manualAcceptanceExample.kind, "molinword-production-manual-acceptance");
 assert.deepEqual(manualAcceptanceExample.checks.map((check) => check.id), [
@@ -235,6 +252,28 @@ assert.equal(acceptanceAuthorizationExample.kind, "molinword-production-acceptan
 assert.equal(acceptanceAuthorizationExample.preflightSha256, "replace-with-latest-preflight-sha256");
 assert.equal(acceptanceAuthorizationExample.manualSha256, "replace-with-manual-json-sha256");
 const packageJson = JSON.parse(await readRequired("package.json"));
+const productionReleaseWorkflow = await readRequired(".github/workflows/production-release.yml");
+assert.doesNotMatch(productionReleaseWorkflow, /uses:\s+actions\/[\w-]+@v\d/, "正式发布工作流的官方 Action 必须固定到确定提交");
+assert.match(productionReleaseWorkflow, /workflow_dispatch:/, "正式签名发布必须只能由人工触发工作流启动");
+assert.match(productionReleaseWorkflow, /environment:\s*production-release/, "正式签名发布必须使用受保护 Environment");
+assert.match(productionReleaseWorkflow, /github\.ref == 'refs\/heads\/main'/, "正式签名发布只允许 main 提交");
+assert.match(productionReleaseWorkflow, /secrets\.RELEASE_SIGNING_PRIVATE_KEY_PEM/, "CI 签名私钥必须来自 Environment secret");
+assert.match(productionReleaseWorkflow, /printf[\s\S]*unset RELEASE_SIGNING_PRIVATE_KEY_PEM[\s\S]*openssl pkey/, "私钥落入临时文件后必须在启动外部验签进程前从环境删除");
+assert.match(productionReleaseWorkflow, /npm run check:commercial-readiness[\s\S]*npm run release:bundle:unsigned-ci/, "无密钥打包前必须完整重跑商业门禁");
+assert.match(productionReleaseWorkflow, /unsigned\/\*\.tar\.gz[\s\S]*unsigned\/\*\.tar\.gz\.sha256[\s\S]*unsigned\/\*\.tar\.gz\.sha256\.sig/, "隔离 signer job 必须上传归档、摘要和签名三件套");
+const productionSignerJob = productionReleaseWorkflow.split("\n  sign:")[1] || "";
+assert.match(productionSignerJob, /needs:\s*package/, "签名 job 必须只消费已通过门禁的无密钥 artifact");
+assert.match(productionSignerJob, /actions\/download-artifact@[0-9a-f]{40}/, "签名 job 必须从固定版本 Action 下载待签二件套");
+// 中文注解：只检查真正的 Action 引用和 shell 命令行，避免把“不得执行 npm”这类安全说明误判成命令。
+const productionSignerExecutableLines = productionSignerJob
+  .split(/\r?\n/)
+  .filter((line) => !/^\s*#/.test(line))
+  .join("\n");
+assert.doesNotMatch(productionSignerExecutableLines, /uses:\s*actions\/checkout|^\s*(?:npm|npx|node|pnpm|yarn|playwright)\b/m, "持有私钥的全新 runner 不得 checkout 或执行 npm、浏览器及仓库代码");
+assert.match(productionSignerJob, /grep -q '\^Modulus:'/, "RSA 签名分支必须显式识别模数字段，不能把同位数 DSA 误当成受支持算法");
+assert.match(productionSignerJob, /openssl dgst -sha256 -sign/, "隔离 signer job 必须只用系统 OpenSSL 签名已校验摘要");
+const viteConfig = await readRequired("vite.config.ts");
+assert.match(viteConfig, /envDir:\s*false/, "前端构建必须禁用未受 Git 清单绑定的本地 .env 注入");
 assert.equal(packageJson.scripts?.["check:runtime-config"], "node scripts/check-runtime-config.mjs");
 assert.equal(packageJson.scripts?.["check:runtime-config:production"], "node scripts/check-runtime-config.mjs --require-production");
 assert.equal(packageJson.scripts?.["check:production-acceptance"], "node scripts/check-production-acceptance-evidence.mjs");
@@ -245,6 +284,11 @@ assert.equal(packageJson.scripts?.["check:release-target"], "node scripts/check-
 assert.equal(packageJson.scripts?.["check:release-target-contract"], "node scripts/check-release-target.mjs --self-test");
 assert.equal(packageJson.scripts?.["check:release-manifest"], "node scripts/check-release-manifest.mjs");
 assert.equal(packageJson.scripts?.["check:release-manifest-contract"], "node scripts/check-release-manifest-contract.mjs");
+assert.equal(packageJson.scripts?.["check:production-release-bundle"], "node scripts/check-production-release-bundle.mjs");
+assert.equal(packageJson.scripts?.["release:bundle"], undefined, "不得暴露可让仓库代码直接接触正式签名私钥的 npm 命令");
+assert.equal(packageJson.scripts?.["release:bundle:unsigned-ci"], "node scripts/create-production-release-bundle.mjs --unsigned-for-ci");
+assert.equal(packageJson.scripts?.["release:verify-archive"], "node scripts/verify-production-release-archive.mjs");
+assert.equal(packageJson.scripts?.["release:verify-installed"], "node scripts/verify-production-release-bundle.mjs");
 assert.equal(packageJson.scripts?.["check:frontend-performance"], "npm run build && node scripts/check-frontend-performance-budget.mjs");
 assert.equal(packageJson.scripts?.["check:third-party-notices"], "node scripts/check-third-party-notices.mjs");
 assert.match(packageJson.scripts?.build ?? "", /vite build && node scripts\/generate-third-party-notices\.mjs && node scripts\/generate-release-manifest\.mjs$/);
@@ -259,6 +303,7 @@ assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:p
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:production-acceptance-finalization/);
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:release-manifest-contract/);
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:release-manifest/);
+assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:production-release-bundle/);
 const thirdPartyNoticeIndex = await readRequired("public/THIRD_PARTY_NOTICES.md");
 assert.match(thirdPartyNoticeIndex, /THIRD_PARTY_LICENSES\.txt/);
 const releaseTarget = JSON.parse(await readRequired("ops/release-target.json"));
@@ -325,6 +370,26 @@ assert.match(runbook, /test "\$\(id -u molinword\)" != "\$\(id -u molinword-acce
 assert.match(runbook, /test "\$\(id -g molinword\)" != "\$\(id -g molinword-acceptance\)" \|\| \{[^\n]+exit 1; \}/, "部署手册必须失败中止 API 与验收用户复用主 GID 的部署");
 assert.match(runbook, /完整人工清单摘要/, "部署手册必须让短期授权绑定人工清单的确定字节");
 assert.match(runbook, /内核 `flock`/, "部署手册必须说明采集、签名与复核的并发锁边界");
+assert.match(runbook, /gh workflow run production-release\.yml --ref main/, "部署手册必须只触发受保护双 runner 工作流生成正式三件套");
+assert.doesNotMatch(runbook, /RELEASE_SIGNING_PRIVATE_KEY_FILE|npm run release:bundle(?:\s|`)/, "部署手册不得指导仓库代码直接读取正式发布私钥");
+assert.match(runbook, /RELEASE_SIGNING_PRIVATE_KEY_PEM/, "部署手册必须把正式私钥限定为受保护 signer Environment secret");
+assert.match(runbook, /RELEASE_SIGNING_PUBLIC_KEY_FILE/, "部署手册必须从服务器预置公钥建立发布信任根");
+assert.match(runbook, /verify-production-release-archive\.mjs/, "部署手册必须在解压前复验签名、摘要和归档条目");
+assert.match(runbook, /VERIFIED_INCOMING=\/var\/lib\/molinword-release-incoming\/molinword-<release-id>-verified/, "验签前必须把传入制品复制到绑定发布号的 root-only 私有目录");
+assert.match(runbook, /--staged-output-dir="\$VERIFIED_INCOMING"/, "可信预置工具必须限额复制到独立 inode 后再验签");
+assert.match(runbook, /--strip-components=1/, "部署手册必须按固定顶层目录解压生产发布包");
+assert.match(runbook, /--no-same-owner --same-permissions/, "已验证归档必须固定保留目录 0755 与文件 0644，不能受 root umask 漂移影响");
+assert.match(runbook, /verify-production-release-bundle\.mjs --expected-release-id=<release-id>/, "部署手册必须在安装依赖前复验内部清单和完整文件集");
+assert.match(runbook, /sudo -u molinword --chdir="\$STAGING_RELEASE"/, "解压后复验必须以运行用户身份进入 root 创建的 staging");
+assert.doesNotMatch(runbook, /chown -R molinword:molinword "\$STAGING_RELEASE"/, "原子落位前不得把 staging 写权限授予长期运行 UID");
+assert.match(runbook, /npm ci --prefix "\$STAGING_RELEASE" --omit=dev --ignore-scripts --no-audit --no-fund/, "生产依赖必须由 root 在只读源码 staging 中禁用生命周期脚本安装");
+assert.match(runbook, /--expected-release-id=<release-id> --allow-node-modules/, "依赖安装后必须再次复验所有受控载荷且只忽略 root-owned node_modules 子树");
+assert.match(runbook, /test ! -e "\$FINAL_RELEASE" && test ! -L "\$FINAL_RELEASE"/, "部署手册必须拒绝复用既有或符号链接发布目录");
+assert.match(runbook, /mktemp -d \/opt\/molinword\/releases\//, "部署手册必须解压到全新 staging 目录");
+assert.match(runbook, /RELEASE_LOCK=\/opt\/molinword\/releases\//, "同一发布号部署必须使用原子 mkdir 锁串行化");
+assert.match(runbook, /sudo mv --no-target-directory -- "\$STAGING_RELEASE" "\$FINAL_RELEASE"/, "部署手册必须以 no-target-directory 在全部校验后原子落位");
+assert.match(runbook, /rm -rf --one-file-system -- "\$VERIFIED_INCOMING"[\s\S]*rmdir -- "\$RELEASE_LOCK"/, "同发布号锁必须最后释放并覆盖 root-only 副本清理");
+assert.match(runbook, /set -euo pipefail/, "部署命令块必须在任一安全门禁失败时立即停止");
 assert.match(runbook, /manual-approval-required/, "部署手册必须说明自动预检后仍需人工批准");
 assert.match(runbook, /Git 提交与实际前后端制品哈希共同生成/, "部署手册必须说明发布号由实际制品派生而非环境变量自报");
 for (const heading of ["发布", "验收", "回滚", "对账", "证据边界"]) {
