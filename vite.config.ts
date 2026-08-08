@@ -1,8 +1,77 @@
-import { defineConfig } from "vite";
+import path from "node:path";
+import { Buffer } from "node:buffer";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
+import { buildThirdPartyLicenseBundle } from "./scripts/third-party-license-bundle.mjs";
+
+type LicenseBundleBuilder = (options: { rootDir: string }) => Promise<{ content: string; missing: unknown[] }>;
+
+export function thirdPartyLicenseDevPlugin({
+  buildBundle = buildThirdPartyLicenseBundle
+}: { buildBundle?: LicenseBundleBuilder } = {}): Plugin {
+  let bundlePromise: Promise<string> | null = null;
+  const loadBundle = (rootDir: string) => {
+    if (!bundlePromise) {
+      bundlePromise = buildBundle({ rootDir }).then((result) => {
+        if (result.missing.length) throw new Error(`第三方许可证缺失 ${result.missing.length} 项`);
+        return result.content;
+      }).catch((error) => {
+        // 中文注解：失败结果不缓存，依赖补齐后无需重启开发服务即可再次生成。
+        bundlePromise = null;
+        throw error;
+      });
+    }
+    return bundlePromise;
+  };
+
+  return {
+    name: "molinword-dev-third-party-licenses",
+    apply: "serve",
+    configureServer(server) {
+      const rootDir = server.config.root;
+      const watchedFiles = new Set([
+        path.resolve(rootDir, "package-lock.json"),
+        path.resolve(rootDir, "ops", "release-target.json")
+      ]);
+      server.watcher.add([...watchedFiles]);
+      const invalidateBundle = (filePath: string) => {
+        if (watchedFiles.has(path.resolve(filePath))) bundlePromise = null;
+      };
+      server.watcher.on("change", invalidateBundle);
+      server.watcher.on("add", invalidateBundle);
+      server.watcher.on("unlink", invalidateBundle);
+
+      // 中文注解：开发态必须在 SPA 回退前精确拦截许可证路径，否则点击入口会得到 index.html 的假 200。
+      server.middlewares.use(async (request, response, next) => {
+        const requestPath = String(request.url || "/").split("?", 1)[0];
+        if (requestPath !== "/THIRD_PARTY_LICENSES.txt") return next();
+        const method = String(request.method || "GET").toUpperCase();
+        response.setHeader("Content-Type", "text/plain; charset=utf-8");
+        response.setHeader("Cache-Control", "no-store");
+        response.setHeader("X-Content-Type-Options", "nosniff");
+        if (method !== "GET" && method !== "HEAD") {
+          response.statusCode = 405;
+          response.setHeader("Allow", "GET, HEAD");
+          response.end("仅支持 GET 和 HEAD。\n");
+          return;
+        }
+        try {
+          const content = await loadBundle(rootDir);
+          response.statusCode = 200;
+          response.setHeader("Content-Length", String(Buffer.byteLength(content)));
+          response.end(method === "HEAD" ? undefined : content);
+        } catch (error) {
+          server.config.logger.error(`开发态许可证生成失败：${error instanceof Error ? error.message : "未知错误"}`);
+          response.statusCode = 503;
+          response.end(method === "HEAD" ? undefined : "开源许可证声明暂不可用。\n");
+        }
+      });
+    }
+  };
+}
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), thirdPartyLicenseDevPlugin()],
   // 中文注解：前端生产制品不得从构建机 .env 注入未受 Git 绑定的值；浏览器端当前没有 VITE_* 配置，运行凭据只由后端在启动时读取。
   envDir: false,
   build: {

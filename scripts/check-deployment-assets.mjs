@@ -299,6 +299,7 @@ assert.equal(packageJson.scripts?.["check:release-manifest"], "node scripts/chec
 assert.equal(packageJson.scripts?.["check:release-manifest-contract"], "node scripts/check-release-manifest-contract.mjs");
 assert.equal(packageJson.scripts?.["check:production-release-bundle"], "node scripts/check-production-release-bundle.mjs");
 assert.equal(packageJson.scripts?.["check:docx-visual-render"], "node scripts/check-docx-visual-render.mjs", "必须提供真实 Office 渲染的公开门禁命令");
+assert.equal(packageJson.scripts?.["check:dev-license-notice"], "node scripts/check-dev-license-notice.mjs", "必须提供开发态许可证真实 HTTP 门禁命令");
 assert.equal(packageJson.scripts?.["release:bundle"], undefined, "不得暴露可让仓库代码直接接触正式签名私钥的 npm 命令");
 assert.equal(packageJson.scripts?.["release:bundle:unsigned-ci"], "node scripts/create-production-release-bundle.mjs --unsigned-for-ci");
 assert.equal(packageJson.scripts?.["release:verify-archive"], "node scripts/verify-production-release-archive.mjs");
@@ -312,6 +313,7 @@ assert.equal(packageJson.scripts?.["ai-audit:redact-existing"], "node scripts/ai
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:deployment-assets/);
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:frontend-performance/);
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:third-party-notices/);
+assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:dev-license-notice/, "商业门禁必须覆盖 Vite 开发态许可证入口");
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:release-target-contract/);
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:production-acceptance/);
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:production-acceptance-finalization/);
