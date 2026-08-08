@@ -3233,13 +3233,15 @@ function tableFromNode(tableNode, listState) {
     if (!cellNodes.length) return null;
     const rowHeight = Math.max(0, Math.min(31680, Math.round(Number(rowNode.attribs?.["data-row-height"]) || 0)));
     const rowHeightRule = rowNode.attribs?.["data-row-height-rule"];
+    // 中文注解：首行全部使用 th 时自动写入 Word 表头语义；显式导入属性仍优先保留，混合标签的普通数据行不会被误标。
+    const semanticHeaderRow = rowNode === rowNodes[0] && cellNodes.every((cellNode) => cellNode.name === "th");
     return new TableRow({
       height: rowHeight > 0 ? {
         value: rowHeight,
         rule: rowHeightRule === "exact" ? HeightRule.EXACT : HeightRule.ATLEAST
       } : undefined,
       cantSplit: rowNode.attribs?.["data-row-cant-split"] === "true" || undefined,
-      tableHeader: rowNode.attribs?.["data-row-repeat-header"] === "true" || undefined,
+      tableHeader: rowNode.attribs?.["data-row-repeat-header"] === "true" || semanticHeaderRow || undefined,
       children: cellNodes.map((cellNode) => {
         const columnSpan = Math.max(1, Math.min(Math.round(Number(cellNode.attribs?.colspan) || 1), 50));
         const rowSpan = Math.max(1, Math.min(Math.round(Number(cellNode.attribs?.rowspan) || 1), 100));

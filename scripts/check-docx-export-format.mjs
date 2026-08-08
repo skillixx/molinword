@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import JSZip from "jszip";
 import { createDocxBuffer } from "../server/index.js";
+import { buildFormalTemplateContent } from "../shared/document-template.js";
 
 const tinyPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lT3g6wAAAABJRU5ErkJggg==";
 
@@ -495,5 +496,27 @@ assert.ok((mergedTableXml.match(/<w:gridSpan w:val="2"\/>/g) || []).length >= 3)
 assert.match(mergedTableXml, /<w:vMerge w:val="restart"\/>/);
 assert.match(mergedTableXml, /<w:vMerge w:val="continue"\/>/);
 assert.match(mergedTableXml, /跨行结论/);
+
+const formalTemplateContent = buildFormalTemplateContent({
+  name: "商业计划书",
+  category: "商业经营",
+  documentType: "商业计划书",
+  topic: "商业化评审报告",
+  requirement: "用于验证正式模板表格语义和固定版式。",
+  outline: ["一、评审背景", "二、实施计划", "三、行动安排"]
+});
+const formalTemplateBuffer = await createDocxBuffer({ title: "商业化评审报告", content: formalTemplateContent });
+const formalTemplateZip = await JSZip.loadAsync(formalTemplateBuffer);
+const formalTemplateXml = await formalTemplateZip.file("word/document.xml")?.async("string") || "";
+const formalTemplateTables = formalTemplateXml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/g) || [];
+assert.equal(formalTemplateTables.length, 3, "元数据表和两个行动表都必须导出");
+for (const tableXml of formalTemplateTables) {
+  // 中文注解：正式模板使用固定 DXA 表格几何和可重复表头，避免 Word 版本差异导致列宽漂移并提升辅助技术可读性。
+  assert.match(tableXml, /<w:tblW w:type="dxa" w:w="9360"\/>/);
+  assert.match(tableXml, /<w:tblInd w:type="dxa" w:w="120"\/>/);
+  assert.match(tableXml, /<w:tblLayout w:type="fixed"\/>/);
+  assert.match(tableXml.match(/<w:tr>[\s\S]*?<\/w:tr>/)?.[0] || "", /<w:tblHeader\/>/);
+  assert.doesNotMatch(tableXml, /<w:tblW w:type="pct"/);
+}
 
 console.log("DOCX export format check passed");

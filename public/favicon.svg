@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img">
+  <title>AI Word 文档助手</title>
+  <!-- 中文注解：使用纯 SVG 文档与星芒图形，避免外部字体、脚本和远程资源影响生产加载。 -->
+  <rect width="64" height="64" rx="14" fill="#1F4E79"/>
+  <path d="M17 11h23l9 9v33H17z" fill="#FFFFFF"/>
+  <path d="M40 11v10h9" fill="#D9EAF7"/>
+  <path d="M24 29h18M24 36h18M24 43h12" fill="none" stroke="#1F4E79" stroke-linecap="round" stroke-width="3"/>
+  <path d="M49 34l1.8 4.2L55 40l-4.2 1.8L49 46l-1.8-4.2L43 40l4.2-1.8z" fill="#F4B942"/>
+</svg>

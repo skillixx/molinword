@@ -9,6 +9,12 @@ async function readRequired(path) {
   }
 }
 
+const applicationHtml = await readRequired("index.html");
+const applicationFavicon = await readRequired("public/favicon.svg");
+assert.match(applicationHtml, /<link rel="icon" type="image\/svg\+xml" href="\/favicon\.svg"\s*\/>/);
+assert.match(applicationFavicon, /<title>AI Word 文档助手<\/title>/);
+assert.doesNotMatch(applicationFavicon, /<script|onload=|javascript:/i, "站点图标不能包含可执行内容");
+
 const nginx = await readRequired("ops/nginx/molinword.conf.example");
 assert.match(nginx, /limit_req_zone\s+\$binary_remote_addr\s+zone=molinword_api:/);
 assert.match(nginx, /limit_req_zone\s+\$binary_remote_addr\s+zone=molinword_ai:/);
