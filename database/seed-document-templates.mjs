@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { Client as MinioClient } from "minio";
 import mysql from "mysql2/promise";
+import { buildFormalTemplateContent } from "../shared/document-template.js";
 
 const templates = [
   {
@@ -201,7 +202,12 @@ const stylePresets = [
   { fontFamily: "SimSun", titleColor: "334e68", headingColor: "263d54", accentColor: "9fb3c8", titleSize: 36, headingSize: 28, bodySize: 22, lineSpacing: 380 },
   { fontFamily: "SimSun", titleColor: "2f6f7e", headingColor: "245866", accentColor: "9bc8d1", titleSize: 38, headingSize: 29, bodySize: 22, lineSpacing: 400 },
   { fontFamily: "SimSun", titleColor: "5f6f24", headingColor: "4d5b1c", accentColor: "c5cd91", titleSize: 38, headingSize: 29, bodySize: 22, lineSpacing: 380 }
-];
+].map((style) => ({
+  ...style,
+  // 中文注解：封面仍可使用行业配色，但 Word 标题和各级标题统一为正式黑色，从模板源头杜绝绿色字体回流。
+  titleColor: "000000",
+  headingColor: "000000"
+}));
 
 async function columnExists(connection, tableName, columnName) {
   const [rows] = await connection.query(
@@ -382,7 +388,7 @@ async function seedTemplates() {
           template.topic,
           template.requirement,
           JSON.stringify(template.outline),
-          template.content,
+          template.content || buildFormalTemplateContent(template),
           template.sortOrder
         ]
       );

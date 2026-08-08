@@ -1,6 +1,6 @@
 # molinword
 
-AI Word 文档助手，面向单人日常写作场景，支持 AI 生成大纲、生成正文、局部润色编辑、文档保存、Word 导出、MinIO 文件存储，以及墨灵平台 SSO 和积分计费。
+AI Word 文档助手，面向个人和企业正式文档场景，支持文档智能体规划、正式模板匹配、AI 生成大纲与正文、局部润色编辑、文档保存、Word 导出、MinIO 文件存储，以及墨灵平台 SSO 和积分计费。
 
 ## 本地启动
 
@@ -26,6 +26,7 @@ npm run dev
 - `MOLING_APP_ID`：墨灵平台应用 ID。
 - `MOLING_PRODUCT_ID`：墨灵平台商品 ID。
 - `LOCAL_MOLING_MOCK`：是否启用本地墨灵模拟模式。
+- `REQUIRE_MOLING_SESSION`：默认设为 `true`；仅本地直连调试时改为 `false`。`APP_ENV=production` 时服务端会强制启用门禁。
 - `LLM_API_URL`：DeepSeek 或墨灵 token 网关的 chat/completions 地址。
 - `LLM_API_KEY`：AI 模型密钥，只能放在服务端。
 - `LLM_MODEL`：模型名称，例如 `deepseek-chat` 或平台网关支持的模型名。
@@ -43,17 +44,18 @@ npm run dev
 mysql -h172.16.10.151 -P13306 -uroot -p < database/init-mysql.sql
 ```
 
-脚本会创建：
+脚本会创建数据库和业务表，但不会创建带默认密码的生产账号。请通过部署系统或 MySQL 管理员创建应用账号，并使用密钥管理服务保存强密码：
 
-- 数据库：`moling_word`
-- 应用用户：`moling_word_app`
-- 默认密码：`MolingWordApp_123`
-- 核心业务表：`documents`、`document_versions`、`document_templates`、`files`、`ai_request_logs`、`molin_user_sessions`
+```sql
+CREATE USER 'moling_word_app'@'应用服务器网段' IDENTIFIED BY '由密钥管理服务生成的强密码';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES
+  ON moling_word.* TO 'moling_word_app'@'应用服务器网段';
+```
 
-对应连接串示例：
+核心业务表包括 `documents`、`document_versions`、`document_templates`、`files`、`ai_request_logs`、`billing_reconciliation_tasks` 和 `molin_user_sessions`。连接串只写入服务端 `.env`：
 
 ```env
-DATABASE_URL=mysql://moling_word_app:MolingWordApp_123@172.16.10.151:13306/moling_word
+DATABASE_URL=mysql://moling_word_app:replace-with-strong-password@127.0.0.1:3306/moling_word
 ```
 
 初始化或更新系统模板：
@@ -118,12 +120,26 @@ documents/{documentId}/exports/{fileName}.docx
 
 当前接口按动作扣减积分：
 
+- 文档智能体规划：`word_template_agent`，2 积分
 - 生成大纲：`word_outline_generate`，1 积分
 - 生成正文：`word_body_generate`，5 积分
 - 局部润色/续写/扩写/缩写/纠错：`word_polish`，2 积分
 - 导出 Word：`word_export_docx`，1 积分
 
 服务端采用“预占积分 -> 动作成功 -> 结算积分”的流程；动作失败会释放预占积分。
+若结算或释放请求已发出但平台响应状态不确定，服务端会把操作类型、`hold_id`、原幂等键和应结算金额写入 `billing_reconciliation_tasks`，不会盲目执行相反操作。数据库写入失败时会降级写入 `BILLING_RECONCILIATION_OUTBOX` 指向的 JSONL 持久卷。部署历史数据库后先执行：
+
+```bash
+npm run db:migrate:billing-reconciliation
+```
+
+值班人员可只读查看或使用原幂等键安全重试：
+
+```bash
+npm run billing:reconcile:list
+npm run billing:reconcile:import-outbox
+npm run billing:reconcile:retry
+```
 
 ## 生产部署注意事项
 
@@ -131,6 +147,7 @@ documents/{documentId}/exports/{fileName}.docx
 - AI 密钥、墨灵 `INTERNAL_API_TOKEN`、MinIO 密钥只能放在服务端。
 - 前端不要硬编码真实密钥。
 - 生产环境建议启用 HTTPS，并把 `SESSION_COOKIE_SECURE=true`。
+- 生产环境设置 `APP_ENV=production` 后会强制要求墨灵会话并禁用 `LOCAL_MOLING_MOCK`；同时建议保留 `REQUIRE_MOLING_SESSION=true`，形成显式双重门禁。
 - 后端接口错误只返回中文用户提示，真实错误保留在服务端日志。
 - 文档、导出文件下载都按当前用户校验，避免跨用户访问。
 
@@ -138,6 +155,9 @@ documents/{documentId}/exports/{fileName}.docx
 
 ```bash
 npm run build
+npm run check:template-agent
+npm run check:template-agent-api
+npm run check:template-agent-ui
 npm run check:editor-workflow
 npm run check:docx-export-format
 npm run check:docx-import-format

@@ -5,14 +5,8 @@ CREATE DATABASE IF NOT EXISTS moling_word
   DEFAULT CHARACTER SET utf8mb4
   DEFAULT COLLATE utf8mb4_unicode_ci;
 
-CREATE USER IF NOT EXISTS 'moling_word_app'@'%'
-  IDENTIFIED BY 'MolingWordApp_123';
-
-GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES
-  ON moling_word.*
-  TO 'moling_word_app'@'%';
-
-FLUSH PRIVILEGES;
+-- 中文注解：生产账号和强密码必须由部署系统或密钥管理服务创建，本脚本不再写入可复用的默认口令。
+-- 创建账号后仅授予 moling_word 所需权限，不要在仓库、命令历史或部署文档中记录真实密码。
 
 USE moling_word;
 
@@ -57,7 +51,7 @@ CREATE TABLE IF NOT EXISTS document_versions (
     ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='文档版本表';
 
--- 中文注解：模板表预留给后续模板后台；第一版前端先使用静态模板。
+-- 中文注解：模板表保存正式正文骨架；前端接口不可用时仍保留静态兜底模板。
 CREATE TABLE IF NOT EXISTS document_templates (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '模板 ID',
   name VARCHAR(120) NOT NULL COMMENT '模板名称',
@@ -129,6 +123,30 @@ CREATE TABLE IF NOT EXISTS ai_request_logs (
     FOREIGN KEY (document_id) REFERENCES documents (id)
     ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI 请求日志表';
+
+-- 中文注解：积分结算或释放响应不确定时写入持久化对账队列，使用原幂等键安全重试，禁止盲目执行相反操作。
+CREATE TABLE IF NOT EXISTS billing_reconciliation_tasks (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '对账任务 ID',
+  user_id VARCHAR(64) NOT NULL COMMENT '墨灵平台用户 ID',
+  usage_type VARCHAR(60) NOT NULL COMMENT '计费动作类型',
+  operation_type VARCHAR(20) NOT NULL DEFAULT 'settle' COMMENT '待确认操作：settle 结算，release 释放',
+  hold_id VARCHAR(64) NOT NULL COMMENT '墨灵积分预占 hold_id',
+  idempotency_key VARCHAR(191) NOT NULL COMMENT '原操作幂等键',
+  actual_amount DECIMAL(18, 6) NOT NULL COMMENT '应结算积分，释放任务为 0',
+  settlement_state VARCHAR(30) NOT NULL DEFAULT 'settlement_unknown' COMMENT '平台结算状态',
+  status VARCHAR(30) NOT NULL DEFAULT 'pending' COMMENT '任务状态：pending、processing、retry、resolved、manual_review',
+  claim_token VARCHAR(64) NULL COMMENT '对账进程租约令牌，防止超时进程覆盖新结果',
+  attempt_count INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '对账重试次数',
+  last_error TEXT NULL COMMENT '最近一次错误',
+  next_retry_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '下次可重试时间',
+  resolved_at DATETIME NULL COMMENT '确认结算时间',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_billing_reconciliation_idempotency (idempotency_key),
+  KEY idx_billing_reconciliation_status_retry (status, next_retry_at),
+  KEY idx_billing_reconciliation_user_created (user_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='积分结算对账任务表';
 
 -- 中文注解：墨灵平台会话表，只保存本地 session token 哈希，不保存明文 token。
 CREATE TABLE IF NOT EXISTS molin_user_sessions (

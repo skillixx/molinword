@@ -907,9 +907,12 @@ try {
   const headerMedia = archive.file(/^word\/media\/.+\.png$/);
   assert.ok(documentXml, "导出的 DOCX 应包含 document.xml");
   // 中文注解：即使历史模板样式仍携带主题色，导出的标题样式也统一落为黑色，避免 Word 中出现绿色或蓝绿色字体。
-  for (const styleId of ["Title", "Heading1", "Heading2", "Heading3"]) {
-    const styleXml = [...stylesXml.matchAll(/<w:style[^>]+w:styleId="([^"]+)"[^>]*>[\s\S]*?<\/w:style>/g)]
-      .find((match) => match[1] === styleId)?.[0] || "";
+  for (const styleId of ["Title", "Heading1", "Heading2", "Heading3", "Heading4", "Heading5", "Heading6"]) {
+    const styleMatches = [...stylesXml.matchAll(/<w:style[^>]+w:styleId="([^"]+)"[^>]*>[\s\S]*?<\/w:style>/g)]
+      .filter((match) => match[1] === styleId);
+    // 中文注解：同名内置样式重复时 Word 可能采用前一个主题色定义，因此不仅要检查颜色，还必须保证 styleId 唯一。
+    assert.equal(styleMatches.length, 1, `${styleId} 应只有一个样式定义，实际为 ${styleMatches.length}`);
+    const styleXml = styleMatches[0][0];
     const color = styleXml.match(/<w:color w:val="([0-9A-Fa-f]{6})"\/>/)?.[1].toUpperCase();
     // Word 内置样式省略颜色时使用“自动”黑色；显式颜色也只能是黑色。
     assert.ok(!color || color === "000000", `${styleId} 不应携带模板强调色，实际为 ${color}`);

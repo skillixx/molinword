@@ -64,7 +64,7 @@ import {
   XCircle
 } from "lucide-react";
 import "./styles.css";
-import { documentTemplates as fallbackDocumentTemplates, documentTypes, type DocumentType, type TemplateItem, type TemplateWordStyle } from "./templates/documentTemplates";
+import { buildFormalTemplateContent, deriveTemplateProfile, documentTemplates as fallbackDocumentTemplates, documentTypes, type DocumentType, type TemplateItem, type TemplateWordStyle } from "./templates/documentTemplates";
 
 type AiAction = "continue" | "expand" | "shorten" | "correct" | "polish" | "format";
 type AiApplyMode = "replace" | "insert";
@@ -547,6 +547,29 @@ type AiTextFormatContext = {
   marks: AiTextFormatMark[];
 };
 
+type TemplateAgentWorkflowStep = {
+  code: "brief_analyzer" | "template_matcher" | "structure_architect" | "quality_reviewer";
+  name: string;
+  status: "completed" | "fallback";
+  summary: string;
+};
+
+type TemplateAgentPlan = {
+  recommendedTemplateId: number | null;
+  recommendedTemplateName: string;
+  title: string;
+  documentType: DocumentType;
+  tone: string;
+  requirement: string;
+  audience: string;
+  expectedPages: string;
+  fitScore: number;
+  reason: string;
+  outline: string[];
+  qualityChecklist: string[];
+  workflow: TemplateAgentWorkflowStep[];
+};
+
 type SessionUser = {
   userId: string;
   appId: string;
@@ -574,6 +597,7 @@ declare module "@tiptap/core" {
 }
 
 const usageCosts = {
+  templateAgent: 2,
   outline: 1,
   body: 5,
   edit: 2,
@@ -581,6 +605,7 @@ const usageCosts = {
 };
 
 const loadingStepMap: Record<string, string[]> = {
+  正在运行模板智能体: ["分析交付需求", "匹配正式模板", "设计文档结构", "执行质量审校"],
   正在生成大纲: ["理解文档主题", "整理章节结构", "生成大纲条目", "准备进入编辑"],
   正在生成正文: ["读取当前大纲", "组织段落内容", "润色表达语气", "写入正文编辑器"],
   正在润色: ["分析选中文本", "优化措辞语气", "保持原意一致", "生成处理结果"],
@@ -2856,12 +2881,12 @@ function App() {
     }
   };
 
-  const createDocument = async (payload: { title: string; documentType: DocumentType; tone: string; outline: string[]; content: string }) => {
+  const createDocument = async (payload: { title: string; documentType: DocumentType; tone: string; outline: string[]; content: string }, templateId = selectedTemplate?.id ?? null) => {
     try {
       const response = await fetch("/api/documents", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...payload, templateId: selectedTemplate?.id ?? null, pageLayout: defaultDocumentPageLayout })
+        body: JSON.stringify({ ...payload, templateId, pageLayout: defaultDocumentPageLayout })
       });
       const result = await readApiJson(response);
       return result.document as ApiDocument;
@@ -2887,7 +2912,8 @@ function App() {
       documentType: selectedType,
       tone,
       outline: result.outline,
-      content: plainTextToHtml(defaultContent)
+      // 中文注解：已套用模板时保留正式元数据表和章节填写提示，生成大纲不能把模板正文重置为普通占位文本。
+      content: content?.trim() || plainTextToHtml(defaultContent)
     });
     if (created) {
       setCurrentDocumentId(created.id);
@@ -3171,12 +3197,75 @@ function App() {
     setTone("正式");
     setRequirement(template.requirement);
     setOutline(toOutlineItems(template.outline));
-    setContent(plainTextToHtml(`${template.topic}\n\n${template.outline.map((item) => `${item}\n请在此补充内容。`).join("\n\n")}`));
+    // 中文注解：模板正文为空时即时生成正式结构，确保本地兜底模板与 MySQL 模板具有一致的可交付体验。
+    setContent(template.content?.trim() || buildFormalTemplateContent(template));
     setPageLayout({ ...defaultDocumentPageLayout });
     setCurrentTitle(template.topic);
     setCurrentDocumentId(null);
     setSaveStatus("未保存");
     setActivePanel("workspace");
+  };
+
+  const runTemplateAgent = async (input: { brief: string; audience: string; expectedPages: string }) => {
+    if (!hasEnoughPoints(usageCosts.templateAgent, "模板智能体规划")) return null;
+    const result = await callAi<{ plan: TemplateAgentPlan; fallback?: boolean; message?: string }>("正在运行模板智能体", "/api/ai/template-agent", {
+      ...input,
+      // 中文注解：只发送推荐所需的公开模板描述，不上传模板素材地址或 MinIO 存储信息。
+      candidates: templates.map(({ id, name, category, documentType, topic: templateTopic, requirement: templateRequirement, outline: templateOutline }) => ({
+        id,
+        name,
+        category,
+        documentType,
+        topic: templateTopic,
+        requirement: templateRequirement,
+        outline: templateOutline
+      }))
+    });
+    return result?.plan || null;
+  };
+
+  const createFromAgentPlan = async (plan: TemplateAgentPlan) => {
+    const matchedTemplate = templates.find((item) => (plan.recommendedTemplateId && item.id === plan.recommendedTemplateId) || item.name === plan.recommendedTemplateName);
+    if (!matchedTemplate) {
+      setAiError("智能体推荐的模板已下架，请重新运行规划。");
+      return false;
+    }
+    const templateWithStyle = await hydrateTemplateStyle(matchedTemplate, false);
+    const plannedTemplate: TemplateItem = {
+      ...templateWithStyle,
+      topic: plan.title,
+      documentType: plan.documentType,
+      requirement: plan.requirement,
+      outline: plan.outline
+    };
+    const plannedContent = buildFormalTemplateContent(plannedTemplate, {
+      title: plan.title,
+      audience: plan.audience,
+      expectedPages: plan.expectedPages,
+      outline: plan.outline
+    });
+    const created = await createDocument({
+      title: plan.title,
+      documentType: plan.documentType,
+      tone: plan.tone,
+      outline: plan.outline,
+      content: plannedContent
+    }, templateWithStyle.id ?? null);
+    if (!created) return false;
+    setSelectedTemplate(templateWithStyle);
+    setSelectedType(plan.documentType);
+    setTopic(plan.title);
+    setTone(plan.tone);
+    setRequirement(plan.requirement);
+    setOutline(toOutlineItems(plan.outline));
+    setContent(created.content || plannedContent);
+    setPageLayout(normalizeDocumentPageLayout(created.pageLayout));
+    setCurrentTitle(created.title);
+    setCurrentDocumentId(created.id);
+    setSaveStatus("智能体文档已创建");
+    setActivePanel("editor");
+    await loadRecentDocuments();
+    return true;
   };
 
   return (
@@ -3229,7 +3318,15 @@ function App() {
           importDocument={importDocument}
         />
       ) : activePanel === "templates" ? (
-        <TemplateLibrary applyTemplate={applyTemplate} templates={templates} templatesLoading={templatesLoading} templatesError={templatesError} />
+        <TemplateLibrary
+          applyTemplate={applyTemplate}
+          createFromAgentPlan={createFromAgentPlan}
+          runTemplateAgent={runTemplateAgent}
+          templates={templates}
+          templatesLoading={templatesLoading}
+          templatesError={templatesError}
+          aiLoading={aiLoading}
+        />
       ) : (
         <Editor
           outline={outline}
@@ -3371,13 +3468,27 @@ function Workspace(props: {
   );
 }
 
-function TemplateLibrary(props: { applyTemplate: (template: TemplateItem) => void; templates: TemplateItem[]; templatesLoading: boolean; templatesError: string }) {
+function TemplateLibrary(props: {
+  applyTemplate: (template: TemplateItem) => Promise<void>;
+  createFromAgentPlan: (plan: TemplateAgentPlan) => Promise<boolean>;
+  runTemplateAgent: (input: { brief: string; audience: string; expectedPages: string }) => Promise<TemplateAgentPlan | null>;
+  templates: TemplateItem[];
+  templatesLoading: boolean;
+  templatesError: string;
+  aiLoading: string | null;
+}) {
   const [keyword, setKeyword] = React.useState("");
+  const [category, setCategory] = React.useState("全部");
+  const [brief, setBrief] = React.useState("为项目评审或业务汇报准备一份正式文档，需要结论清晰、数据可核验，并包含责任人和完成期限。");
+  const [audience, setAudience] = React.useState("部门管理者与项目负责人");
+  const [expectedPages, setExpectedPages] = React.useState("3-6页");
+  const [agentPlan, setAgentPlan] = React.useState<TemplateAgentPlan | null>(null);
+  const [agentCreating, setAgentCreating] = React.useState(false);
   const normalizedKeyword = keyword.trim().toLowerCase();
+  const categories = React.useMemo(() => ["全部", ...Array.from(new Set(props.templates.map((template) => template.category)))], [props.templates]);
   const filteredTemplates = React.useMemo(() => {
-    if (!normalizedKeyword) return props.templates;
-
     return props.templates.filter((template) => {
+      if (category !== "全部" && template.category !== category) return false;
       const searchableText = [
         template.name,
         template.category,
@@ -3386,27 +3497,76 @@ function TemplateLibrary(props: { applyTemplate: (template: TemplateItem) => voi
         template.requirement,
         ...template.outline
       ].join(" ").toLowerCase();
-
-      return searchableText.includes(normalizedKeyword);
+      return !normalizedKeyword || searchableText.includes(normalizedKeyword);
     });
-  }, [normalizedKeyword, props.templates]);
+  }, [category, normalizedKeyword, props.templates]);
+
+  const submitAgentBrief = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (brief.trim().length < 8) return;
+    const plan = await props.runTemplateAgent({ brief, audience, expectedPages });
+    if (plan) setAgentPlan(plan);
+  };
+
+  const adoptAgentPlan = async () => {
+    if (!agentPlan) return;
+    setAgentCreating(true);
+    try {
+      await props.createFromAgentPlan(agentPlan);
+    } finally {
+      setAgentCreating(false);
+    }
+  };
 
   return (
     <section className="workspace">
       <header className="topbar">
-        <div><p>模板库</p><h1>选择文档模板</h1></div>
+        <div><p>企业文档中心</p><h1>正式模板与文档智能体</h1></div>
       </header>
       {props.templatesLoading ? <div className="template-status">正在读取模板...</div> : null}
       {props.templatesError ? <div className="template-status warning">{props.templatesError}</div> : null}
+      <section className="template-agent" aria-label="文档模板智能体">
+        <div className="template-agent-intro">
+          <span className="template-agent-icon"><Bot size={22} /></span>
+          <div><span>DOCUMENT AGENT</span><h2>用交付需求生成正式文档方案</h2><p>需求分析、模板匹配、结构设计和质量审校一次完成；模型不可用时自动切换本地规则，不影响创建文档。</p></div>
+        </div>
+        <form className="template-agent-form" onSubmit={submitAgentBrief}>
+          <label>文档交付需求<textarea aria-label="文档交付需求" value={brief} maxLength={1200} onChange={(event) => setBrief(event.target.value)} placeholder="例如：为产品上线评审会生成会议纪要，需要记录结论、责任人和完成期限。" /></label>
+          <div className="template-agent-fields">
+            <label>交付对象<input aria-label="交付对象" value={audience} maxLength={120} onChange={(event) => setAudience(event.target.value)} /></label>
+            <label>期望篇幅<select aria-label="期望篇幅" value={expectedPages} onChange={(event) => setExpectedPages(event.target.value)}><option>2-4页</option><option>3-6页</option><option>6-10页</option><option>10-20页</option></select></label>
+          </div>
+          <button className="template-agent-submit" type="submit" disabled={Boolean(props.aiLoading) || brief.trim().length < 8}>{props.aiLoading === "正在运行模板智能体" ? <LoaderCircle className="spin-icon" size={18} /> : <Sparkles size={18} />}{props.aiLoading === "正在运行模板智能体" ? "智能体规划中" : `运行智能体 · ${usageCosts.templateAgent} 积分`}</button>
+        </form>
+        {props.aiLoading === "正在运行模板智能体" ? <LoadingProcess label="正在运行模板智能体" compact /> : null}
+        {agentPlan ? (
+          <div className="template-agent-result" aria-live="polite">
+            <div className="agent-result-head"><div><span>推荐方案</span><h3>{agentPlan.title}</h3><p>{agentPlan.reason}</p></div><strong>{agentPlan.fitScore}%<small>综合匹配</small></strong></div>
+            <div className="agent-plan-meta"><span>模板：{agentPlan.recommendedTemplateName}</span><span>对象：{agentPlan.audience}</span><span>篇幅：{agentPlan.expectedPages}</span><span>章节：{agentPlan.outline.length} 个</span></div>
+            <div className="agent-workflow">
+              {agentPlan.workflow.map((step, index) => <div className={step.status} key={step.code}><span>{index + 1}</span><strong>{step.name}</strong><em>{step.status === "completed" ? "模型/工具已执行" : "本地规则兜底"}</em><p>{step.summary}</p></div>)}
+            </div>
+            <div className="agent-result-grid">
+              <div><strong>正式章节结构</strong><ol>{agentPlan.outline.map((item) => <li key={item}>{item}</li>)}</ol></div>
+              <div><strong>交付质量门禁</strong><ul>{agentPlan.qualityChecklist.map((item) => <li key={item}><CheckCircle2 size={14} />{item}</li>)}</ul></div>
+            </div>
+            <div className="agent-result-actions"><button type="button" onClick={() => setAgentPlan(null)}>调整需求</button><button className="primary" type="button" onClick={() => void adoptAgentPlan()} disabled={agentCreating}>{agentCreating ? <LoaderCircle className="spin-icon" size={17} /> : <Wand2 size={17} />}{agentCreating ? "正在创建" : "采用方案并创建文档"}</button></div>
+          </div>
+        ) : null}
+      </section>
       <div className="template-search-row">
         <label className="search-box"><Search size={16} /><input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="搜索模板名称、类型、场景或大纲" /></label>
         <span>{props.templatesLoading ? "读取中" : `共 ${filteredTemplates.length} / ${props.templates.length} 个模板`}</span>
       </div>
+      <div className="template-category-tabs" aria-label="模板分类">
+        {categories.map((item) => <button type="button" key={item} className={category === item ? "active" : ""} aria-pressed={category === item} onClick={() => setCategory(item)}>{item}</button>)}
+      </div>
       <div className="template-grid">
         {!props.templatesLoading && props.templates.length === 0 ? <div className="empty-state">暂无可用模板。</div> : null}
         {!props.templatesLoading && props.templates.length > 0 && filteredTemplates.length === 0 ? <div className="empty-state">没有匹配的模板。</div> : null}
-        {filteredTemplates.map((template) => (
-          <article className="template-card" key={template.id ?? template.name}>
+        {filteredTemplates.map((template) => {
+          const profile = deriveTemplateProfile(template);
+          return <article className="template-card" key={template.id ?? template.name}>
             <div className="template-cover">
               {template.coverUrl ? <img src={template.coverUrl} alt={`${template.name}封面`} /> : <div className="template-cover-fallback"><LayoutTemplate size={28} /></div>}
             </div>
@@ -3418,13 +3578,15 @@ function TemplateLibrary(props: { applyTemplate: (template: TemplateItem) => voi
             <div className="template-asset-row">
               <span className={template.hasCover ? "asset-ok" : "asset-missing"}>{template.hasCover ? "已配置封面" : "无封面"}</span>
               <span className={template.hasStyle ? "asset-ok" : "asset-missing"}>{template.hasStyle ? "已配置 Word 样式" : "无 Word 样式"}</span>
+              <span className="asset-ok">正式正文骨架</span>
             </div>
+            <div className="template-profile"><span>适用：{profile.audience}</span><span>建议：{profile.expectedPages}</span></div>
             <ul>
               {template.outline.slice(0, 3).map((item) => <li key={item}>{item}</li>)}
             </ul>
-            <button onClick={() => props.applyTemplate(template)}><LayoutTemplate size={17} />使用模板</button>
-          </article>
-        ))}
+            <button onClick={() => void props.applyTemplate(template)}><LayoutTemplate size={17} />套用正式模板</button>
+          </article>;
+        })}
       </div>
     </section>
   );

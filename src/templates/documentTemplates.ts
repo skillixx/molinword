@@ -1,3 +1,5 @@
+import { buildFormalTemplateContent as buildSharedFormalTemplateContent, deriveTemplateProfile as deriveSharedTemplateProfile } from "../../shared/document-template.js";
+
 export type DocumentType = "工作总结" | "会议纪要" | "商业计划书" | "合同协议" | "论文材料" | "活动方案";
 
 export type TemplateItem = {
@@ -39,7 +41,30 @@ export type TemplateAsset = {
   url: string;
 };
 
+export type TemplateProfile = {
+  audience: string;
+  expectedPages: string;
+  deliverables: string[];
+  riskNote: string;
+  qualityChecklist: string[];
+};
+
+export type FormalTemplateOptions = {
+  title?: string;
+  audience?: string;
+  expectedPages?: string;
+  outline?: string[];
+};
+
 export const documentTypes: DocumentType[] = ["工作总结", "会议纪要", "商业计划书", "合同协议", "论文材料", "活动方案"];
+
+export function deriveTemplateProfile(template: Pick<TemplateItem, "documentType">): TemplateProfile {
+  return deriveSharedTemplateProfile(template) as TemplateProfile;
+}
+
+export function buildFormalTemplateContent(template: TemplateItem, options: FormalTemplateOptions = {}) {
+  return buildSharedFormalTemplateContent(template, options);
+}
 
 // 模板库第一阶段先集中维护静态数据，后续迁移 MySQL 时可直接替换为接口数据源。
 export const documentTemplates: TemplateItem[] = [

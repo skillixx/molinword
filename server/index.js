@@ -1,5 +1,7 @@
 ﻿import "dotenv/config";
 import crypto from "node:crypto";
+import { appendFile, mkdir } from "node:fs/promises";
+import path from "node:path";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import express from "express";
@@ -368,13 +370,21 @@ const molingAppId = process.env.MOLING_APP_ID || process.env.WORD_APP_ID || "";
 const molingProductId = process.env.MOLING_PRODUCT_ID || process.env.WORD_PRODUCT_ID || "";
 const sessionTtlSeconds = Number(process.env.SESSION_TTL_SECONDS || 86400);
 const sessionCookieSecure = process.env.SESSION_COOKIE_SECURE === "true";
-const localMolingMock = process.env.LOCAL_MOLING_MOCK === "true";
+const appEnvironment = String(process.env.APP_ENV || process.env.NODE_ENV || "development").trim().toLowerCase();
+const isProductionRuntime = appEnvironment === "production";
+// 中文注解：生产环境强制关闭本地身份模拟，即使部署变量误配也不能绕过登录和积分计费。
+const localMolingMock = !isProductionRuntime && process.env.LOCAL_MOLING_MOCK === "true";
+// 中文注解：生产环境默认且强制要求墨灵会话；开发环境可显式开启同等门禁做联调。
+const requireMolingSession = isProductionRuntime || process.env.REQUIRE_MOLING_SESSION === "true";
+const billingReconciliationOutboxPath = process.env.BILLING_RECONCILIATION_OUTBOX
+  || path.join(process.cwd(), "runtime-data", "billing-reconciliation-outbox.jsonl");
 const dbPool = process.env.DATABASE_URL
   ? mysql.createPool(process.env.DATABASE_URL)
   : null;
 const minioClient = createMinioClient();
 
 const usageCosts = {
+  word_template_agent: 2,
   word_outline_generate: 1,
   word_body_generate: 5,
   word_polish: 2,
@@ -3250,46 +3260,37 @@ function createDocxStyles(templateStyle = {}) {
       document: {
         run: { font: fontFamily, size: bodySize },
         paragraph: { spacing: { line: Number(templateStyle.lineSpacing || 360) } }
-      }
-    },
-    paragraphStyles: [
-      {
-        id: "Title",
-        name: "Title",
-        basedOn: "Normal",
-        next: "Normal",
-        quickFormat: true,
+      },
+      // 中文注解：docx 会自动写入内置 Title/Heading 样式；必须通过 default 覆盖，追加同名 paragraphStyles 会产生重复 styleId，Word 可能采用前面的蓝色定义。
+      title: {
         run: { font: fontFamily, size: titleSize, bold: true, color: titleColor },
         paragraph: { spacing: { after: 260 } }
       },
-      {
-        id: "Heading1",
-        name: "Heading 1",
-        basedOn: "Normal",
-        next: "Normal",
-        quickFormat: true,
+      heading1: {
         run: { font: fontFamily, size: headingSize, bold: true, color: headingColor },
         paragraph: { spacing: { before: 240, after: 120 } }
       },
-      {
-        id: "Heading2",
-        name: "Heading 2",
-        basedOn: "Normal",
-        next: "Normal",
-        quickFormat: true,
+      heading2: {
         run: { font: fontFamily, size: Math.max(headingSize - 2, bodySize), bold: true, color: headingColor },
         paragraph: { spacing: { before: 180, after: 100 } }
       },
-      {
-        id: "Heading3",
-        name: "Heading 3",
-        basedOn: "Normal",
-        next: "Normal",
-        quickFormat: true,
+      heading3: {
         run: { font: fontFamily, size: Math.max(headingSize - 4, bodySize), bold: true, color: headingColor },
         paragraph: { spacing: { before: 140, after: 100 } }
+      },
+      heading4: {
+        run: { font: fontFamily, size: Math.max(headingSize - 6, bodySize), bold: true, italic: false, color: headingColor },
+        paragraph: { spacing: { before: 120, after: 80 } }
+      },
+      heading5: {
+        run: { font: fontFamily, size: bodySize, bold: true, color: headingColor },
+        paragraph: { spacing: { before: 100, after: 80 } }
+      },
+      heading6: {
+        run: { font: fontFamily, size: bodySize, bold: true, color: headingColor },
+        paragraph: { spacing: { before: 100, after: 80 } }
       }
-    ]
+    }
   };
 }
 
@@ -4024,6 +4025,10 @@ async function getCurrentUser(request) {
     throw createPublicError("墨灵登录已过期，请从墨灵平台重新进入。", 401);
   }
 
+  if (requireMolingSession && !localMolingMock) {
+    throw createPublicError("请从墨灵平台进入应用后再继续操作。", 401);
+  }
+
   // 中文注解：直接本地打开且没有墨灵 cookie 时，保留本地开发用户，方便单机调试。
   return {
     userId: localUserId,
@@ -4087,7 +4092,9 @@ async function reservePoints(user, usageType, amount, referenceId = "") {
   if (!user.isMolingUser || localMolingMock) return null;
 
   const entitlement = await findUsableEntitlement(user.userId, user.productId);
-  const idempotencyKey = `moling_word:${user.userId}:${usageType}:${referenceId || "none"}:${crypto.randomUUID()}`;
+  // 中文注解：引用内容只参与摘要，避免把长文档标题或用户输入直接写入平台幂等键和账务表。
+  const referenceDigest = crypto.createHash("sha256").update(String(referenceId || "none")).digest("hex").slice(0, 16);
+  const idempotencyKey = `moling_word:${user.userId}:${usageType}:${referenceDigest}:${crypto.randomUUID()}`;
   const data = await callMolingInternal("/api/internal/entitlement-reserve", {
     method: "POST",
     body: {
@@ -4098,30 +4105,160 @@ async function reservePoints(user, usageType, amount, referenceId = "") {
     }
   });
 
-  return { holdId: data?.hold_id, idempotencyKey, amount };
+  if (!data?.hold_id) {
+    throw new Error("墨灵积分预占未返回 hold_id");
+  }
+
+  return {
+    holdId: data.hold_id,
+    idempotencyKey,
+    amount,
+    state: "reserved",
+    userId: String(user.userId),
+    usageType
+  };
 }
 
-async function settlePoints(hold, actualAmount) {
+function createBillingReconciliationPayload(hold, actualAmount, context = {}, error = null) {
+  if (!hold?.holdId || !hold?.idempotencyKey) return null;
+  return {
+    userId: cleanTemplateAgentText(context.userId || localUserId, 64),
+    usageType: cleanTemplateAgentText(context.usageType || "unknown", 60),
+    holdId: String(hold.holdId).slice(0, 64),
+    idempotencyKey: String(hold.idempotencyKey).slice(0, 191),
+    actualAmount: String(actualAmount),
+    operationType: context.operationType === "release" ? "release" : "settle",
+    settlementState: context.operationType === "release" ? "release_unknown" : "settlement_unknown",
+    lastError: cleanTemplateAgentText(error instanceof Error ? error.message : error, 1000) || "积分操作响应状态不确定"
+  };
+}
+
+async function appendBillingReconciliationOutbox(payload, databaseError = null) {
+  const record = {
+    ...payload,
+    databaseError: cleanTemplateAgentText(databaseError instanceof Error ? databaseError.message : databaseError, 1000),
+    recordedAt: new Date().toISOString()
+  };
+  await mkdir(path.dirname(billingReconciliationOutboxPath), { recursive: true });
+  await appendFile(billingReconciliationOutboxPath, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600 });
+}
+
+async function persistBillingReconciliationTask(hold, actualAmount, context = {}, error = null, candidatePool = dbPool, outboxWriter = appendBillingReconciliationOutbox) {
+  const payload = createBillingReconciliationPayload(hold, actualAmount, context, error);
+  if (!payload) return false;
+  if (!candidatePool) {
+    // 中文注解：数据库不可用时写入独立 JSONL outbox；生产部署应把该路径放在持久卷并由值班流程导入对账表。
+    await outboxWriter(payload, new Error("DATABASE_URL is missing"));
+    return true;
+  }
+
+  try {
+    await candidatePool.query(
+      `INSERT INTO billing_reconciliation_tasks
+        (user_id, usage_type, operation_type, hold_id, idempotency_key, actual_amount, settlement_state, status, attempt_count, last_error, next_retry_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, CURRENT_TIMESTAMP)
+       ON DUPLICATE KEY UPDATE
+         operation_type = IF(status = 'resolved', operation_type, VALUES(operation_type)),
+         actual_amount = IF(status = 'resolved', actual_amount, VALUES(actual_amount)),
+         settlement_state = IF(status = 'resolved', settlement_state, VALUES(settlement_state)),
+         last_error = IF(status = 'resolved', last_error, VALUES(last_error)),
+         next_retry_at = IF(status = 'resolved', next_retry_at, CURRENT_TIMESTAMP),
+         claim_token = IF(status = 'resolved', claim_token, NULL),
+         status = IF(status = 'resolved', status, 'pending')`,
+      [
+        payload.userId,
+        payload.usageType,
+        payload.operationType,
+        payload.holdId,
+        payload.idempotencyKey,
+        payload.actualAmount,
+        payload.settlementState,
+        payload.lastError
+      ]
+    );
+  } catch (databaseError) {
+    await outboxWriter(payload, databaseError);
+  }
+  return true;
+}
+
+async function settlePoints(hold, actualAmount, context = {}) {
   if (!hold) return null;
-  return callMolingInternal("/api/internal/entitlement-settle", {
-    method: "POST",
-    body: {
-      hold_id: hold.holdId,
-      idempotency_key: hold.idempotencyKey,
-      actual_amount: String(actualAmount)
+  // 中文注解：结算使用同一个幂等键重试一次。若网络或 5xx 后仍无法确认结果，保留待对账状态，绝不盲目释放导致已结算额度被冲回。
+  hold.state = "settling";
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const result = await callMolingInternal("/api/internal/entitlement-settle", {
+        method: "POST",
+        body: {
+          hold_id: hold.holdId,
+          idempotency_key: hold.idempotencyKey,
+          actual_amount: String(actualAmount)
+        }
+      });
+      hold.state = "settled";
+      return result;
+    } catch (error) {
+      lastError = error;
     }
-  });
+  }
+
+  // 中文注解：HTTP 408/409/429 以及平台幂等冲突都可能发生在实际结算之后；没有明确的账本查询结果时统一等待对账。
+  hold.state = "settlement_unknown";
+  try {
+    hold.reconciliationPersisted = await persistBillingReconciliationTask(hold, actualAmount, { ...context, operationType: "settle" }, lastError);
+  } catch (reconciliationError) {
+    hold.reconciliationPersisted = false;
+    // 中文注解：数据库和 outbox 同时失败时仍输出结构化恢复依据，日志采集可据此补录对账任务。
+    console.error("Billing settlement reconciliation persistence failed:", JSON.stringify({
+      holdId: String(hold.holdId || ""),
+      idempotencyKey: String(hold.idempotencyKey || ""),
+      usageType: cleanTemplateAgentText(context.usageType || hold.usageType, 60),
+      error: reconciliationError.message
+    }));
+  }
+  throw lastError;
+}
+
+function shouldReleasePointHold(hold) {
+  return Boolean(hold && hold.state === "reserved");
 }
 
 async function releasePoints(hold) {
-  if (!hold) return null;
-  return callMolingInternal("/api/internal/entitlement-release", {
-    method: "POST",
-    body: {
-      hold_id: hold.holdId,
-      idempotency_key: hold.idempotencyKey
+  if (!shouldReleasePointHold(hold)) return null;
+  hold.state = "releasing";
+  try {
+    const result = await callMolingInternal("/api/internal/entitlement-release", {
+      method: "POST",
+      body: {
+        hold_id: hold.holdId,
+        idempotency_key: hold.idempotencyKey
+      }
+    });
+    hold.state = "released";
+    return result;
+  } catch (error) {
+    // 中文注解：释放请求异常也可能导致预占额度长期冻结，必须持久化并使用原幂等键安全重试释放。
+    hold.state = "release_unknown";
+    try {
+      hold.reconciliationPersisted = await persistBillingReconciliationTask(
+        hold,
+        0,
+        { userId: hold.userId, usageType: hold.usageType, operationType: "release" },
+        error
+      );
+    } catch (reconciliationError) {
+      hold.reconciliationPersisted = false;
+      // 中文注解：数据库和 outbox 同时失败时输出结构化依据，确保日志采集仍可恢复 hold 与幂等键。
+      console.error("Billing release reconciliation persistence failed:", JSON.stringify({
+        holdId: String(hold.holdId || ""),
+        idempotencyKey: String(hold.idempotencyKey || ""),
+        error: reconciliationError.message
+      }));
     }
-  });
+    throw error;
+  }
 }
 
 function parseOutline(text, topic) {
@@ -4345,14 +4482,258 @@ function fallbackOutline(topic) {
   ];
 }
 
+const templateAgentIntentRules = [
+  { input: /会议|例会|评审会|纪要|议题/, template: /会议纪要/ },
+  { input: /周报|本周|下周/, template: /周报/ },
+  { input: /述职|晋升|转正/, template: /述职/ },
+  { input: /竞品/, template: /竞品/ },
+  { input: /市场调研|用户调研/, template: /市场调研/ },
+  { input: /立项|可行性|预算审批/, template: /立项/ },
+  { input: /商业计划|融资|商业模式/, template: /商业计划/ },
+  { input: /培训|课程/, template: /培训/ },
+  { input: /活动|发布会/, template: /活动/ },
+  { input: /合同|协议|甲方|乙方|违约/, template: /合同/ },
+  { input: /开题|课题/, template: /开题/ },
+  { input: /论文|研究报告/, template: /论文/ },
+  { input: /计划|规划|里程碑/, template: /工作计划|立项|商业计划/ },
+  { input: /总结|复盘|成果/, template: /工作总结|述职/ }
+];
+
+function cleanTemplateAgentText(value, maximum = 500) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, maximum);
+}
+
+function normalizeTemplateAgentCandidates(value) {
+  const candidates = Array.isArray(value) ? value : [];
+  return candidates.slice(0, 50).map((item, index) => ({
+    id: Number.isSafeInteger(Number(item?.id)) && Number(item.id) > 0 ? Number(item.id) : null,
+    name: cleanTemplateAgentText(item?.name, 120) || `模板 ${index + 1}`,
+    category: cleanTemplateAgentText(item?.category, 60),
+    documentType: cleanTemplateAgentText(item?.documentType, 50) || "工作总结",
+    topic: cleanTemplateAgentText(item?.topic, 255),
+    requirement: cleanTemplateAgentText(item?.requirement, 800),
+    outline: (Array.isArray(item?.outline) ? item.outline : [])
+      .map((outlineItem) => cleanTemplateAgentText(outlineItem, 120))
+      .filter(Boolean)
+      .slice(0, 10)
+  })).filter((item) => item.name);
+}
+
+async function loadTemplateAgentCandidates(clientValue, candidatePool = dbPool) {
+  if (!candidatePool) return normalizeTemplateAgentCandidates(clientValue);
+  const [rows] = await candidatePool.query(
+    `SELECT id, name, category, document_type, topic, requirement, outline_json
+     FROM document_templates
+     WHERE status = 'active'
+     ORDER BY sort_order ASC, id ASC
+     LIMIT 100`
+  );
+  // 中文注解：商业环境以 MySQL 启用模板为唯一白名单，客户端候选仅用于没有数据库的本地开发模式。
+  return normalizeTemplateAgentCandidates(rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    category: row.category,
+    documentType: row.document_type,
+    topic: row.topic,
+    requirement: row.requirement,
+    outline: parseJson(row.outline_json, [])
+  })));
+}
+
+function resolveTemplateAgentFailureStatus(error, currentUser, pointHold) {
+  if (Number.isInteger(error?.httpStatus)) return error.httpStatus;
+  // 中文注解：只有平台明确返回余额不足业务码时才响应 402，网络或配置故障不能伪装成余额不足。
+  if (error?.code === 60005) return 402;
+  return 503;
+}
+
+function scoreTemplateAgentCandidate(brief, candidate) {
+  const input = cleanTemplateAgentText(brief, 1200).toLowerCase();
+  const searchable = `${candidate.name} ${candidate.category} ${candidate.documentType} ${candidate.topic} ${candidate.requirement}`.toLowerCase();
+  let score = input.includes(candidate.name.toLowerCase()) ? 240 : 0;
+  if (candidate.topic && input.includes(candidate.topic.toLowerCase())) score += 180;
+  for (const rule of templateAgentIntentRules) {
+    if (rule.input.test(input) && rule.template.test(searchable)) score += 120;
+  }
+  // 中文注解：短关键词只用于同分排序，核心意图仍由上面的业务规则决定，避免“项目”等通用词误导推荐。
+  for (const token of input.split(/[，。；、,.!！?？：:\s]+/).filter((item) => item.length >= 2)) {
+    if (searchable.includes(token)) score += Math.min(token.length * 2, 16);
+  }
+  return score;
+}
+
+function templateAgentQualityChecklist(documentType) {
+  if (documentType === "会议纪要") {
+    return ["会议时间、地点、参会人与议题信息完整", "每项会议决议表述明确且可追溯", "行动项均包含责任人和完成期限", "未决问题、依赖项和升级路径已标明"];
+  }
+  if (documentType === "合同协议") {
+    return ["合同主体、服务范围和交付边界明确", "验收标准、付款条件和发票要求一致", "知识产权、保密和数据责任可执行", "违约、变更终止与争议解决条款完整"];
+  }
+  if (documentType === "商业计划书") {
+    return ["关键结论有数据或事实依据", "目标、范围、预算和收益口径一致", "里程碑包含负责人和验收标准", "主要风险均给出触发条件和应对措施"];
+  }
+  if (documentType === "论文材料") {
+    return ["研究问题、方法和结论前后一致", "关键论断标注可靠来源或参考文献", "数据、图表和引用格式统一", "创新点、局限性和后续研究边界清晰"];
+  }
+  return ["文档目标、适用对象和范围说明清晰", "关键结论有事实或数据支撑", "任务、负责人、时间节点和验收标准可执行", "敏感信息、风险提示和发布范围已复核"];
+}
+
+function validExpectedPages(value) {
+  const text = cleanTemplateAgentText(value, 20).replace(/\s+/g, "");
+  const matched = text.match(/^(\d{1,2})-(\d{1,2})页$/);
+  if (!matched) return "";
+  const minimum = Number(matched[1]);
+  const maximum = Number(matched[2]);
+  return minimum >= 1 && maximum >= minimum && maximum <= 30 ? `${minimum}-${maximum}页` : "";
+}
+
+function buildTemplateAgentWorkflow(plan, brief, stages = {}) {
+  const stage = (code, fallbackSummary) => ({
+    code,
+    name: ({ brief_analyzer: "需求分析", template_matcher: "模板匹配", structure_architect: "结构设计", quality_reviewer: "质量审校" })[code],
+    status: stages[code]?.status === "completed" ? "completed" : "fallback",
+    summary: cleanTemplateAgentText(stages[code]?.summary, 240) || fallbackSummary
+  });
+  return [
+    stage("brief_analyzer", `本地规则已识别${cleanTemplateAgentText(plan.audience, 60)}的${cleanTemplateAgentText(brief, 80)}`),
+    stage("template_matcher", `本地规则推荐“${plan.recommendedTemplateName}”，综合匹配度 ${plan.fitScore}%`),
+    stage("structure_architect", `已复用模板的 ${plan.outline.length} 个正式章节，建议篇幅 ${plan.expectedPages}`),
+    stage("quality_reviewer", `已采用 ${plan.qualityChecklist.length} 项内置交付质量门禁`)
+  ];
+}
+
+function createTemplateAgentFallbackPlan(input = {}, candidateValue = []) {
+  const candidates = normalizeTemplateAgentCandidates(candidateValue);
+  if (!candidates.length) throw createPublicError("当前没有可用模板，请先初始化模板库。", 400);
+  const brief = cleanTemplateAgentText(input.brief, 1200);
+  if (brief.length < 8) throw createPublicError("请至少输入 8 个字，说明文档用途和交付要求。", 400);
+  const ranked = candidates
+    .map((candidate, index) => ({ candidate, index, score: scoreTemplateAgentCandidate(brief, candidate) }))
+    .sort((left, right) => right.score - left.score || left.index - right.index);
+  const recommended = ranked[0].candidate;
+  const audience = cleanTemplateAgentText(input.audience, 120) || "文档相关决策者与执行人员";
+  const expectedPages = validExpectedPages(input.expectedPages) || (recommended.outline.length >= 6 ? "6-10页" : "3-6页");
+  const outline = recommended.outline.length >= 4 ? recommended.outline : fallbackOutline(recommended.topic || recommended.name).slice(0, 6);
+  const intentMatched = ranked[0].score >= 120;
+  const plan = {
+    recommendedTemplateId: recommended.id,
+    recommendedTemplateName: recommended.name,
+    title: recommended.topic || `${recommended.name}（正式版）`,
+    documentType: recommended.documentType,
+    tone: "正式",
+    requirement: [recommended.requirement, `交付对象：${audience}。`, `用户需求：${brief}`].filter(Boolean).join(" ").slice(0, 1200),
+    audience,
+    expectedPages,
+    fitScore: intentMatched ? Math.min(98, 82 + Math.floor(Math.min(ranked[0].score - 120, 80) / 10)) : 72,
+    reason: `“${recommended.name}”与当前文档用途、交付对象和章节要求最接近，可直接复用其正式结构并继续生成正文。`,
+    outline,
+    qualityChecklist: templateAgentQualityChecklist(recommended.documentType)
+  };
+  return { ...plan, workflow: buildTemplateAgentWorkflow(plan, brief) };
+}
+
+function extractJsonObject(text) {
+  const source = String(text || "").replace(/```(?:json)?/gi, "").replace(/```/g, "").trim();
+  const start = source.indexOf("{");
+  const end = source.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  try {
+    const value = JSON.parse(source.slice(start, end + 1));
+    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeTemplateAgentPlan(modelText, fallback, candidateValue = []) {
+  const candidates = normalizeTemplateAgentCandidates(candidateValue);
+  const source = typeof modelText === "string" ? extractJsonObject(modelText) : modelText;
+  if (!source || typeof source !== "object") return fallback;
+  const matched = candidates.find((item) => item.id && Number(source.recommendedTemplateId) === item.id)
+    || candidates.find((item) => item.name === cleanTemplateAgentText(source.recommendedTemplateName, 120))
+    || candidates.find((item) => item.id === fallback.recommendedTemplateId)
+    || candidates.find((item) => item.name === fallback.recommendedTemplateName);
+  if (!matched) return fallback;
+  const outline = (Array.isArray(source.outline) ? source.outline : [])
+    .map((item) => cleanTemplateAgentText(typeof item === "string" ? item : item?.title, 120))
+    .filter(Boolean)
+    .slice(0, 10);
+  const qualityChecklist = (Array.isArray(source.qualityChecklist) ? source.qualityChecklist : [])
+    .map((item) => cleanTemplateAgentText(item, 160))
+    .filter(Boolean)
+    .slice(0, 8);
+  const fitScore = Number(source.fitScore);
+  const plan = {
+    recommendedTemplateId: matched.id,
+    recommendedTemplateName: matched.name,
+    title: cleanTemplateAgentText(source.title, 120) || fallback.title,
+    documentType: matched.documentType,
+    tone: ["正式", "商务", "学术", "简洁"].includes(source.tone) ? source.tone : fallback.tone,
+    requirement: cleanTemplateAgentText(source.requirement, 1200) || fallback.requirement,
+    audience: cleanTemplateAgentText(source.audience, 120) || fallback.audience,
+    expectedPages: validExpectedPages(source.expectedPages) || fallback.expectedPages,
+    fitScore: Number.isFinite(fitScore) ? Math.min(100, Math.max(0, Math.round(fitScore))) : fallback.fitScore,
+    reason: cleanTemplateAgentText(source.reason, 500) || fallback.reason,
+    outline: outline.length >= 4 ? outline : fallback.outline,
+    qualityChecklist: qualityChecklist.length >= 4 ? qualityChecklist : fallback.qualityChecklist
+  };
+  return { ...plan, workflow: buildTemplateAgentWorkflow(plan, fallback.requirement) };
+}
+
+function normalizeTemplateBriefAnalysis(modelText, input = {}) {
+  const source = extractJsonObject(modelText);
+  if (!source) return null;
+  const priorities = (Array.isArray(source.priorities) ? source.priorities : [])
+    .map((item) => cleanTemplateAgentText(item, 120))
+    .filter(Boolean)
+    .slice(0, 8);
+  const constraints = (Array.isArray(source.constraints) ? source.constraints : [])
+    .map((item) => cleanTemplateAgentText(item, 120))
+    .filter(Boolean)
+    .slice(0, 8);
+  const intent = cleanTemplateAgentText(source.intent, 160);
+  if (!intent || priorities.length < 2) return null;
+  return {
+    intent,
+    audience: cleanTemplateAgentText(source.audience, 120) || cleanTemplateAgentText(input.audience, 120) || "文档相关决策者与执行人员",
+    priorities,
+    constraints,
+    summary: cleanTemplateAgentText(source.summary, 240) || `已识别“${intent}”及 ${priorities.length} 项关键要求`
+  };
+}
+
+function normalizeTemplateAgentReview(modelText, plan) {
+  const source = extractJsonObject(modelText);
+  if (!source) return null;
+  const qualityChecklist = (Array.isArray(source.qualityChecklist) ? source.qualityChecklist : [])
+    .map((item) => cleanTemplateAgentText(item, 160))
+    .filter(Boolean)
+    .slice(0, 8);
+  const issues = (Array.isArray(source.issues) ? source.issues : [])
+    .map((item) => cleanTemplateAgentText(item, 180))
+    .filter(Boolean)
+    .slice(0, 6);
+  if (qualityChecklist.length < 4) return null;
+  const approved = source.approved === true && issues.length === 0;
+  return {
+    approved,
+    issues,
+    qualityChecklist,
+    summary: cleanTemplateAgentText(source.summary, 240) || (approved ? `质量门禁通过，共 ${qualityChecklist.length} 项检查` : `发现 ${issues.length} 项结构问题`),
+    plan: { ...plan, qualityChecklist }
+  };
+}
+
 app.get("/api/health", (_request, response) => {
   response.json({
     ok: true,
     gatewayConfigured: hasGatewayConfig(),
     model: gatewayModel,
     appName: process.env.APP_NAME || "moling_word",
+    environment: appEnvironment,
     molingApiBaseUrl,
     llmProvider: process.env.LLM_PROVIDER || "http",
+    sessionRequired: requireMolingSession,
     databaseConfigured: Boolean(dbPool),
     storageConfigured: Boolean(minioClient),
     storageBucket
@@ -4895,7 +5276,7 @@ app.post("/api/documents/:id/export-docx", async (request, response) => {
       ]
     );
 
-    await settlePoints(pointHold, 1);
+    await settlePoints(pointHold, 1, { userId: currentUser.userId, usageType: "word_export_docx" });
     response.status(201).json({
       file: {
         id: result.insertId,
@@ -4961,6 +5342,124 @@ app.get("/api/files/:id/content", async (request, response) => {
   }
 });
 
+app.post("/api/ai/template-agent", async (request, response) => {
+  const { brief, audience, expectedPages, candidates: candidateValue } = request.body || {};
+  let candidates = [];
+  let fallback;
+  try {
+    candidates = await loadTemplateAgentCandidates(candidateValue);
+    fallback = createTemplateAgentFallbackPlan({ brief, audience, expectedPages }, candidates);
+  } catch (error) {
+    sendError(response, error, error?.httpStatus || 400, "模板智能体输入无效，请补充文档用途后重试。");
+    return;
+  }
+  const startedAt = Date.now();
+  let currentUser = { userId: localUserId, appId: normalizeMolingId(molingAppId), productId: normalizeMolingId(molingProductId), isMolingUser: false };
+  let pointHold = null;
+  let pointFinalized = false;
+  const requestSummary = `用户需求：${cleanTemplateAgentText(brief, 1200)}\n交付对象：${cleanTemplateAgentText(audience, 120) || "未指定"}\n期望篇幅：${validExpectedPages(expectedPages) || "由智能体判断"}`;
+
+  try {
+    currentUser = await getCurrentUser(request);
+    pointHold = await reservePoints(currentUser, "word_template_agent", usageCosts.word_template_agent, brief || "template-agent");
+    const analysisPrompt = `${requestSummary}\n请只返回 JSON：{"intent":"文档交付意图","audience":"交付对象","priorities":["关键要求"],"constraints":["约束"],"summary":"分析摘要"}。priorities 至少 2 项，不得编造数据。`;
+    const analysisText = await callMolinChat([
+      {
+        role: "system",
+        content: "你是企业文档需求分析智能体，只分析用途、对象、要求和约束，返回严格 JSON。"
+      },
+      { role: "user", content: analysisPrompt }
+    ]);
+    const analysis = normalizeTemplateBriefAnalysis(analysisText, { audience });
+    if (!analysis) throw new Error("AI brief analyzer returned invalid JSON");
+
+    // 中文注解：模板匹配是受控工具阶段，只对 MySQL active 白名单评分；模型没有权限新增或启用模板。
+    const matchedFallback = createTemplateAgentFallbackPlan({
+      brief: `${brief} ${analysis.intent} ${analysis.priorities.join(" ")}`,
+      audience: analysis.audience,
+      expectedPages
+    }, candidates);
+    const recommendedCandidate = candidates.find((item) => (matchedFallback.recommendedTemplateId && item.id === matchedFallback.recommendedTemplateId) || item.name === matchedFallback.recommendedTemplateName);
+    if (!recommendedCandidate) throw new Error("Template matcher did not return an active template");
+
+    const architecturePrompt = `${requestSummary}\n需求分析：${JSON.stringify(analysis)}\n已匹配启用模板：${JSON.stringify(recommendedCandidate)}\n请只返回一个 JSON 对象，字段必须为：recommendedTemplateId、recommendedTemplateName、title、tone、requirement、audience、expectedPages、fitScore、reason、outline、qualityChecklist。必须保持已匹配模板；outline 为 4-10 个正式中文章节；qualityChecklist 为 4-8 条可执行检查；expectedPages 格式为“3-6页”；不得输出 Markdown。`;
+    const architectureText = await callMolinChat([
+      { role: "system", content: "你是企业 Word 文档架构智能体，基于已确认模板设计正式结构，返回严格 JSON，不编造来源、数据或法律结论。" },
+      { role: "user", content: architecturePrompt }
+    ]);
+    if (!extractJsonObject(architectureText)) throw new Error("AI structure architect returned invalid JSON");
+    // 中文注解：架构模型只能补全文档结构，不能改写确定性工具阶段锁定的模板。
+    let plan = normalizeTemplateAgentPlan(architectureText, matchedFallback, [recommendedCandidate]);
+
+    const reviewPlan = async (candidatePlan) => {
+      const reviewText = await callMolinChat([
+        { role: "system", content: "你是企业文档质量审校智能体。检查结构完整性、可执行性、事实边界和行业风险，只返回严格 JSON。" },
+        { role: "user", content: `需求分析：${JSON.stringify(analysis)}\n待审方案：${JSON.stringify(candidatePlan)}\n返回：{"approved":true或false,"issues":["必须修复的问题"],"qualityChecklist":["交付检查"],"summary":"审校摘要"}。只有无必须修复问题时 approved 才能为 true，qualityChecklist 至少 4 项。` }
+      ]);
+      return normalizeTemplateAgentReview(reviewText, candidatePlan);
+    };
+
+    let review = await reviewPlan(plan);
+    if (!review) throw new Error("AI quality reviewer returned invalid JSON");
+    let repaired = false;
+    if (!review.approved) {
+      repaired = true;
+      const repairText = await callMolinChat([
+        { role: "system", content: "你是企业 Word 文档架构修订智能体。必须逐项修复审校问题并返回完整严格 JSON。" },
+        { role: "user", content: `原方案：${JSON.stringify(plan)}\n必须修复：${JSON.stringify(review.issues)}\n保持原模板不变，返回与原方案相同字段的完整 JSON。` }
+      ]);
+      if (!extractJsonObject(repairText)) throw new Error("AI structure repair returned invalid JSON");
+      plan = normalizeTemplateAgentPlan(repairText, matchedFallback, [recommendedCandidate]);
+      review = await reviewPlan(plan);
+      if (!review?.approved) throw new Error("AI quality gate rejected the repaired plan");
+    }
+    plan = {
+      ...review.plan,
+      workflow: buildTemplateAgentWorkflow(review.plan, brief, {
+        brief_analyzer: { status: "completed", summary: analysis.summary },
+        template_matcher: { status: "completed", summary: `已从 ${candidates.length} 个启用模板中匹配“${review.plan.recommendedTemplateName}”` },
+        structure_architect: { status: "completed", summary: `已设计 ${review.plan.outline.length} 个正式章节${repaired ? "并完成审校返修" : ""}` },
+        quality_reviewer: { status: "completed", summary: review.summary }
+      })
+    };
+    await settlePoints(pointHold, usageCosts.word_template_agent, { userId: currentUser.userId, usageType: "word_template_agent" });
+    pointFinalized = true;
+    await logAiRequest({
+      userId: currentUser.userId,
+      actionType: "template_agent_plan",
+      prompt: requestSummary,
+      responseText: JSON.stringify(plan),
+      latencyMs: Date.now() - startedAt
+    }).catch((logError) => console.warn("Template agent audit log failed:", logError.message));
+    response.json({ plan, agentMode: "model" });
+  } catch (error) {
+    if (!pointFinalized) await releasePoints(pointHold).catch((releaseError) => console.warn("Moling point release failed:", releaseError.message));
+    await logAiRequest({
+      userId: currentUser.userId,
+      actionType: "template_agent_plan",
+      prompt: requestSummary,
+      responseText: JSON.stringify(fallback),
+      status: "failed",
+      errorMessage: error instanceof Error ? error.message : "模板智能体规划失败",
+      latencyMs: Date.now() - startedAt
+    });
+    if (currentUser.isMolingUser || requireMolingSession) {
+      const status = resolveTemplateAgentFailureStatus(error, currentUser, pointHold);
+      const publicMessage = pointHold?.state === "settlement_unknown"
+        ? "模板已生成，但积分结算状态待平台对账，请勿重复提交并联系管理员。"
+        : "模板智能体暂时不可用，本次未扣除积分，请稍后重试。";
+      sendError(response, error, status, publicMessage);
+      return;
+    }
+    response.json({
+      plan: fallback,
+      fallback: true,
+      agentMode: "local-rules",
+      message: toPublicErrorMessage(error, "AI 规划服务暂时不可用，已使用本地智能匹配方案。")
+    });
+  }
+});
+
 app.post("/api/ai/generate-outline", async (request, response) => {
   const { topic, documentType, tone, requirement, documentId } = request.body;
   const startedAt = Date.now();
@@ -4980,7 +5479,7 @@ app.post("/api/ai/generate-outline", async (request, response) => {
     ]);
 
     const outline = parseOutline(content, topic || "AI Word document");
-    await settlePoints(pointHold, 1);
+    await settlePoints(pointHold, 1, { userId: currentUser.userId, usageType: "word_outline_generate" });
     await logAiRequest({
       userId: currentUser.userId,
       documentId,
@@ -5030,7 +5529,7 @@ app.post("/api/ai/generate-body", async (request, response) => {
     ]);
 
     const validContent = validateAiText(content, { minLength: 80 });
-    await settlePoints(pointHold, 5);
+    await settlePoints(pointHold, 5, { userId: currentUser.userId, usageType: "word_body_generate" });
     await logAiRequest({
       userId: currentUser.userId,
       documentId,
@@ -5091,7 +5590,7 @@ app.post("/api/ai/edit", async (request, response) => {
     ]);
 
     const validContent = validateAiText(result, { minLength: action === "shorten" ? 4 : 10 });
-    await settlePoints(pointHold, 2);
+    await settlePoints(pointHold, 2, { userId: currentUser.userId, usageType: "word_polish" });
     await logAiRequest({
       userId: currentUser.userId,
       documentId,
@@ -5145,7 +5644,7 @@ app.post("/api/ai/polish", async (request, response) => {
     });
   }
 });
-export { createDocxBuffer, formatGeneratedBodyHtml, legacyDocTextToHtml, parseImportedDocument, parseStyledDocxToHtml, sanitizeImportedHtml };
+export { appendBillingReconciliationOutbox, createBillingReconciliationPayload, createDocxBuffer, createTemplateAgentFallbackPlan, formatGeneratedBodyHtml, legacyDocTextToHtml, loadTemplateAgentCandidates, normalizeTemplateAgentPlan, normalizeTemplateAgentReview, normalizeTemplateBriefAnalysis, parseImportedDocument, parseStyledDocxToHtml, persistBillingReconciliationTask, resolveTemplateAgentFailureStatus, sanitizeImportedHtml, shouldReleasePointHold };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   app.listen(port, "127.0.0.1", () => {
