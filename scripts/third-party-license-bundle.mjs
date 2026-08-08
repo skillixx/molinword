@@ -76,6 +76,21 @@ export function isTrustedLockedArchive(lockMetadata, packageName, version) {
   }
 }
 
+export function hasValidSharedUpstreamMetadata({ packageMetadata, lockMetadata, upstreamMetadata, rule, license }) {
+  const targetRepository = normalizeRepository(packageMetadata.repository);
+  const upstreamRepository = normalizeRepository(upstreamMetadata.repository);
+  const upstreamLicense = normalizeDeclaredLicense(upstreamMetadata);
+  const declaredByUpstream = upstreamMetadata.optionalDependencies?.[packageMetadata.name] === packageMetadata.version;
+  // 中文注解：即使目标原生包已安装并声明仓库，也必须同时通过锁定归档与 SRI 校验，避免平台差异绕过供应链门禁。
+  return upstreamMetadata.name === rule.upstreamName
+    && packageMetadata.version === upstreamMetadata.version
+    && license === upstreamLicense
+    && upstreamRepository.includes(rule.repositoryToken)
+    && (!targetRepository || targetRepository.includes(rule.repositoryToken))
+    && declaredByUpstream
+    && isTrustedLockedArchive(lockMetadata, packageMetadata.name, packageMetadata.version);
+}
+
 function normalizeDeclaredLicense(packageMetadata) {
   if (typeof packageMetadata.license === "string") return packageMetadata.license.trim();
   if (!Array.isArray(packageMetadata.licenses)) return "";
@@ -145,20 +160,8 @@ async function readSharedUpstreamLicenseFallback(rootDir, candidate, license) {
   if (!rule) return [];
   const upstreamDirectory = path.join(rootDir, rule.packagePath);
   const upstreamMetadata = await readJson(path.join(upstreamDirectory, "package.json"));
-  const targetRepository = normalizeRepository(packageMetadata.repository);
-  const upstreamRepository = normalizeRepository(upstreamMetadata.repository);
-  const upstreamLicense = normalizeDeclaredLicense(upstreamMetadata);
-  const resolvedTargetIsValid = isTrustedLockedArchive(lockMetadata, packageMetadata.name, packageMetadata.version);
-  const declaredByUpstream = upstreamMetadata.optionalDependencies?.[packageMetadata.name] === packageMetadata.version;
   // 中文注解：原生平台包不携带 LICENSE 时，只允许复用同版本、同许可证、同上游仓库主包的原文，避免错配其他项目授权。
-  if (
-    upstreamMetadata.name !== rule.upstreamName
-    || packageMetadata.version !== upstreamMetadata.version
-    || license !== upstreamLicense
-    || !upstreamRepository.includes(rule.repositoryToken)
-    || !declaredByUpstream
-    || (targetRepository ? !targetRepository.includes(rule.repositoryToken) : !resolvedTargetIsValid)
-  ) {
+  if (!hasValidSharedUpstreamMetadata({ packageMetadata, lockMetadata, upstreamMetadata, rule, license })) {
     throw new Error(`${packageMetadata.name}@${packageMetadata.version} 的共享上游许可证校验失败`);
   }
   const sources = await readPackageLicenseFiles(upstreamDirectory);

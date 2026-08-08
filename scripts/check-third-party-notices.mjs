@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { buildThirdPartyLicenseBundle, hasValidSha512Integrity, isTrustedLockedArchive, sanitizePublicSource } from "./third-party-license-bundle.mjs";
+import { buildThirdPartyLicenseBundle, hasValidSha512Integrity, hasValidSharedUpstreamMetadata, isTrustedLockedArchive, sanitizePublicSource } from "./third-party-license-bundle.mjs";
 
 const result = await buildThirdPartyLicenseBundle({ rootDir: process.cwd() });
 const repeatedResult = await buildThirdPartyLicenseBundle({ rootDir: process.cwd() });
 const lock = JSON.parse(await readFile("package-lock.json", "utf8"));
+const esbuildMetadata = JSON.parse(await readFile("node_modules/esbuild/package.json", "utf8"));
 
 assert.ok(result.entries.length >= 250, `许可证包覆盖依赖过少：${result.entries.length}`);
 assert.equal(result.missing.length, 0, `以下生产依赖缺少可发布的许可证文本：\n${result.missing.join("\n")}`);
@@ -19,6 +20,15 @@ assert.equal(isTrustedLockedArchive(lock.packages["node_modules/@esbuild/linux-x
 assert.equal(isTrustedLockedArchive({ ...lock.packages["node_modules/@esbuild/linux-x64"], resolved: "https://attacker.example/@esbuild/linux-x64/-/linux-x64-0.28.1.tgz" }, "@esbuild/linux-x64", "0.28.1"), false, "未知归档主机不能复用可信主包许可证");
 assert.equal(isTrustedLockedArchive({ ...lock.packages["node_modules/@esbuild/linux-x64"], resolved: "https://registry.npmjs.org:444/@esbuild/linux-x64/-/linux-x64-0.28.1.tgz" }, "@esbuild/linux-x64", "0.28.1"), false, "非标准 HTTPS 端口不能复用可信主包许可证");
 assert.equal(isTrustedLockedArchive({ ...lock.packages["node_modules/@esbuild/linux-x64"], resolved: "https://registry.npmjs.org/extra/@esbuild/linux-x64/wrong/linux-x64-0.28.1.tgz" }, "@esbuild/linux-x64", "0.28.1"), false, "非标准归档路径不能复用可信主包许可证");
+const installedNativePackageMetadata = {
+  name: "@esbuild/linux-x64",
+  version: "0.28.1",
+  license: esbuildMetadata.license,
+  repository: esbuildMetadata.repository
+};
+const esbuildRule = { upstreamName: "esbuild", repositoryToken: "github.com/evanw/esbuild" };
+assert.equal(hasValidSharedUpstreamMetadata({ packageMetadata: installedNativePackageMetadata, lockMetadata: lock.packages["node_modules/@esbuild/linux-x64"], upstreamMetadata: esbuildMetadata, rule: esbuildRule, license: esbuildMetadata.license }), true, "可信已安装原生包应允许复用上游许可证");
+assert.equal(hasValidSharedUpstreamMetadata({ packageMetadata: installedNativePackageMetadata, lockMetadata: { ...lock.packages["node_modules/@esbuild/linux-x64"], resolved: "https://attacker.example/@esbuild/linux-x64/-/linux-x64-0.28.1.tgz" }, upstreamMetadata: esbuildMetadata, rule: esbuildRule, license: esbuildMetadata.license }), false, "已安装原生包也不能绕过锁定归档校验");
 assert.equal(sanitizePublicSource("https://token@example.com/source?access_token=secret", "example", "1.0.0"), "https://www.npmjs.com/package/example/v/1.0.0");
 assert.equal(sanitizePublicSource("file:///home/runner/private", "example", "1.0.0"), "https://www.npmjs.com/package/example/v/1.0.0");
 assert.equal(sanitizePublicSource("https://github.com/example/ghp_12345678901234567890/artifact", "example", "1.0.0"), "https://www.npmjs.com/package/example/v/1.0.0", "URL 路径内凭据不能进入公开产物");
