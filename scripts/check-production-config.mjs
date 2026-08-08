@@ -44,7 +44,13 @@ const validProductionConfiguration = {
   STORAGE_SECRET_ACCESS_KEY: "storage-secret-key-at-least-32-characters",
   SESSION_COOKIE_SECURE: "true",
   APP_BASE_URL: "https://word.example.com",
-  BILLING_RECONCILIATION_OUTBOX: "D:\\moling-data\\billing-reconciliation-outbox.jsonl"
+  BILLING_RECONCILIATION_OUTBOX: "D:\\moling-data\\billing-reconciliation-outbox.jsonl",
+  TRUSTED_PROXY_HOPS: "1",
+  RATE_LIMIT_WINDOW_MS: "60000",
+  API_RATE_LIMIT_MAX: "300",
+  AI_RATE_LIMIT_MAX: "30",
+  ACCESS_LOG_ENABLED: "true",
+  SHUTDOWN_TIMEOUT_MS: "10000"
 };
 const validErrors = validateProductionConfiguration(validProductionConfiguration);
 assert.deepEqual(validErrors, []);
@@ -58,6 +64,26 @@ const legacyAliasErrors = validateProductionConfiguration({
   WORD_PRODUCT_ID: "73"
 });
 assert.deepEqual(legacyAliasErrors, []);
+
+const invalidRuntimeBoundaryErrors = validateProductionConfiguration({
+  ...validProductionConfiguration,
+  TRUSTED_PROXY_HOPS: "many",
+  RATE_LIMIT_WINDOW_MS: "999",
+  API_RATE_LIMIT_MAX: "0",
+  AI_RATE_LIMIT_MAX: "1.5",
+  ACCESS_LOG_ENABLED: "yes",
+  SHUTDOWN_TIMEOUT_MS: "60000"
+});
+for (const expectedKey of [
+  "TRUSTED_PROXY_HOPS",
+  "RATE_LIMIT_WINDOW_MS",
+  "API_RATE_LIMIT_MAX",
+  "AI_RATE_LIMIT_MAX",
+  "ACCESS_LOG_ENABLED",
+  "SHUTDOWN_TIMEOUT_MS"
+]) {
+  assert.ok(invalidRuntimeBoundaryErrors.some((message) => message.includes(expectedKey)), `缺少 ${expectedKey} 的运行边界配置错误`);
+}
 
 const insecureInternalErrors = validateProductionConfiguration({
   APP_ENV: "production",

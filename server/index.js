@@ -303,16 +303,81 @@ function normalizePageLayout(value, fallback = defaultPageLayout) {
   };
 }
 
+function readBoundedInteger(value, fallback, minimum, maximum) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback;
+}
+
+function createFixedWindowRateLimiter({ maximumRequests, windowMs, message, excludedPaths = new Set() }) {
+  const counters = new Map();
+  let requestCount = 0;
+
+  return (request, response, next) => {
+    if (excludedPaths.has(request.path)) return next();
+
+    const now = Date.now();
+    requestCount += 1;
+    // 中文注解：按固定窗口记录单实例 IP 访问量，并周期清理过期记录，避免公网流量导致内存无限增长。
+    if (requestCount % 256 === 0) {
+      for (const [key, value] of counters) {
+        if (value.resetAt <= now) counters.delete(key);
+      }
+    }
+
+    const clientKey = request.ip || request.socket?.remoteAddress || "unknown";
+    let counter = counters.get(clientKey);
+    if (!counter || counter.resetAt <= now) {
+      if (!counters.has(clientKey) && counters.size >= 10000) {
+        const oldestKey = counters.keys().next().value;
+        if (oldestKey !== undefined) counters.delete(oldestKey);
+      }
+      counter = { count: 0, resetAt: now + windowMs };
+      counters.set(clientKey, counter);
+    }
+
+    counter.count += 1;
+    const remaining = Math.max(0, maximumRequests - counter.count);
+    const resetAfterSeconds = Math.max(1, Math.ceil((counter.resetAt - now) / 1000));
+    response.setHeader("RateLimit-Limit", String(maximumRequests));
+    response.setHeader("RateLimit-Remaining", String(remaining));
+    response.setHeader("RateLimit-Reset", String(resetAfterSeconds));
+
+    if (counter.count > maximumRequests) {
+      response.setHeader("Retry-After", String(resetAfterSeconds));
+      response.status(429).json({ message });
+      return;
+    }
+    next();
+  };
+}
+
 const app = express();
 const port = Number(process.env.LOCAL_API_PORT || process.env.APP_PORT || process.env.PORT || 3001);
+const appHost = String(process.env.APP_HOST || "127.0.0.1").trim() || "127.0.0.1";
 const localUserId = process.env.LOCAL_USER_ID || "local-dev-user";
 const sessionCookieName = "moling_word_session";
 const maximumConcurrentAiRequests = Math.min(100, Math.max(1, Number(process.env.AI_MAX_CONCURRENT_REQUESTS || 8) || 8));
 const readinessTimeoutMs = Math.min(15000, Math.max(500, Number(process.env.READINESS_TIMEOUT_MS || 3000) || 3000));
+const trustedProxyHops = readBoundedInteger(process.env.TRUSTED_PROXY_HOPS, 0, 0, 5);
+const rateLimitWindowMs = readBoundedInteger(process.env.RATE_LIMIT_WINDOW_MS, 60000, 1000, 3600000);
+const apiRateLimitMaximum = readBoundedInteger(process.env.API_RATE_LIMIT_MAX, 300, 1, 100000);
+const aiRateLimitMaximum = readBoundedInteger(process.env.AI_RATE_LIMIT_MAX, 30, 1, 10000);
+const shutdownTimeoutMs = readBoundedInteger(process.env.SHUTDOWN_TIMEOUT_MS, 10000, 1000, 30000);
+const accessLogEnabled = process.env.ACCESS_LOG_ENABLED === "true"
+  || (process.env.ACCESS_LOG_ENABLED !== "false" && (process.env.APP_ENV === "production" || process.env.NODE_ENV === "production"));
 let activeAiRequests = 0;
 
 app.disable("x-powered-by");
-app.use(express.json({ limit: "1mb" }));
+app.set("trust proxy", trustedProxyHops);
+app.use((request, response, next) => {
+  const incomingRequestId = String(request.headers["x-request-id"] || "").trim();
+  // 中文注解：只复用短且可打印的请求 ID，避免把任意请求头写入日志或响应头。
+  request.requestId = /^[A-Za-z0-9][A-Za-z0-9._-]{7,63}$/.test(incomingRequestId)
+    ? incomingRequestId
+    : crypto.randomUUID();
+  response.setHeader("X-Request-Id", request.requestId);
+  next();
+});
 app.use((request, response, next) => {
   // 中文注解：API 默认使用收敛的浏览器安全头；具体文件下载路由仍可覆盖自己的缓存与内容类型。
   response.setHeader("X-Content-Type-Options", "nosniff");
@@ -323,6 +388,25 @@ app.use((request, response, next) => {
   response.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
   next();
 });
+app.use((request, response, next) => {
+  if (!accessLogEnabled) return next();
+  const startedAt = process.hrtime.bigint();
+  response.once("finish", () => {
+    // 中文注解：访问日志不记录查询串、Cookie 和请求体，只保留定位线上故障所需的最小字段。
+    console.log(JSON.stringify({
+      timestamp: new Date().toISOString(),
+      level: "info",
+      type: "http_access",
+      requestId: request.requestId,
+      method: request.method,
+      path: request.path,
+      status: response.statusCode,
+      durationMs: Number(process.hrtime.bigint() - startedAt) / 1e6
+    }));
+  });
+  next();
+});
+app.use(express.json({ limit: "1mb" }));
 app.use((request, response, next) => {
   if (!isProductionRuntime || ["GET", "HEAD", "OPTIONS"].includes(request.method)) return next();
   const origin = String(request.headers.origin || "").trim();
@@ -339,6 +423,17 @@ app.use((request, response, next) => {
   // 中文注解：浏览器携带会话 cookie 的跨站写请求必须在进入业务和计费逻辑前被拒绝。
   response.status(403).json({ message: "请求来源不受信任，请从正式应用入口重试。" });
 });
+app.use("/api", createFixedWindowRateLimiter({
+  maximumRequests: apiRateLimitMaximum,
+  windowMs: rateLimitWindowMs,
+  message: "请求过于频繁，请稍后重试。",
+  excludedPaths: new Set(["/health", "/ready"])
+}));
+app.use("/api/ai", createFixedWindowRateLimiter({
+  maximumRequests: aiRateLimitMaximum,
+  windowMs: rateLimitWindowMs,
+  message: "AI 请求过于频繁，请稍后重试。"
+}));
 app.use("/api/ai", (request, response, next) => {
   if (activeAiRequests >= maximumConcurrentAiRequests) {
     response.setHeader("Retry-After", "2");
@@ -484,6 +579,21 @@ function validateProductionConfiguration(environment = {}) {
   if (configuration.SESSION_COOKIE_SECURE !== "true") errors.push("SESSION_COOKIE_SECURE 生产环境必须为 true");
   if (!isPlaceholder(configuration.BILLING_RECONCILIATION_OUTBOX) && !path.isAbsolute(configuration.BILLING_RECONCILIATION_OUTBOX)) {
     errors.push("BILLING_RECONCILIATION_OUTBOX 生产环境必须指向持久卷绝对路径");
+  }
+  const validateIntegerSetting = (key, minimum, maximum) => {
+    if (configuration[key] === undefined || configuration[key] === "") return;
+    const value = Number(configuration[key]);
+    if (!Number.isInteger(value) || value < minimum || value > maximum) {
+      errors.push(`${key} 必须是 ${minimum} 到 ${maximum} 之间的整数`);
+    }
+  };
+  validateIntegerSetting("TRUSTED_PROXY_HOPS", 0, 5);
+  validateIntegerSetting("RATE_LIMIT_WINDOW_MS", 1000, 3600000);
+  validateIntegerSetting("API_RATE_LIMIT_MAX", 1, 100000);
+  validateIntegerSetting("AI_RATE_LIMIT_MAX", 1, 10000);
+  validateIntegerSetting("SHUTDOWN_TIMEOUT_MS", 1000, 30000);
+  if (configuration.ACCESS_LOG_ENABLED !== undefined && !["true", "false"].includes(configuration.ACCESS_LOG_ENABLED)) {
+    errors.push("ACCESS_LOG_ENABLED 必须为 true 或 false");
   }
   return [...new Set(errors)];
 }
@@ -5950,6 +6060,19 @@ app.post("/api/ai/polish", async (request, response) => {
     });
   }
 });
+app.use("/api", (_request, response) => {
+  response.status(404).json({ message: "请求的接口不存在。" });
+});
+
+app.use((error, _request, response, next) => {
+  if (response.headersSent) return next(error);
+  if (error?.type === "entity.parse.failed" || (error instanceof SyntaxError && Object.prototype.hasOwnProperty.call(error, "body"))) {
+    response.status(400).json({ message: "请求内容不是有效的 JSON。" });
+    return;
+  }
+  sendError(response, error, 500, "服务暂时不可用，请稍后重试。");
+});
+
 export { appendBillingReconciliationOutbox, createBillingReconciliationPayload, createDocxBuffer, createTemplateAgentFallbackPlan, formatGeneratedBodyHtml, legacyDocTextToHtml, loadTemplateAgentCandidates, normalizeTemplateAgentPlan, normalizeTemplateAgentReview, normalizeTemplateBriefAnalysis, parseImportedDocument, parseStyledDocxToHtml, persistBillingReconciliationTask, readSafeImageDimensions, resolveBillableFailureResponse, resolveTemplateAgentFailureStatus, sanitizeImportedHtml, shouldReleasePointHold, validateProductionConfiguration };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -5957,9 +6080,36 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (productionConfigurationErrors.length) {
     throw new Error(`生产配置校验失败：\n- ${productionConfigurationErrors.join("\n- ")}`);
   }
-  app.listen(port, "127.0.0.1", () => {
-    console.log(`Local API server running at http://127.0.0.1:${port}`);
+  const server = app.listen(port, appHost, () => {
+    console.log(`API server running at http://${appHost}:${port}`);
   });
+  let shutdownStarted = false;
+  const shutdown = (signal) => {
+    if (shutdownStarted) return;
+    shutdownStarted = true;
+    console.log(JSON.stringify({ timestamp: new Date().toISOString(), level: "info", type: "shutdown", signal }));
+    const forceExitTimer = setTimeout(() => {
+      console.error(`服务未能在 ${shutdownTimeoutMs}ms 内退出。`);
+      process.exit(1);
+    }, shutdownTimeoutMs);
+    forceExitTimer.unref();
+
+    // 中文注解：先停止接收新请求并关闭空闲连接，再释放数据库连接，给在途导出和计费结算留出完成时间。
+    server.close(async (error) => {
+      try {
+        if (dbPool) await dbPool.end();
+      } catch (closeError) {
+        console.error("数据库连接池关闭失败：", closeError);
+        error ||= closeError;
+      } finally {
+        clearTimeout(forceExitTimer);
+        process.exit(error ? 1 : 0);
+      }
+    });
+    server.closeIdleConnections?.();
+  };
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
+  process.once("SIGINT", () => shutdown("SIGINT"));
 }
 
 
