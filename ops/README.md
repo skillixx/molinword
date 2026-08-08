@@ -35,6 +35,7 @@ sudo install -m 0644 ops/nginx/molinword.conf.example /etc/nginx/sites-available
 
 ```bash
 cd /opt/molinword/releases/<release-id>
+test -s dist/THIRD_PARTY_LICENSES.txt
 sudo -u molinword npm ci --omit=dev
 sudo ln -sfn /opt/molinword/releases/<release-id> /opt/molinword/candidate
 sudo systemctl daemon-reload

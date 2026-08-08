@@ -18,6 +18,7 @@ npm run check:commercial-readiness
 - `ops/env/molinword.production.env.example`：不含真实密钥的生产变量清单。
 - `.github/workflows/commercial-readiness.yml`：拉取请求与主分支商业门禁。
 - `scripts/check-frontend-performance-budget.mjs`：基于 Vite manifest 校验初始 JS/CSS gzip 闭包、单块大小与资源请求总数，防止首屏资产无界增长。
+- `dist/THIRD_PARTY_LICENSES.txt`：构建时按锁文件生成的生产依赖许可证、版权和 NOTICE 全文；发布切换前必须确认存在且非空。
 
 安装、验收和回滚命令见 `ops/README.md`。`npm run check:deployment-assets` 只验证这些资产的契约完整性，不证明它们已部署到目标服务器。
 
