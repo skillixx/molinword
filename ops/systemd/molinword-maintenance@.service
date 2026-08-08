@@ -1,0 +1,36 @@
+[Unit]
+Description=Moling AI Word approved maintenance task %I
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/opt/molinword/candidate/package.json
+
+[Service]
+Type=oneshot
+User=molinword
+Group=molinword
+WorkingDirectory=/opt/molinword/candidate
+EnvironmentFile=/etc/molinword/molinword.env
+Environment=NPM_CONFIG_CACHE=/var/lib/molinword/npm-cache
+# 中文注解：候选版本先通过强制生产配置门禁，再运行仓库中已审核的 npm 维护脚本。
+ExecStartPre=/usr/bin/node scripts/check-runtime-config.mjs --require-production
+ExecStart=/usr/bin/npm run %I
+TimeoutStartSec=900
+UMask=0077
+StateDirectory=molinword
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/molinword

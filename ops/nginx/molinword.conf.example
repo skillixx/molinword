@@ -10,8 +10,9 @@ server {
 }
 
 server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
     server_name word.example.com;
 
     ssl_certificate /etc/letsencrypt/live/word.example.com/fullchain.pem;
@@ -24,53 +25,55 @@ server {
     index index.html;
     client_max_body_size 20m;
 
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-Frame-Options "DENY" always;
-    add_header Referrer-Policy "no-referrer" always;
-    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
-    add_header Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+    include /etc/nginx/snippets/molinword-security-headers.conf;
 
     # 中文注解：AI 路由同时受通用 API 和更严格 AI 桶约束，且必须写在 /api/ 之前。
     location ^~ /api/ai/ {
         limit_req zone=molinword_api burst=30 nodelay;
         limit_req zone=molinword_ai burst=6 nodelay;
         limit_req_status 429;
+        error_page 429 = @molinword_ai_rate_limited;
 
-        proxy_pass http://127.0.0.1:3001;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header Connection "";
-        proxy_connect_timeout 5s;
-        proxy_send_timeout 900s;
-        proxy_read_timeout 900s;
+        include /etc/nginx/snippets/molinword-proxy.conf;
     }
 
     location ^~ /api/ {
         limit_req zone=molinword_api burst=30 nodelay;
         limit_req_status 429;
+        error_page 429 = @molinword_api_rate_limited;
 
-        proxy_pass http://127.0.0.1:3001;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header Connection "";
-        proxy_connect_timeout 5s;
-        proxy_send_timeout 900s;
-        proxy_read_timeout 900s;
+        include /etc/nginx/snippets/molinword-proxy.conf;
+    }
+
+    # 中文注解：Nginx 在应用之前触发限流时，也返回可机器识别的重试窗口与中文 JSON。
+    location @molinword_ai_rate_limited {
+        include /etc/nginx/snippets/molinword-security-headers.conf;
+        add_header Retry-After "1" always;
+        add_header RateLimit-Limit "2" always;
+        add_header RateLimit-Remaining "0" always;
+        add_header RateLimit-Reset "1" always;
+        default_type application/json;
+        return 429 '{"error":"AI 请求过于频繁，请稍后重试。"}';
+    }
+
+    location @molinword_api_rate_limited {
+        include /etc/nginx/snippets/molinword-security-headers.conf;
+        add_header Retry-After "1" always;
+        add_header RateLimit-Limit "10" always;
+        add_header RateLimit-Remaining "0" always;
+        add_header RateLimit-Reset "1" always;
+        default_type application/json;
+        return 429 '{"error":"请求过于频繁，请稍后重试。"}';
     }
 
     location = /index.html {
+        include /etc/nginx/snippets/molinword-security-headers.conf;
         add_header Cache-Control "no-store" always;
         try_files $uri =404;
     }
 
     location ^~ /assets/ {
+        include /etc/nginx/snippets/molinword-security-headers.conf;
         add_header Cache-Control "public, max-age=31536000, immutable" always;
         try_files $uri =404;
     }

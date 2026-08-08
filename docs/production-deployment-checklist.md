@@ -11,7 +11,7 @@ npm run check:commercial-readiness
 
 仓库同时提供以下可审计部署基线：
 
-- `ops/nginx/molinword.conf.example`：HTTPS、反向代理、限流与 SPA 回退。
+- `ops/nginx/*`：HTTPS、统一安全响应头、反向代理、带重试头的限流与 SPA 回退。
 - `ops/systemd/molinword-api.service`：运行配置预检、故障重启、优雅退出与最小写目录。
 - `ops/systemd/molinword-reconcile.*`：待对账 outbox 导入和幂等重试定时任务。
 - `ops/env/molinword.production.env.example`：不含真实密钥的生产变量清单。
@@ -32,6 +32,7 @@ npm run check:commercial-readiness
 - `RATE_LIMIT_WINDOW_MS`、`API_RATE_LIMIT_MAX` 和 `AI_RATE_LIMIT_MAX` 设置单实例 IP 限流；网关层仍需配置按用户、IP 和总量的多层限流。
 - `AI_MAX_CONCURRENT_REQUESTS` 设置单实例模型并发上限；客户端断开不会提前释放仍在执行的模型槽位。
 - `LLM_READINESS_URL` 留空时从 `LLM_API_URL` 推导 OpenAI 兼容 `/models` 地址；自定义时必须使用验证同一凭据且不产生模型用量的 HTTPS 接口。
+- `LLM_MODEL` 必须填写模型网关实际允许的模型名，生产门禁会拒绝空值和占位值。
 - `MOLING_INTERNAL_TIMEOUT_MS` 必须覆盖墨灵 SSO、预占、结算和释放的响应正文读取，避免平台仅返回响应头时永久挂起。
 - `SHUTDOWN_TIMEOUT_MS` 应覆盖智能体最多五段模型调用、最多五次平台调用、模型重试与本地结算清理；生产配置门禁会按相关超时计算最小值。进程收到终止信号后先停止接收新请求，再等待在途请求完成。
 - 生产环境默认启用最小化 JSON 访问日志，并通过 `X-Request-Id` 关联请求；日志不应采集 Cookie、查询串和请求体。
@@ -43,12 +44,7 @@ npm run check:commercial-readiness
 
 以下操作会修改目标数据库，必须由部署人员在确认备份、目标环境和回滚方案后执行：
 
-```bash
-npm run db:migrate:document-template
-npm run db:migrate:document-page-layout
-npm run db:migrate:billing-reconciliation
-npm run db:seed:templates
-```
+目标服务器使用 `ops/README.md` 中加载 systemd `EnvironmentFile` 的维护单元逐项执行迁移和模板初始化，不要在 shell 中 `source` 密钥文件。
 
 执行后检查：
 
@@ -73,9 +69,9 @@ npm run db:seed:templates
 ## 五、对账与回滚
 
 ```bash
-npm run billing:reconcile:import-outbox
-npm run billing:reconcile:list
-npm run billing:reconcile:retry
+sudo systemctl start 'molinword-maintenance@billing:reconcile:import-outbox.service'
+sudo systemctl start 'molinword-maintenance@billing:reconcile:list.service'
+sudo systemctl start 'molinword-maintenance@billing:reconcile:retry.service'
 ```
 
 - 先导入 outbox，再查看和重试；脚本使用原幂等键，租约令牌阻止过期进程覆盖新结果。

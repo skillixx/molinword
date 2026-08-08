@@ -4,7 +4,7 @@
 
 ## 一、部署前提
 
-- Linux 服务器已安装 Node.js 22、npm、Nginx 和 systemd。
+- Linux 服务器已安装 Node.js 22、npm、Nginx 1.25.1 或更高版本和 systemd。
 - 已创建无登录权限的 `molinword` 系统用户，代码目录为 `/opt/molinword`。
 - MySQL、MinIO、墨灵内部 API 和模型网关已准备专用生产账号及最小权限。
 - 域名与 TLS 证书已就绪，应用端口 `3001` 仅监听 `127.0.0.1`，不直接暴露公网。
@@ -20,26 +20,32 @@ sudo install -d -m 0755 -o molinword -g molinword /opt/molinword/releases/<relea
 sudo install -d -m 0750 -o root -g molinword /etc/molinword
 sudo install -m 0640 -o root -g molinword ops/env/molinword.production.env.example /etc/molinword/molinword.env
 sudo install -m 0644 ops/systemd/molinword-api.service /etc/systemd/system/molinword-api.service
+sudo install -m 0644 ops/systemd/molinword-maintenance@.service /etc/systemd/system/molinword-maintenance@.service
 sudo install -m 0644 ops/systemd/molinword-reconcile.service /etc/systemd/system/molinword-reconcile.service
 sudo install -m 0644 ops/systemd/molinword-reconcile.timer /etc/systemd/system/molinword-reconcile.timer
+sudo install -d -m 0755 /etc/nginx/snippets
+sudo install -m 0644 ops/nginx/molinword-security-headers.conf /etc/nginx/snippets/molinword-security-headers.conf
+sudo install -m 0644 ops/nginx/molinword-proxy.conf /etc/nginx/snippets/molinword-proxy.conf
 sudo install -m 0644 ops/nginx/molinword.conf.example /etc/nginx/sites-available/molinword.conf
 ```
 
-先编辑 `/etc/molinword/molinword.env`，通过密钥管理系统注入真实值；再编辑 Nginx 配置中的域名和证书路径。禁止把密钥直接写入命令历史。将已通过门禁且包含 `dist/` 的发布目录复制到 `/opt/molinword/releases/<release-id>`，确认文件归属 `molinword:molinword`，然后在服务器安装纯生产依赖并预检真实配置：
+先编辑 `/etc/molinword/molinword.env`，按 systemd `EnvironmentFile` 语法通过密钥管理系统注入真实值；再编辑 Nginx 配置中的域名和证书路径。禁止把密钥直接写入命令历史。将已通过门禁且包含 `dist/` 的发布目录复制到 `/opt/molinword/releases/<release-id>`，确认文件归属 `molinword:molinword`，然后在服务器安装纯生产依赖。候选软链接让维护单元验证新版本，同时不影响当前服务：
 
 ```bash
 cd /opt/molinword/releases/<release-id>
 sudo -u molinword npm ci --omit=dev
-sudo -u molinword /bin/sh -c 'set -a; . /etc/molinword/molinword.env; set +a; exec /usr/bin/npm run check:runtime-config -- --require-production'
+sudo ln -sfn /opt/molinword/releases/<release-id> /opt/molinword/candidate
+sudo systemctl daemon-reload
+sudo systemctl start 'molinword-maintenance@check:runtime-config:production.service'
 ```
 
 执行数据库操作前先核对目标库、备份与回滚方案。以下命令会修改真实数据库和模板存储，只能在获批变更窗口中逐条执行：
 
 ```bash
-sudo -u molinword /bin/sh -c 'set -a; . /etc/molinword/molinword.env; set +a; exec /usr/bin/npm run db:migrate:document-template'
-sudo -u molinword /bin/sh -c 'set -a; . /etc/molinword/molinword.env; set +a; exec /usr/bin/npm run db:migrate:document-page-layout'
-sudo -u molinword /bin/sh -c 'set -a; . /etc/molinword/molinword.env; set +a; exec /usr/bin/npm run db:migrate:billing-reconciliation'
-sudo -u molinword /bin/sh -c 'set -a; . /etc/molinword/molinword.env; set +a; exec /usr/bin/npm run db:seed:templates'
+sudo systemctl start 'molinword-maintenance@db:migrate:document-template.service'
+sudo systemctl start 'molinword-maintenance@db:migrate:document-page-layout.service'
+sudo systemctl start 'molinword-maintenance@db:migrate:billing-reconciliation.service'
+sudo systemctl start 'molinword-maintenance@db:seed:templates.service'
 ```
 
 迁移完成后再切换原子软链接并启动服务：
@@ -73,7 +79,8 @@ journalctl -u molinword-api.service -n 100 --no-pager
 ```bash
 systemctl list-timers molinword-reconcile.timer
 journalctl -u molinword-reconcile.service -n 100 --no-pager
-sudo -u molinword npm run billing:reconcile:list
+sudo systemctl start 'molinword-maintenance@billing:reconcile:list.service'
+journalctl -u 'molinword-maintenance@billing:reconcile:list.service' -n 100 --no-pager
 ```
 
 进入 `manual_review` 的任务禁止直接修改额度表或盲目释放；应核对墨灵账本、原幂等键和平台响应后人工处理。
@@ -84,6 +91,7 @@ sudo -u molinword npm run billing:reconcile:list
 
 ```bash
 sudo ln -sfn /opt/molinword/releases/<previous-release-id> /opt/molinword/current
+sudo ln -sfn /opt/molinword/releases/<previous-release-id> /opt/molinword/candidate
 sudo systemctl restart molinword-api.service
 curl -fsS http://127.0.0.1:3001/api/health
 curl -fsS https://word.example.com/api/ready

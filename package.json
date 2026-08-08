@@ -22,6 +22,7 @@
     "check:graceful-shutdown": "node scripts/check-graceful-shutdown.mjs",
     "check:deployment-assets": "node scripts/check-deployment-assets.mjs",
     "check:runtime-config": "node scripts/check-runtime-config.mjs",
+    "check:runtime-config:production": "node scripts/check-runtime-config.mjs --require-production",
     "check:open-source-licenses": "node scripts/check-open-source-licenses.mjs",
     "check:editor-insert-format": "node scripts/check-editor-insert-format.mjs",
     "check:template-agent": "node scripts/check-template-agent.mjs",

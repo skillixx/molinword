@@ -20,6 +20,7 @@ for (const expectedKey of [
   "MOLING_PRODUCT_ID",
   "LLM_API_URL",
   "LLM_API_KEY",
+  "LLM_MODEL",
   "STORAGE_ENDPOINT",
   "STORAGE_ACCESS_KEY_ID",
   "STORAGE_SECRET_ACCESS_KEY",
@@ -39,6 +40,7 @@ const validProductionConfiguration = {
   MOLING_API_BASE_URL: "https://platform.example.com",
   LLM_API_URL: "https://gateway.example.com/v1/chat/completions",
   LLM_API_KEY: "model-key-at-least-32-characters",
+  LLM_MODEL: "deepseek-chat",
   STORAGE_ENDPOINT: "https://minio.example.com",
   STORAGE_ACCESS_KEY_ID: "storage-access-key",
   STORAGE_SECRET_ACCESS_KEY: "storage-secret-key-at-least-32-characters",
@@ -58,6 +60,12 @@ const validProductionConfiguration = {
 const validErrors = validateProductionConfiguration(validProductionConfiguration);
 assert.deepEqual(validErrors, []);
 
+const placeholderModelErrors = validateProductionConfiguration({
+  ...validProductionConfiguration,
+  LLM_MODEL: "replace-with-approved-model"
+});
+assert.ok(placeholderModelErrors.some((message) => message.includes("LLM_MODEL")), "生产模型名不能保留占位值");
+
 // 中文注解：运行时仍兼容历史 WORD_* 命名，启动门禁必须采用相同解析规则，避免有效旧部署无法升级。
 const legacyAliasErrors = validateProductionConfiguration({
   ...validProductionConfiguration,
@@ -67,6 +75,13 @@ const legacyAliasErrors = validateProductionConfiguration({
   WORD_PRODUCT_ID: "73"
 });
 assert.deepEqual(legacyAliasErrors, []);
+
+const legacyModelAliasErrors = validateProductionConfiguration({
+  ...validProductionConfiguration,
+  LLM_MODEL: undefined,
+  MOLIN_GATEWAY_MODEL: "deepseek-chat"
+});
+assert.deepEqual(legacyModelAliasErrors, []);
 
 const invalidRuntimeBoundaryErrors = validateProductionConfiguration({
   ...validProductionConfiguration,
@@ -109,6 +124,7 @@ const insecureInternalErrors = validateProductionConfiguration({
   MOLING_API_BASE_URL: "http://platform.internal:8080",
   LLM_API_URL: "http://gateway.internal:8080/v1/chat/completions",
   LLM_API_KEY: "model-key-at-least-32-characters",
+  LLM_MODEL: "deepseek-chat",
   STORAGE_ENDPOINT: "http://minio.internal:9000",
   STORAGE_ACCESS_KEY_ID: "storage-access-key",
   STORAGE_SECRET_ACCESS_KEY: "storage-secret-key-at-least-32-characters",

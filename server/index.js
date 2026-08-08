@@ -555,7 +555,8 @@ function validateProductionConfiguration(environment = {}) {
   const configuration = {
     ...environment,
     MOLING_APP_ID: environment.MOLING_APP_ID || environment.WORD_APP_ID,
-    MOLING_PRODUCT_ID: environment.MOLING_PRODUCT_ID || environment.WORD_PRODUCT_ID
+    MOLING_PRODUCT_ID: environment.MOLING_PRODUCT_ID || environment.WORD_PRODUCT_ID,
+    LLM_MODEL: environment.LLM_MODEL || environment.MOLIN_GATEWAY_MODEL
   };
   const errors = [];
   const allowInsecureInternalHttp = configuration.ALLOW_INSECURE_INTERNAL_HTTP === "true";
@@ -567,6 +568,7 @@ function validateProductionConfiguration(environment = {}) {
     "MOLING_API_BASE_URL",
     "LLM_API_URL",
     "LLM_API_KEY",
+    "LLM_MODEL",
     "STORAGE_ENDPOINT",
     "STORAGE_ACCESS_KEY_ID",
     "STORAGE_SECRET_ACCESS_KEY",
