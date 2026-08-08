@@ -14,7 +14,7 @@ import multer from "multer";
 import { normalizeUploadedFileName } from "./upload-file-name.js";
 import mysql from "mysql2/promise";
 import sanitizeHtml from "sanitize-html";
-import { aiHistoryIndexColumns, aiHistoryIndexName, hasExactMysqlIndex } from "../shared/ai-audit-schema.js";
+import { inspectAiAuditSchema } from "../shared/ai-audit-schema.js";
 import { verifyReleaseManifest } from "../shared/release-manifest.js";
 const require = createRequire(import.meta.url);
 const pdf = require("pdf-parse");
@@ -5375,19 +5375,12 @@ async function boundedReadinessCheck(check) {
 
 async function checkDatabaseReadiness(candidatePool = dbPool) {
   if (!candidatePool) return false;
-  // 中文注解：数据库可连接但审计隐私迁移缺失时，AI 日志会静默写入失败；生产就绪必须同时验证安全字段存在。
-  await candidatePool.query(
-    `SELECT request_id, prompt_hmac_sha256, response_hmac_sha256, prompt_chars, response_chars
-     FROM ai_request_logs
-     LIMIT 0`
-  );
-  const [indexRows] = await candidatePool.query(
-    `SELECT INDEX_NAME, SEQ_IN_INDEX, COLUMN_NAME, SUB_PART
-     FROM information_schema.STATISTICS
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_request_logs' AND INDEX_NAME = ?`,
-    [aiHistoryIndexName]
-  );
-  return hasExactMysqlIndex(indexRows, aiHistoryIndexName, aiHistoryIndexColumns);
+  // 中文注解：数据库可连接但隐私字段、历史分页或保留期索引缺失时都不能接流量；与迁移预检复用同一结构契约避免判断漂移。
+  const report = await inspectAiAuditSchema(candidatePool);
+  if (!report.ready) return false;
+  // 中文注解：information_schema 可读不代表运行账号具备业务表权限，额外执行零行查询验证真实审计表读取边界。
+  await candidatePool.query("SELECT 1 FROM ai_request_logs LIMIT 0");
+  return true;
 }
 
 async function consumeResponseBodyWithinLimit(response, maximumBytes) {

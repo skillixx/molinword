@@ -170,6 +170,7 @@ npm run check:deployment-assets
 npm run check:third-party-notices
 npm run check:dev-license-notice
 npm run check:ai-history
+npm run check:ai-audit-schema-preflight
 npm run build
 npm run check:template-agent
 npm run check:template-agent-api
@@ -179,6 +180,7 @@ npm run check:docx-export-format
 npm run check:docx-import-format
 npm run check:docx-visual-render -- --self-test
 npm run db:migrate:document-page-layout
+npm run db:check:ai-audit-privacy
 npm run db:migrate:ai-audit-privacy
 ```
 
@@ -194,4 +196,4 @@ npm run db:migrate:ai-audit-privacy
 
 `check:third-party-notices` 会验证所有已安装生产依赖都能形成许可证正文；`npm run build` 还会生成随发布物交付的 `dist/THIRD_PARTY_LICENSES.txt`。`check:dev-license-notice` 会启动真实 Vite 开发服务，确认同一路径返回 UTF-8 纯文本、完整正文与正确的 GET/HEAD/405 契约，避免 SPA 回退造成“能打开但内容其实是首页”的假成功。产品侧栏的“开源许可”入口会打开当前构建的许可证全文，桌面、折叠侧栏和 390px 窄屏行为由浏览器回归覆盖。项目自身仍为 `private: true`，该文件只履行第三方依赖告知义务，不授予 molinword 源码许可证。
 
-历史数据库首次升级到页面设置功能时运行 `db:migrate:document-page-layout`；升级 AI 审计隐私字段时运行 `db:migrate:ai-audit-privacy`。历史 AI 正文只能在备份和隐私审批后显式运行 `ai-audit:redact-existing`，生产日常清理由 systemd 定时器执行。新数据库由 `database/init-mysql.sql` 直接创建对应字段。
+历史数据库首次升级到页面设置功能时运行 `db:migrate:document-page-layout`。AI 审计升级前先运行只读的 `db:check:ai-audit-privacy`：它只查询 `information_schema`，不会修改数据，也不会输出数据库名、连接串或驱动原始错误；结构不完整时以非零状态列出缺失字段和索引。确认备份、目标库与变更授权后再运行 `db:migrate:ai-audit-privacy`，迁移后必须重新执行只读预检并达到退出码 0。历史 AI 正文只能在备份和隐私审批后显式运行 `ai-audit:redact-existing`，生产日常清理由 systemd 定时器执行。新数据库由 `database/init-mysql.sql` 直接创建对应字段。

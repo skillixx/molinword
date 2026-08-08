@@ -176,13 +176,16 @@ try {
 
   let readinessSql = "";
   let readinessCalls = 0;
+  const readinessColumns = ["request_id", "prompt_hmac_sha256", "response_hmac_sha256", "prompt_chars", "response_chars"]
+    .map((COLUMN_NAME) => ({ COLUMN_NAME }));
   assert.equal(await checkDatabaseReadiness({
-    async query(sql, params) {
+    async query(sql) {
       readinessCalls += 1;
       readinessSql += sql;
+      if (/information_schema\.COLUMNS/i.test(sql)) return [readinessColumns];
       if (/information_schema\.STATISTICS/i.test(sql)) {
-        assert.deepEqual(params, ["idx_ai_logs_user_id"]);
         return [[
+          { INDEX_NAME: "idx_ai_logs_created", SEQ_IN_INDEX: 1, COLUMN_NAME: "created_at" },
           { INDEX_NAME: "idx_ai_logs_user_id", SEQ_IN_INDEX: 1, COLUMN_NAME: "user_id" },
           { INDEX_NAME: "idx_ai_logs_user_id", SEQ_IN_INDEX: 2, COLUMN_NAME: "id" }
         ]];
@@ -190,10 +193,23 @@ try {
       return [[]];
     }
   }), true);
-  assert.equal(readinessCalls, 2);
-  assert.match(readinessSql, /request_id[\s\S]*prompt_hmac_sha256[\s\S]*response_hmac_sha256[\s\S]*prompt_chars[\s\S]*response_chars[\s\S]*information_schema\.STATISTICS/i);
+  assert.equal(readinessCalls, 3);
+  assert.match(readinessSql, /information_schema\.COLUMNS[\s\S]*information_schema\.STATISTICS[\s\S]*SELECT 1 FROM ai_request_logs LIMIT 0/i);
   assert.equal(await checkDatabaseReadiness({
     async query(sql) {
+      if (/information_schema\.COLUMNS/i.test(sql)) return [readinessColumns];
+      if (/information_schema\.STATISTICS/i.test(sql)) {
+        return [[
+          { INDEX_NAME: "idx_ai_logs_user_id", SEQ_IN_INDEX: 1, COLUMN_NAME: "user_id" },
+          { INDEX_NAME: "idx_ai_logs_user_id", SEQ_IN_INDEX: 2, COLUMN_NAME: "id" }
+        ]];
+      }
+      return [[]];
+    }
+  }), false, "缺少审计保留期索引时生产就绪必须失败");
+  assert.equal(await checkDatabaseReadiness({
+    async query(sql) {
+      if (/information_schema\.COLUMNS/i.test(sql)) return [readinessColumns];
       if (/information_schema\.STATISTICS/i.test(sql)) {
         return [[{ INDEX_NAME: "idx_ai_logs_user_id", SEQ_IN_INDEX: 1, COLUMN_NAME: "created_at" }]];
       }
@@ -202,8 +218,10 @@ try {
   }), false, "同名但列定义错误的历史索引不能绕过生产就绪门禁");
   assert.equal(await checkDatabaseReadiness({
     async query(sql) {
+      if (/information_schema\.COLUMNS/i.test(sql)) return [readinessColumns];
       if (/information_schema\.STATISTICS/i.test(sql)) {
         return [[
+          { INDEX_NAME: "idx_ai_logs_created", SEQ_IN_INDEX: 1, COLUMN_NAME: "created_at", SUB_PART: null },
           { INDEX_NAME: "idx_ai_logs_user_id", SEQ_IN_INDEX: 1, COLUMN_NAME: "user_id", SUB_PART: 8 },
           { INDEX_NAME: "idx_ai_logs_user_id", SEQ_IN_INDEX: 2, COLUMN_NAME: "id", SUB_PART: null }
         ]];
@@ -211,6 +229,25 @@ try {
       return [[]];
     }
   }), false, "用户字段的前缀索引不能冒充完整的历史分页索引");
+  await assert.rejects(
+    checkDatabaseReadiness({
+      async query(sql) {
+        if (/information_schema\.COLUMNS/i.test(sql)) return [readinessColumns];
+        if (/information_schema\.STATISTICS/i.test(sql)) {
+          return [[
+            { INDEX_NAME: "idx_ai_logs_created", SEQ_IN_INDEX: 1, COLUMN_NAME: "created_at", SUB_PART: null },
+            { INDEX_NAME: "idx_ai_logs_user_id", SEQ_IN_INDEX: 1, COLUMN_NAME: "user_id", SUB_PART: null },
+            { INDEX_NAME: "idx_ai_logs_user_id", SEQ_IN_INDEX: 2, COLUMN_NAME: "id", SUB_PART: null }
+          ]];
+        }
+        const error = new Error("table read denied");
+        error.code = "ER_TABLEACCESS_DENIED_ERROR";
+        throw error;
+      }
+    }),
+    { code: "ER_TABLEACCESS_DENIED_ERROR" },
+    "结构完整但运行账号不能读取真实审计表时不得判为就绪"
+  );
   assert.equal(await checkDatabaseReadiness(null), false);
   await assert.rejects(
     checkDatabaseReadiness({

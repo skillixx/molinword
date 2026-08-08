@@ -1,6 +1,12 @@
 import "dotenv/config";
 import mysql from "mysql2/promise";
-import { aiHistoryIndexColumns, aiHistoryIndexName, hasExactMysqlIndex } from "../shared/ai-audit-schema.js";
+import {
+  aiAuditCreatedAtIndexName,
+  aiAuditCreatedAtIndexColumns,
+  aiHistoryIndexColumns,
+  aiHistoryIndexName,
+  inspectAiAuditSchema
+} from "../shared/ai-audit-schema.js";
 
 if (!process.env.DATABASE_URL) {
   throw new Error("缺少 DATABASE_URL，无法迁移 AI 审计隐私字段。");
@@ -23,40 +29,27 @@ async function currentDatabaseName() {
   return databaseRow.database_name;
 }
 
-async function loadMissingOperations(databaseName) {
-  const [columnRows] = await connection.query(
-    `SELECT COLUMN_NAME
-     FROM information_schema.COLUMNS
-     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'ai_request_logs'`,
-    [databaseName]
-  );
-  const existingColumns = new Set(columnRows.map((row) => row.COLUMN_NAME));
-  const missingColumns = [...auditColumnDefinitions].filter(([columnName]) => !existingColumns.has(columnName));
-  const [indexRows] = await connection.query(
-    `SELECT INDEX_NAME, SEQ_IN_INDEX, COLUMN_NAME, SUB_PART
-     FROM information_schema.STATISTICS
-     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'ai_request_logs'
-       AND INDEX_NAME IN ('idx_ai_logs_created', 'idx_ai_logs_user_id')`,
-    [databaseName]
-  );
-  const existingIndexes = new Set(indexRows.map((row) => row.INDEX_NAME));
+async function loadMissingOperations() {
+  const report = await inspectAiAuditSchema(connection);
+  if (!report.tableExists) throw new Error("ai_request_logs 表不存在，请先执行数据库初始化。");
+  const existingIndexes = new Set(report.existingIndexNames);
   return {
-    missingColumns,
-    createdAtIndexExists: existingIndexes.has("idx_ai_logs_created"),
+    missingColumns: report.missingColumns.map((columnName) => [columnName, auditColumnDefinitions.get(columnName)]),
+    createdAtIndexExists: existingIndexes.has(aiAuditCreatedAtIndexName),
     historyIndexExists: existingIndexes.has(aiHistoryIndexName),
-    needsCreatedAtIndex: !hasExactMysqlIndex(indexRows, "idx_ai_logs_created", ["created_at"]),
-    needsHistoryIndex: !hasExactMysqlIndex(indexRows, aiHistoryIndexName, aiHistoryIndexColumns)
+    needsCreatedAtIndex: report.missingOrInvalidIndexes.includes(aiAuditCreatedAtIndexName),
+    needsHistoryIndex: report.missingOrInvalidIndexes.includes(aiHistoryIndexName)
   };
 }
 
-async function ensureAuditStructure(databaseName) {
+async function ensureAuditStructure() {
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const { missingColumns, createdAtIndexExists, historyIndexExists, needsCreatedAtIndex, needsHistoryIndex } = await loadMissingOperations(databaseName);
+    const { missingColumns, createdAtIndexExists, historyIndexExists, needsCreatedAtIndex, needsHistoryIndex } = await loadMissingOperations();
     if (!missingColumns.length && !needsCreatedAtIndex && !needsHistoryIndex) return;
     const alterClauses = missingColumns.map(([columnName, definition]) => `ADD COLUMN ${columnName} ${definition}`);
     if (needsCreatedAtIndex) {
-      if (createdAtIndexExists) alterClauses.push("DROP INDEX idx_ai_logs_created");
-      alterClauses.push("ADD INDEX idx_ai_logs_created (created_at)");
+      if (createdAtIndexExists) alterClauses.push(`DROP INDEX ${aiAuditCreatedAtIndexName}`);
+      alterClauses.push(`ADD INDEX ${aiAuditCreatedAtIndexName} (${aiAuditCreatedAtIndexColumns.join(", ")})`);
     }
     if (needsHistoryIndex) {
       if (historyIndexExists) alterClauses.push(`DROP INDEX ${aiHistoryIndexName}`);
@@ -87,14 +80,15 @@ async function ensureAuditStructure(databaseName) {
     if (!shouldRetryForRace) break;
   }
 
-  const remaining = await loadMissingOperations(databaseName);
+  const remaining = await loadMissingOperations();
   if (remaining.missingColumns.length || remaining.needsCreatedAtIndex || remaining.needsHistoryIndex) {
     throw new Error("AI 审计隐私字段迁移未能收敛，请检查并发迁移状态。");
   }
 }
 
 try {
-  await ensureAuditStructure(await currentDatabaseName());
+  await currentDatabaseName();
+  await ensureAuditStructure();
   console.log("AI 审计隐私字段迁移完成。");
 } finally {
   await connection.end();

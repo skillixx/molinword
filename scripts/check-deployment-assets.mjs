@@ -88,12 +88,15 @@ assert.match(auditRetentionTimer, /OnCalendar=\*-\*-\* 03:15:00/);
 assert.match(auditRetentionTimer, /RandomizedDelaySec=30m/);
 assert.match(auditRetentionTimer, /Persistent=true/);
 const auditMigration = await readRequired("database/migrate-ai-audit-privacy.mjs");
+const auditSchemaContract = await readRequired("shared/ai-audit-schema.js");
 for (const column of ["request_id", "prompt_hmac_sha256", "response_hmac_sha256", "prompt_chars", "response_chars"]) {
   assert.match(auditMigration, new RegExp(`\\["${column}"`), `AI 审计迁移缺少 ${column}`);
+  assert.match(auditSchemaContract, new RegExp(`"${column}"`), `AI 审计共享结构契约缺少 ${column}`);
 }
-assert.match(auditMigration, /idx_ai_logs_created/);
-assert.match(auditMigration, /hasExactMysqlIndex/);
-assert.match(auditMigration, /INDEX_NAME, SEQ_IN_INDEX, COLUMN_NAME, SUB_PART/);
+assert.match(auditSchemaContract, /idx_ai_logs_created/);
+assert.match(auditSchemaContract, /hasExactMysqlIndex/);
+assert.match(auditSchemaContract, /INDEX_NAME, SEQ_IN_INDEX, COLUMN_NAME, SUB_PART/);
+assert.match(auditMigration, /inspectAiAuditSchema/, "迁移必须复用只读预检与运行时就绪的共享结构契约");
 assert.match(auditMigration, /DROP INDEX \$\{aiHistoryIndexName\}/, "同名但列序错误的历史索引必须先删除再按精确定义重建");
 assert.match(auditMigration, /alterClauses\.join\(", "\)/, "AI 审计迁移必须合并缺失列和索引，避免逐列重建大表");
 const auditMaintenance = await readRequired("scripts/ai-audit-maintenance.mjs");
@@ -312,6 +315,8 @@ assert.equal(packageJson.scripts?.["check:frontend-performance"], "npm run build
 assert.equal(packageJson.scripts?.["check:third-party-notices"], "node scripts/check-third-party-notices.mjs");
 assert.match(packageJson.scripts?.build ?? "", /vite build && node scripts\/generate-third-party-notices\.mjs && node scripts\/generate-release-manifest\.mjs$/);
 assert.equal(packageJson.scripts?.["db:migrate:ai-audit-privacy"], "node database/migrate-ai-audit-privacy.mjs");
+assert.equal(packageJson.scripts?.["db:check:ai-audit-privacy"], "node database/check-ai-audit-privacy.mjs");
+assert.equal(packageJson.scripts?.["check:ai-audit-schema-preflight"], "node scripts/check-ai-audit-schema-preflight.mjs");
 assert.equal(packageJson.scripts?.["ai-audit:cleanup"], "node scripts/ai-audit-maintenance.mjs cleanup");
 assert.equal(packageJson.scripts?.["ai-audit:redact-existing"], "node scripts/ai-audit-maintenance.mjs redact-existing");
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:deployment-assets/);
@@ -319,6 +324,7 @@ assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:f
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:third-party-notices/);
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:dev-license-notice/, "商业门禁必须覆盖 Vite 开发态许可证入口");
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:ai-history/, "商业门禁必须覆盖 AI 操作历史的用户隔离与隐私边界");
+assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:ai-audit-schema-preflight/, "商业门禁必须覆盖 AI 审计结构只读预检契约");
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:release-target-contract/);
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:production-acceptance/);
 assert.match(packageJson.scripts?.["check:commercial-readiness"] ?? "", /check:production-acceptance-finalization/);
@@ -372,6 +378,7 @@ assert.doesNotMatch(runbook, /\/bin\/sh\s+-c|\bsource\s+\/etc\/molinword|\. \/et
 assert.match(runbook, /molinword-maintenance@check:runtime-config:production\.service/);
 assert.match(runbook, /molinword-maintenance@billing:reconcile:list\.service/);
 assert.match(runbook, /molinword-maintenance@db:migrate:ai-audit-privacy\.service/);
+assert.ok((runbook.match(/molinword-maintenance@db:check:ai-audit-privacy\.service/g) || []).length >= 2, "AI 审计迁移前后都必须运行只读结构预检");
 assert.match(runbook, /molinword-maintenance@ai-audit:redact-existing\.service/);
 assert.match(runbook, /molinword-maintenance@check:release-target\.service/, "候选版本切换前必须验证服务器发布目标");
 assert.match(runbook, /molinword-maintenance@check:release-manifest\.service/, "候选版本切换前必须验证实际发布制品清单");

@@ -112,7 +112,14 @@ sudo systemctl start 'molinword-maintenance@check:release-manifest.service'
 sudo systemctl start 'molinword-maintenance@check:runtime-config:production.service'
 ```
 
-执行数据库操作前先核对目标库、备份与回滚方案。以下命令会修改真实数据库和模板存储，只能在获批变更窗口中逐条执行：
+执行数据库操作前先核对目标库、备份与回滚方案。先使用同一个受保护 `EnvironmentFile` 运行只读结构预检；它只查询 `information_schema`，不会修改数据库。服务成功表示结构已经就绪；服务失败时查看受控缺失清单并停止上线，不能为了让 `/api/ready` 变绿而跳过备份和审批：
+
+```bash
+sudo systemctl start 'molinword-maintenance@db:check:ai-audit-privacy.service'
+journalctl -u 'molinword-maintenance@db:check:ai-audit-privacy.service' -n 50 --no-pager
+```
+
+以下命令会修改真实数据库和模板存储，只能在获批变更窗口中逐条执行：
 
 ```bash
 sudo systemctl start 'molinword-maintenance@db:migrate:document-template.service'
@@ -121,6 +128,8 @@ sudo systemctl start 'molinword-maintenance@db:migrate:billing-reconciliation.se
 sudo systemctl start 'molinword-maintenance@db:migrate:ai-audit-privacy.service'
 sudo systemctl start 'molinword-maintenance@db:seed:templates.service'
 ```
+
+迁移完成后再次运行 `molinword-maintenance@db:check:ai-audit-privacy.service`，必须退出成功后才能启动候选 API 或采集生产验收证据。
 
 历史 `ai_request_logs` 可能仍含客户提示词和模型正文。完成备份、配置不与数据库及其他服务凭据复用的 `AI_AUDIT_HASH_KEY` 并取得隐私负责人批准后，才可执行以下不可逆脱敏；脚本按 `AI_AUDIT_REDACTION_BATCH_SIZE` 小批次逐条读取正文，补 HMAC-SHA256 指纹与字符数后立即清空原文，达到批次上限且仍有积压时会失败告警，需复核日志并再次执行：
 

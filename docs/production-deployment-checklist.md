@@ -52,6 +52,8 @@ npm run check:commercial-readiness
 
 ## 三、数据库与模板
 
+先通过维护单元运行只读 `db:check:ai-audit-privacy`，记录退出状态和受控缺失清单。该命令只查询 `information_schema`；返回非零表示仍需迁移，不能通过手工忽略就绪失败继续上线。
+
 以下操作会修改目标数据库，必须由部署人员在确认备份、目标环境和回滚方案后执行：
 
 目标服务器使用 `ops/README.md` 中加载 systemd `EnvironmentFile` 的维护单元逐项执行迁移和模板初始化，不要在 shell 中 `source` 密钥文件。
@@ -60,7 +62,7 @@ npm run check:commercial-readiness
 
 - `document_templates` 仅启用已审核模板，正文骨架包含元数据、编制说明、正式章节和行动表。
 - `billing_reconciliation_tasks` 包含 `operation_type`、`claim_token` 和唯一幂等键。
-- `ai_request_logs` 包含请求 ID、HMAC-SHA256 指纹、字符数、创建时间索引及 `(user_id, id)` 历史分页索引；先执行 `db:migrate:ai-audit-privacy`，再经批准单独执行 `ai-audit:redact-existing` 清理历史原文。
+- `ai_request_logs` 包含请求 ID、HMAC-SHA256 指纹、字符数、创建时间索引及 `(user_id, id)` 历史分页索引；先执行 `db:migrate:ai-audit-privacy`，再运行 `db:check:ai-audit-privacy` 并确认退出码为 0，最后经批准单独执行 `ai-audit:redact-existing` 清理历史原文。
 - MinIO bucket 可读写，前端无法看到 bucket、object key 或访问密钥。
 
 ## 四、真实链路验收
