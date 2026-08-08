@@ -20,7 +20,8 @@ npm run check:commercial-readiness
 - `APP_HOST` 默认监听 `127.0.0.1`；如需容器或独立网络监听，必须同步收紧安全组和反向代理入口。
 - `TRUSTED_PROXY_HOPS` 必须与实际反向代理层数一致；无代理为 `0`，单层 Nginx 通常为 `1`，避免伪造客户端 IP 绕过限流。
 - `RATE_LIMIT_WINDOW_MS`、`API_RATE_LIMIT_MAX` 和 `AI_RATE_LIMIT_MAX` 设置单实例 IP 限流；网关层仍需配置按用户、IP 和总量的多层限流。
-- `AI_MAX_CONCURRENT_REQUESTS` 设置单实例模型并发上限；`SHUTDOWN_TIMEOUT_MS` 给在途导出和积分结算预留优雅退出时间。
+- `AI_MAX_CONCURRENT_REQUESTS` 设置单实例模型并发上限；客户端断开不会提前释放仍在执行的模型槽位。
+- `SHUTDOWN_TIMEOUT_MS` 应覆盖最长智能体多段模型调用、模型重试与积分结算清理；进程收到终止信号后先停止接收新请求，再等待在途请求完成。
 - 生产环境默认启用最小化 JSON 访问日志，并通过 `X-Request-Id` 关联请求；日志不应采集 Cookie、查询串和请求体。
 
 生产配置不完整时 `server/index.js` 会在监听端口前直接退出，错误只列缺失项，不打印密钥值。
@@ -47,7 +48,7 @@ npm run db:seed:templates
 必须使用专用测试用户和可核对的积分账户完成，区分“代码通过”和“平台真实验收”：
 
 1. 从墨灵平台入口换取会话，直接访问生产 AI 接口应返回 401。
-   同时确认 `/api/health` 返回 200，`/api/ready` 在数据库、MinIO 和模型网关均可用时返回 200，并确认响应带合法 `X-Request-Id`。
+   同时确认 `/api/health` 返回 200，`/api/ready` 会实际探测数据库、MinIO 和模型网关且均可用时返回 200，并确认响应带服务端生成的合法 `X-Request-Id`。
 2. 使用无效 JSON 和不存在的 `/api/*` 路由确认分别返回规范 JSON 400/404；连续超过 AI 限额时返回 429、`Retry-After` 和 `RateLimit-*` 响应头。
 3. 记录调用前积分，运行文档智能体，确认需求分析、启用模板匹配、结构生成、质量审校四阶段完成。
 4. 确认成功调用只结算一次；同一幂等键重放不重复扣费。

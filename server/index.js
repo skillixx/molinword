@@ -362,7 +362,11 @@ const trustedProxyHops = readBoundedInteger(process.env.TRUSTED_PROXY_HOPS, 0, 0
 const rateLimitWindowMs = readBoundedInteger(process.env.RATE_LIMIT_WINDOW_MS, 60000, 1000, 3600000);
 const apiRateLimitMaximum = readBoundedInteger(process.env.API_RATE_LIMIT_MAX, 300, 1, 100000);
 const aiRateLimitMaximum = readBoundedInteger(process.env.AI_RATE_LIMIT_MAX, 30, 1, 10000);
-const shutdownTimeoutMs = readBoundedInteger(process.env.SHUTDOWN_TIMEOUT_MS, 10000, 1000, 30000);
+const llmTimeoutMs = readBoundedInteger(process.env.LLM_TIMEOUT_MS, 30000, 1000, 120000);
+const llmMaxRetries = readBoundedInteger(process.env.LLM_MAX_RETRIES, 1, 0, 3);
+// 中文注解：智能体一次最多执行四段模型调用，默认退出窗口必须覆盖全部超时与重试，再留出结算清理时间。
+const inferredShutdownTimeoutMs = Math.min(600000, llmTimeoutMs * (llmMaxRetries + 1) * 4 + 30000);
+const shutdownTimeoutMs = readBoundedInteger(process.env.SHUTDOWN_TIMEOUT_MS, inferredShutdownTimeoutMs, 1000, 600000);
 const accessLogEnabled = process.env.ACCESS_LOG_ENABLED === "true"
   || (process.env.ACCESS_LOG_ENABLED !== "false" && (process.env.APP_ENV === "production" || process.env.NODE_ENV === "production"));
 let activeAiRequests = 0;
@@ -370,11 +374,8 @@ let activeAiRequests = 0;
 app.disable("x-powered-by");
 app.set("trust proxy", trustedProxyHops);
 app.use((request, response, next) => {
-  const incomingRequestId = String(request.headers["x-request-id"] || "").trim();
-  // 中文注解：只复用短且可打印的请求 ID，避免把任意请求头写入日志或响应头。
-  request.requestId = /^[A-Za-z0-9][A-Za-z0-9._-]{7,63}$/.test(incomingRequestId)
-    ? incomingRequestId
-    : crypto.randomUUID();
+  // 中文注解：请求 ID 始终由本服务生成，避免公网客户端伪造相同标识污染审计链路。
+  request.requestId = crypto.randomUUID();
   response.setHeader("X-Request-Id", request.requestId);
   next();
 });
@@ -391,7 +392,10 @@ app.use((request, response, next) => {
 app.use((request, response, next) => {
   if (!accessLogEnabled) return next();
   const startedAt = process.hrtime.bigint();
-  response.once("finish", () => {
+  let logged = false;
+  const writeAccessLog = (aborted) => {
+    if (logged) return;
+    logged = true;
     // 中文注解：访问日志不记录查询串、Cookie 和请求体，只保留定位线上故障所需的最小字段。
     console.log(JSON.stringify({
       timestamp: new Date().toISOString(),
@@ -401,12 +405,15 @@ app.use((request, response, next) => {
       method: request.method,
       path: request.path,
       status: response.statusCode,
+      aborted,
       durationMs: Number(process.hrtime.bigint() - startedAt) / 1e6
     }));
-  });
+  };
+  response.once("finish", () => writeAccessLog(false));
+  // 中文注解：客户端提前断开时 finish 不会触发，仍需记录一次中断审计日志。
+  response.once("close", () => writeAccessLog(!response.writableEnded));
   next();
 });
-app.use(express.json({ limit: "1mb" }));
 app.use((request, response, next) => {
   if (!isProductionRuntime || ["GET", "HEAD", "OPTIONS"].includes(request.method)) return next();
   const origin = String(request.headers.origin || "").trim();
@@ -434,6 +441,8 @@ app.use("/api/ai", createFixedWindowRateLimiter({
   windowMs: rateLimitWindowMs,
   message: "AI 请求过于频繁，请稍后重试。"
 }));
+// 中文注解：先完成来源与频率门禁再解析正文，畸形或超大 JSON 同样受限流保护。
+app.use(express.json({ limit: "1mb" }));
 app.use("/api/ai", (request, response, next) => {
   if (activeAiRequests >= maximumConcurrentAiRequests) {
     response.setHeader("Retry-After", "2");
@@ -447,9 +456,19 @@ app.use("/api/ai", (request, response, next) => {
     released = true;
     activeAiRequests = Math.max(0, activeAiRequests - 1);
   };
-  // 中文注解：finish 与异常断连 close 都释放并发槽位，双事件通过幂等标志避免重复扣减。
+  const originalEnd = response.end;
+  response.end = function endWithAiSlotRelease(...args) {
+    try {
+      return originalEnd.apply(this, args);
+    } finally {
+      // 中文注解：即使客户端已断开，也要等业务处理真正结束并调用 end 后才释放槽位，避免绕过并发上限。
+      releaseSlot();
+    }
+  };
   response.once("finish", releaseSlot);
-  response.once("close", releaseSlot);
+  response.once("close", () => {
+    if (response.writableEnded) releaseSlot();
+  });
   next();
 });
 
@@ -504,8 +523,6 @@ const gatewayApiKey = process.env.MOLIN_GATEWAY_API_KEY || "";
 const llmApiUrl = process.env.LLM_API_URL || `${gatewayBaseUrl}/chat/completions`;
 const llmApiKey = process.env.LLM_API_KEY || gatewayApiKey;
 const gatewayModel = process.env.LLM_MODEL || process.env.MOLIN_GATEWAY_MODEL || "deepseek-chat";
-const llmTimeoutMs = Number(process.env.LLM_TIMEOUT_MS || 30000);
-const llmMaxRetries = Number(process.env.LLM_MAX_RETRIES || 1);
 const storageBucket = process.env.STORAGE_BUCKET || "moling-word";
 const internalApiToken = process.env.INTERNAL_API_TOKEN || "";
 const molingAppId = process.env.MOLING_APP_ID || process.env.WORD_APP_ID || "";
@@ -591,7 +608,9 @@ function validateProductionConfiguration(environment = {}) {
   validateIntegerSetting("RATE_LIMIT_WINDOW_MS", 1000, 3600000);
   validateIntegerSetting("API_RATE_LIMIT_MAX", 1, 100000);
   validateIntegerSetting("AI_RATE_LIMIT_MAX", 1, 10000);
-  validateIntegerSetting("SHUTDOWN_TIMEOUT_MS", 1000, 30000);
+  validateIntegerSetting("LLM_TIMEOUT_MS", 1000, 120000);
+  validateIntegerSetting("LLM_MAX_RETRIES", 0, 3);
+  validateIntegerSetting("SHUTDOWN_TIMEOUT_MS", 1000, 600000);
   if (configuration.ACCESS_LOG_ENABLED !== undefined && !["true", "false"].includes(configuration.ACCESS_LOG_ENABLED)) {
     errors.push("ACCESS_LOG_ENABLED 必须为 true 或 false");
   }
@@ -5105,19 +5124,39 @@ async function boundedReadinessCheck(check) {
   }
 }
 
+async function checkGatewayReadiness() {
+  if (!hasGatewayConfig()) return false;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), readinessTimeoutMs);
+  try {
+    // 中文注解：HEAD 不产生模型用量；200 或典型“仅允许 POST”响应证明网关路径可达且未拒绝凭据。
+    const response = await fetch(llmApiUrl, {
+      method: "HEAD",
+      headers: { Authorization: `Bearer ${llmApiKey}` },
+      signal: controller.signal
+    });
+    return response.ok || [400, 405, 415].includes(response.status);
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 app.get("/api/ready", async (_request, response) => {
-  const [databaseReady, storageReady] = await Promise.all([
+  const [databaseReady, storageReady, gatewayReady] = await Promise.all([
     dbPool ? boundedReadinessCheck(async () => {
       await dbPool.query("SELECT 1");
       return true;
     }) : false,
-    minioClient ? boundedReadinessCheck(() => minioClient.bucketExists(storageBucket)) : false
+    minioClient ? boundedReadinessCheck(() => minioClient.bucketExists(storageBucket)) : false,
+    boundedReadinessCheck(checkGatewayReadiness)
   ]);
   const checks = {
     configuration: validateProductionConfiguration(process.env).length === 0,
     database: databaseReady,
     storage: storageReady,
-    gateway: hasGatewayConfig()
+    gateway: gatewayReady
   };
   const ready = Object.values(checks).every(Boolean);
   response.status(ready ? 200 : 503).json({ ready, checks });
@@ -6088,6 +6127,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (shutdownStarted) return;
     shutdownStarted = true;
     console.log(JSON.stringify({ timestamp: new Date().toISOString(), level: "info", type: "shutdown", signal }));
+    process.disconnect?.();
     const forceExitTimer = setTimeout(() => {
       console.error(`服务未能在 ${shutdownTimeoutMs}ms 内退出。`);
       process.exit(1);
@@ -6103,13 +6143,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         error ||= closeError;
       } finally {
         clearTimeout(forceExitTimer);
-        process.exit(error ? 1 : 0);
+        // 中文注解：设置退出码后让事件循环自然排空，避免 Windows 上刚写完响应就 process.exit 导致客户端收到 ECONNRESET。
+        process.exitCode = error ? 1 : 0;
       }
     });
     server.closeIdleConnections?.();
   };
   process.once("SIGTERM", () => shutdown("SIGTERM"));
   process.once("SIGINT", () => shutdown("SIGINT"));
+  // 中文注解：Windows 自动化无法可靠发送 POSIX 信号，受控父进程可通过 IPC 复用同一优雅退出路径。
+  process.on("message", (message) => {
+    if (message?.type === "molingword:shutdown") shutdown("IPC");
+  });
 }
 
 

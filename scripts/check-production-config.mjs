@@ -49,8 +49,10 @@ const validProductionConfiguration = {
   RATE_LIMIT_WINDOW_MS: "60000",
   API_RATE_LIMIT_MAX: "300",
   AI_RATE_LIMIT_MAX: "30",
+  LLM_TIMEOUT_MS: "30000",
+  LLM_MAX_RETRIES: "1",
   ACCESS_LOG_ENABLED: "true",
-  SHUTDOWN_TIMEOUT_MS: "10000"
+  SHUTDOWN_TIMEOUT_MS: "240000"
 };
 const validErrors = validateProductionConfiguration(validProductionConfiguration);
 assert.deepEqual(validErrors, []);
@@ -71,14 +73,18 @@ const invalidRuntimeBoundaryErrors = validateProductionConfiguration({
   RATE_LIMIT_WINDOW_MS: "999",
   API_RATE_LIMIT_MAX: "0",
   AI_RATE_LIMIT_MAX: "1.5",
+  LLM_TIMEOUT_MS: "999",
+  LLM_MAX_RETRIES: "8",
   ACCESS_LOG_ENABLED: "yes",
-  SHUTDOWN_TIMEOUT_MS: "60000"
+  SHUTDOWN_TIMEOUT_MS: "600001"
 });
 for (const expectedKey of [
   "TRUSTED_PROXY_HOPS",
   "RATE_LIMIT_WINDOW_MS",
   "API_RATE_LIMIT_MAX",
   "AI_RATE_LIMIT_MAX",
+  "LLM_TIMEOUT_MS",
+  "LLM_MAX_RETRIES",
   "ACCESS_LOG_ENABLED",
   "SHUTDOWN_TIMEOUT_MS"
 ]) {

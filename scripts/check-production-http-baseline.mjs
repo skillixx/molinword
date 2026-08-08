@@ -13,6 +13,21 @@ async function freePort() {
 
 const port = await freePort();
 const output = [];
+const gatewayServer = createServer((request, response) => {
+  response.setHeader("Connection", "close");
+  if (request.method === "HEAD" && request.url === "/v1/chat/completions") {
+    response.statusCode = 405;
+    response.end();
+    return;
+  }
+  response.statusCode = 404;
+  response.end();
+});
+await new Promise((resolve) => gatewayServer.listen(0, "127.0.0.1", resolve));
+const gatewayAddress = gatewayServer.address();
+assert.ok(gatewayAddress && typeof gatewayAddress === "object");
+const gatewayOrigin = `http://127.0.0.1:${gatewayAddress.port}`;
+let gatewayClosed = false;
 const apiProcess = spawn(process.execPath, ["server/index.js"], {
   cwd: process.cwd(),
   env: {
@@ -26,9 +41,9 @@ const apiProcess = spawn(process.execPath, ["server/index.js"], {
     MOLING_APP_ID: "15",
     MOLING_PRODUCT_ID: "73",
     MOLING_API_BASE_URL: "https://platform.example.test",
-    LLM_API_URL: "https://gateway.example.test/v1/chat/completions",
+    LLM_API_URL: `${gatewayOrigin}/v1/chat/completions`,
     LLM_API_KEY: "model-key-at-least-32-characters",
-    STORAGE_ENDPOINT: "https://storage.example.test",
+    STORAGE_ENDPOINT: gatewayOrigin,
     STORAGE_ACCESS_KEY_ID: "storage-access-key",
     STORAGE_SECRET_ACCESS_KEY: "storage-secret-key-at-least-32-characters",
     SESSION_COOKIE_SECURE: "true",
@@ -36,6 +51,7 @@ const apiProcess = spawn(process.execPath, ["server/index.js"], {
     BILLING_RECONCILIATION_OUTBOX: "D:\\moling-data\\billing-reconciliation-outbox.jsonl",
     REQUIRE_MOLING_SESSION: "true",
     LOCAL_MOLING_MOCK: "false",
+    ALLOW_INSECURE_INTERNAL_HTTP: "true",
     TRUSTED_PROXY_HOPS: "0",
     RATE_LIMIT_WINDOW_MS: "60000",
     API_RATE_LIMIT_MAX: "100",
@@ -55,6 +71,12 @@ async function stopApi() {
   await exited;
 }
 
+async function stopGateway() {
+  if (gatewayClosed) return;
+  gatewayClosed = true;
+  await new Promise((resolve) => gatewayServer.close(resolve));
+}
+
 try {
   const deadline = Date.now() + 10000;
   while (Date.now() < deadline) {
@@ -71,12 +93,21 @@ try {
     headers: { "X-Request-Id": requestId }
   });
   assert.equal(healthResponse.status, 200, output.join(""));
-  assert.equal(healthResponse.headers.get("x-request-id"), requestId);
+  assert.match(healthResponse.headers.get("x-request-id") || "", /^[0-9a-f-]{36}$/i);
+  assert.notEqual(healthResponse.headers.get("x-request-id"), requestId);
 
   const replacedRequestIdResponse = await fetch(`http://127.0.0.1:${port}/api/health`, {
     headers: { "X-Request-Id": "<script>invalid</script>" }
   });
   assert.match(replacedRequestIdResponse.headers.get("x-request-id") || "", /^[0-9a-f-]{36}$/i);
+
+  const readyWithGatewayResponse = await fetch(`http://127.0.0.1:${port}/api/ready`);
+  const readyWithGateway = await readyWithGatewayResponse.json();
+  assert.equal(readyWithGateway.checks.gateway, true);
+  await stopGateway();
+  const readyWithoutGatewayResponse = await fetch(`http://127.0.0.1:${port}/api/ready`);
+  const readyWithoutGateway = await readyWithoutGatewayResponse.json();
+  assert.equal(readyWithoutGateway.checks.gateway, false);
 
   const missingResponse = await fetch(`http://127.0.0.1:${port}/api/not-found`);
   assert.equal(missingResponse.status, 404);
@@ -108,7 +139,8 @@ try {
   }
   assert.deepEqual(statuses, [401, 401, 429]);
 
-  console.log("生产 HTTP 基线检查通过。", { requestId, malformedJson: 400, missingRoute: 404, aiRateLimit: statuses });
+  console.log("生产 HTTP 基线检查通过。", { requestId: "server-generated", gatewayReadiness: [true, false], malformedJson: 400, missingRoute: 404, aiRateLimit: statuses });
 } finally {
   await stopApi();
+  await stopGateway();
 }
